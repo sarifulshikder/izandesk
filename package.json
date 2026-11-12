@@ -1,0 +1,15 @@
+{
+  "name": "izandesk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "IzanDesk ERP — Next-Generation ISP Billing & Network Management",
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "dev:all": "pnpm --parallel dev",
+    "build": "pnpm --filter web build",
+    "lint": "pnpm --recursive lint"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
