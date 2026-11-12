@@ -16,9 +16,9 @@ import {
   Package,
   Settings,
   Puzzle,
-  ChevronRight,
   ShieldCheck,
   Radio,
+  Boxes,
 } from 'lucide-react';
 
 interface NavItem {
@@ -32,10 +32,11 @@ interface NavItem {
 const navItems: NavItem[] = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Subscribers', href: '/subscribers', icon: Users, badge: '3,842' },
+  { name: 'Fiber GIS Map', href: '/gis', icon: MapPin, badge: 'Live GIS' },
+  { name: 'Inventory & Serials', href: '/inventory', icon: Boxes, badge: 'Stock' },
   { name: 'Bandwidth & QoS', href: '/bandwidth', icon: Radio },
   { name: 'Network & Routers', href: '/routers', icon: Network, badge: '12 Live' },
   { name: 'FTTH & OLTs', href: '/olts', icon: Package },
-  { name: 'Fiber GIS Map', href: '/gis', icon: MapPin },
   { name: 'Billing & Invoices', href: '/billing', icon: CreditCard, badge: 'Due: 42' },
   { name: 'Resellers & Wallet', href: '/resellers', icon: Briefcase },
   { name: 'CRM & Tickets', href: '/tickets', icon: LifeBuoy, badge: '5 Open' },
