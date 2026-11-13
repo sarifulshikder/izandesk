@@ -727,6 +727,9 @@ export async function initDb() {
       ON CONFLICT (gateway) DO NOTHING;
   `).catch(e => console.error('[DB] Phase 4 schema extension error', e.message));
 
+  await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS data_cap_gb NUMERIC(12,2)`).catch(()=>{});
+  await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS fup_speed_mbps INTEGER`).catch(()=>{});
+
   // Portal self-care preferences
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS auto_pay_enabled BOOLEAN NOT NULL DEFAULT false`).catch(()=>{});
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS preferred_gateway TEXT`).catch(()=>{});
