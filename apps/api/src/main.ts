@@ -6,6 +6,7 @@ import path = require('path');
 import http = require('http');
 import { WebSocketServer } from 'ws';
 import { PluginKernel } from './kernel/plugin-manager';
+import { setKernel } from './kernel/kernel-instance';
 import { initDb, pool } from './db';
 import { LoginRequest, LoginResponse, UserRole, UserSession } from '@izandesk/shared-types';
 import subscribersRouter from './routes/subscribers';
@@ -16,6 +17,8 @@ import networkRouter from './routes/network';
 import oltRouter from './routes/olt';
 import radiusRouter from './routes/radius';
 import wireguardRouter from './routes/wireguard';
+import billingRouter from './routes/billing';
+import { startBillingScheduler } from './integrations/billing';
 
 const PORT = Number(process.env.API_PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
@@ -76,9 +79,10 @@ async function bootstrap() {
 
   const kernel = new PluginKernel();
   await kernel.init();
+  setKernel(kernel);
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'izandesk-api', phase: 3, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length });
+    res.json({ ok: true, service: 'izandesk-api', phase: 4, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length });
   });
 
   app.post('/api/auth/login', (req, res) => {
@@ -125,6 +129,10 @@ async function bootstrap() {
   app.use('/api/radius', authMiddleware, radiusRouter);
   app.use('/api/wireguard', authMiddleware, wireguardRouter);
 
+  // Phase 4: Billing, Invoicing, Payments, Suspension/Reactivation
+  // Webhooks are public (provider callbacks) but processed by billing router
+  app.use('/api/billing', (req, res, next) => (req.path.startsWith('/webhooks/') ? next() : authMiddleware(req, res, next)), billingRouter);
+
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error(err);
     res.status(500).json({ message: err?.message || 'Internal server error' });
@@ -170,10 +178,12 @@ async function bootstrap() {
 
   server.listen(PORT, () => {
     console.log('====================================================');
-    console.log(`    IzanDesk ERP API — listening on :${PORT} (Phase 3)`);
+    console.log(`    IzanDesk ERP API — listening on :${PORT} (Phase 4)`);
     console.log('====================================================');
     console.log(`[Bootstrap] DB ready: ${dbReady}, Plugins loaded: ${kernel.listPlugins().length}`);
   });
+
+  if (dbReady) startBillingScheduler();
 }
 
 bootstrap().catch((err) => { console.error('Failed to bootstrap API', err); process.exit(1); });

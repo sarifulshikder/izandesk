@@ -27,6 +27,8 @@ export type SubscriberStatus =
   | 'PENDING'
   | 'TERMINATED';
 
+export type SuspensionStage = 'NONE' | 'WARNING' | 'GRACE' | 'SUSPENDED' | 'ISOLATED' | 'WALLED_GARDEN' | 'REACTIVATED';
+
 export type ConnectionType =
   | 'PPPOE'
   | 'STATIC_IP'
@@ -55,6 +57,9 @@ export interface Subscriber {
   onuOpticalPower?: number; // dBm
   resellerId?: string;
   createdAt: string;
+  suspensionStage?: SuspensionStage;
+  graceUntil?: string;
+  walledGarden?: boolean;
 }
 
 export interface RouterTelemetry {
@@ -84,6 +89,19 @@ export interface OltTelemetry {
   criticalPowerAlarms: number;
 }
 
+export type InvoiceStatus = 'UNPAID' | 'PAID' | 'PARTIAL' | 'OVERDUE' | 'CANCELLED' | 'DRAFT';
+
+export interface InvoiceItem {
+  id?: string;
+  invoiceId?: string;
+  description: string;
+  itemType?: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  metadata?: Record<string, any>;
+}
+
 export interface Invoice {
   id: string;
   invoiceNumber: string;
@@ -94,7 +112,50 @@ export interface Invoice {
   dueAmount: number;
   billMonth: string;
   dueDate: string;
-  status: 'UNPAID' | 'PAID' | 'PARTIAL' | 'OVERDUE';
+  status: InvoiceStatus;
+  issueDate?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  totalAmount?: number;
+  paidAmount?: number;
+  prorated?: boolean;
+  items?: InvoiceItem[];
+}
+
+export type PaymentStatus = 'PENDING' | 'INITIATED' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'REFUNDED' | 'VERIFYING';
+
+export interface PaymentRecord {
+  id: string;
+  paymentRef: string;
+  invoiceId?: string;
+  subscriberId?: string;
+  gateway: string;
+  method?: string;
+  amount: number;
+  currency: string;
+  status: PaymentStatus;
+  trxId?: string;
+  checkoutUrl?: string;
+  clientSecret?: string;
+  createdAt?: string;
+  verifiedAt?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface BillingPolicy {
+  id: string;
+  name: string;
+  graceDays: number;
+  warningDays: number;
+  autoSuspend: boolean;
+  isolateOnSuspend: boolean;
+  enableWalledGarden: boolean;
+  walledGardenProfile?: string;
+  lateFeeEnabled?: boolean;
+  lateFeeAmount?: number;
+  lateFeePercent?: number;
+  currency?: string;
+  isDefault?: boolean;
 }
 
 export type PluginType = 'PAYMENT_GATEWAY' | 'SMS_GATEWAY' | 'OLT_DRIVER' | 'CUSTOM_HOOK';
@@ -113,6 +174,72 @@ export interface PluginMetadata {
   description?: string;
   filePath?: string;
   lastError?: string;
+  capabilities?: string[];
+}
+
+export interface PaymentCheckoutRequest {
+  invoiceId?: string;
+  paymentRef?: string;
+  amount: number;
+  currency?: string;
+  subscriber?: Record<string, any>;
+  invoice?: Record<string, any>;
+  returnUrl?: string;
+  cancelUrl?: string;
+  webhookUrl?: string;
+  metadata?: Record<string, any>;
+  mode?: 'SANDBOX' | 'LIVE';
+}
+
+export interface PaymentCheckoutResult {
+  ok: boolean;
+  gateway: string;
+  paymentUrl?: string;
+  token?: string;
+  clientSecret?: string;
+  orderId?: string;
+  approvalUrl?: string;
+  sessionId?: string;
+  raw?: any;
+  message?: string;
+}
+
+export interface PaymentWebhookVerifyResult {
+  ok: boolean;
+  verified: boolean;
+  status: PaymentStatus | string;
+  trxId?: string;
+  paymentRef?: string;
+  invoiceId?: string;
+  amount?: number;
+  currency?: string;
+  payer?: Record<string, any>;
+  raw?: any;
+  message?: string;
+  eventId?: string;
+}
+
+export interface PaymentGatewayPlugin {
+  id: string;
+  name: string;
+  version: string;
+  type: 'PAYMENT_GATEWAY';
+  capabilities?: string[];
+  createCheckoutSession?: (req: PaymentCheckoutRequest) => Promise<PaymentCheckoutResult> | PaymentCheckoutResult;
+  verifyWebhook?: (payload: any, headers?: Record<string, any>, config?: any) => Promise<PaymentWebhookVerifyResult> | PaymentWebhookVerifyResult;
+  executePayment?: (req: any) => Promise<any> | any;
+  queryPayment?: (req: any) => Promise<any> | any;
+  refundPayment?: (req: any) => Promise<any> | any;
+  onMfsSms?: (payload: any) => Promise<any> | any; // personal MFS SMS listener hook
+}
+
+export interface SmsGatewayPlugin {
+  id: string;
+  name: string;
+  version: string;
+  type: 'SMS_GATEWAY';
+  sendSms?: (recipient: string, message: string, senderId?: string) => Promise<any> | any;
+  onInboundSms?: (payload: any) => Promise<any> | any;
 }
 
 export interface PluginKernelEvent {

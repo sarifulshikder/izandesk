@@ -16,3 +16,4 @@ docker/radius/clients.conf
 docker/wg-hub/config/wg0.conf
 docker/wg-hub/config/status.json
 apps/docker/wg-hub/config/wg0.conf
+tsconfig.tsbuildinfo

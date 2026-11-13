@@ -528,6 +528,175 @@ export async function initDb() {
     await pool.query("INSERT INTO inventory_warehouses(name,location) VALUES('Main Warehouse','Dhaka HQ'),('Field Store - Mirpur','Mirpur')");
     await pool.query("INSERT INTO inventory_items(name,category,brand,model,unit,reorder_level) VALUES('XPON ONU','ONT','VSOL','V2801SE','pcs',10),('Fiber Patch Cord','Fiber','Generic','SC-UPC 3m','pcs',50),('Router','Router','MikroTik','hAP ax2','pcs',5)");
   }
+
+  // Phase 4: Billing, Due Policies, Payment Gateways, Wallets, Walled Garden
+  await pool.query(`
+    ALTER TABLE subscribers
+      ADD COLUMN IF NOT EXISTS billing_cycle_day INT DEFAULT 1,
+      ADD COLUMN IF NOT EXISTS billing_anchor DATE,
+      ADD COLUMN IF NOT EXISTS next_bill_date DATE,
+      ADD COLUMN IF NOT EXISTS expiry_date DATE,
+      ADD COLUMN IF NOT EXISTS due_date DATE,
+      ADD COLUMN IF NOT EXISTS grace_until TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS suspension_stage TEXT DEFAULT 'NONE',
+      ADD COLUMN IF NOT EXISTS walled_garden BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS auto_suspend_enabled BOOLEAN NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS last_billed_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS current_due NUMERIC(12,2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS balance NUMERIC(12,2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(12,2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS reseller_id UUID,
+      ADD COLUMN IF NOT EXISTS suspension_reason TEXT;
+
+    CREATE TABLE IF NOT EXISTS billing_policies (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL UNIQUE,
+      grace_days INT NOT NULL DEFAULT 7,
+      warning_days INT NOT NULL DEFAULT 3,
+      auto_suspend BOOLEAN NOT NULL DEFAULT true,
+      isolate_on_suspend BOOLEAN NOT NULL DEFAULT true,
+      enable_walled_garden BOOLEAN NOT NULL DEFAULT true,
+      walled_garden_profile TEXT,
+      late_fee_enabled BOOLEAN NOT NULL DEFAULT false,
+      late_fee_amount NUMERIC(12,2) DEFAULT 0,
+      late_fee_percent NUMERIC(6,2) DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'BDT',
+      is_default BOOLEAN NOT NULL DEFAULT false,
+      config JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS invoices (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      invoice_number TEXT NOT NULL UNIQUE,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      client_code TEXT,
+      subscriber_name TEXT,
+      username TEXT,
+      billing_cycle TEXT,
+      bill_month TEXT,
+      period_start DATE,
+      period_end DATE,
+      issue_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      due_date DATE,
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      discount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      tax NUMERIC(12,2) NOT NULL DEFAULT 0,
+      total_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      paid_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      due_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'UNPAID',
+      notes TEXT,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      prorated BOOLEAN NOT NULL DEFAULT false,
+      prorate_ratio NUMERIC(8,6),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      paid_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS invoice_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+      description TEXT NOT NULL,
+      item_type TEXT NOT NULL DEFAULT 'PACKAGE',
+      quantity INT NOT NULL DEFAULT 1,
+      unit_price NUMERIC(12,2) NOT NULL DEFAULT 0,
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      metadata JSONB DEFAULT '{}'::jsonb
+    );
+
+    CREATE TABLE IF NOT EXISTS payments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      payment_ref TEXT NOT NULL UNIQUE,
+      invoice_id UUID REFERENCES invoices(id) ON DELETE SET NULL,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      gateway TEXT NOT NULL,
+      method TEXT,
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'BDT',
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      trx_id TEXT,
+      payer_number TEXT,
+      payer_info JSONB DEFAULT '{}'::jsonb,
+      gateway_response JSONB DEFAULT '{}'::jsonb,
+      checkout_url TEXT,
+      client_secret TEXT,
+      idempotency_key TEXT,
+      verified_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS wallet_transactions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      reseller_id UUID,
+      type TEXT NOT NULL,
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      balance_after NUMERIC(12,2) DEFAULT 0,
+      reference_id TEXT,
+      reference_type TEXT,
+      description TEXT,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS payment_gateway_configs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      gateway TEXT NOT NULL UNIQUE,
+      enabled BOOLEAN NOT NULL DEFAULT false,
+      mode TEXT NOT NULL DEFAULT 'SANDBOX',
+      config JSONB DEFAULT '{}'::jsonb,
+      credentials JSONB DEFAULT '{}'::jsonb,
+      webhook_secret TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS payment_webhook_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      gateway TEXT NOT NULL,
+      event_id TEXT,
+      payload JSONB,
+      processed BOOLEAN NOT NULL DEFAULT false,
+      processed_at TIMESTAMPTZ,
+      result JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS billing_suspension_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      action TEXT NOT NULL,
+      stage TEXT,
+      reason TEXT,
+      details JSONB DEFAULT '{}'::jsonb,
+      triggered_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_invoices_subscriber_id ON invoices(subscriber_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
+    CREATE INDEX IF NOT EXISTS idx_invoices_due_date ON invoices(due_date);
+    CREATE INDEX IF NOT EXISTS idx_payments_subscriber_id ON payments(subscriber_id);
+    CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+    CREATE INDEX IF NOT EXISTS idx_payments_payment_ref ON payments(payment_ref);
+    CREATE INDEX IF NOT EXISTS idx_wallet_tx_subscriber_id ON wallet_transactions(subscriber_id);
+
+    INSERT INTO billing_policies(name, grace_days, warning_days, auto_suspend, isolate_on_suspend, enable_walled_garden, is_default)
+      VALUES('Default ISP Policy', 7, 3, true, true, true, true)
+      ON CONFLICT (name) DO NOTHING;
+
+    INSERT INTO payment_gateway_configs(gateway, enabled, mode, config)
+      VALUES
+        ('bkash', false, 'SANDBOX', '{"supports":"tokenized_checkout,personal_mfs_sms"}'::jsonb),
+        ('nagad', false, 'SANDBOX', '{"type":"merchant_pgw"}'::jsonb),
+        ('rocket', false, 'SANDBOX', '{"type":"merchant_pgw"}'::jsonb),
+        ('stripe', false, 'SANDBOX', '{"supports":"cards,apple_pay,google_pay,elements"}'::jsonb),
+        ('paypal', false, 'SANDBOX', '{"supports":"smart_buttons"}'::jsonb)
+      ON CONFLICT (gateway) DO NOTHING;
+  `).catch(e => console.error('[DB] Phase 4 schema extension error', e.message));
 }
 
 export { pool };
