@@ -478,7 +478,7 @@ function fupRateString(mbps: number) {
 
 
 
-export async function evaluateFupForSubscriber(subscriberId: string, opts: { forceAction?: 'APPLY'|'CLEAR' } = {}) {
+export async function evaluateFupForSubscriber(subscriberId: string, opts: { forceAction?: 'APPLY'|'CLEAR'; reason?: string | null } = {}) {
   const rows = (await pool.query(`
     SELECT s.id, s.username, s.password, s.status, s.suspension_stage, s.walled_garden, s.ip_address, s.package_name, s.router_id, s.provisioning_mode, s.fup_exceeded, s.fup_exempt,
            bp.profile_name, bp.data_cap_gb, bp.fup_speed_mbps,
@@ -537,7 +537,7 @@ export async function evaluateFupForSubscriber(subscriberId: string, opts: { for
   try {
     await pool.query(`INSERT INTO fup_enforcement_logs(subscriber_id, action, over_cap, used_bytes, cap_gb, fup_speed_mbps, details)
       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,
-      [sub.id, shouldFup ? 'APPLIED' : 'CLEARED', over, used, capGb, fupMbps, JSON.stringify({ previous: was, rate_limit: rl, billing_restricted: billingRestricted, exempt, radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null, router_mode: String(sub.provisioning_mode||'').toUpperCase()==='ROUTER', period: 'current_month', forced: opts.forceAction || null })]);
+      [sub.id, shouldFup ? 'APPLIED' : 'CLEARED', over, used, capGb, fupMbps, JSON.stringify({ previous: was, rate_limit: rl, billing_restricted: billingRestricted, exempt, radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null, router_mode: String(sub.provisioning_mode||'').toUpperCase()==='ROUTER', period: 'current_month', forced: opts.forceAction || null, reason: opts.reason || null })]);
   } catch {}
   return { ok: true, changed: shouldFup !== was || !!opts.forceAction, fup_exceeded: shouldFup, over_cap: over, used_bytes: used, cap_gb: capGb, fup_speed_mbps: fupMbps, enforcement: { radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null } };
 }

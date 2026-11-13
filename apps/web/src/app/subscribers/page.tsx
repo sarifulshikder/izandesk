@@ -209,9 +209,10 @@ export default function SubscribersPage() {
 
   const fupAction = async (action: 'evaluate'|'clear'|'apply') => {
     if (!token || !detail) return;
+    const reason = window.prompt('Optional reason (leave blank to skip):', '') || undefined;
     setFupBusy(true); setError(null);
     try {
-      await apiFetch(`/api/billing/fup/subscribers/${detail.id}/${action}`, { method: 'POST' }, token);
+      await apiFetch(`/api/billing/fup/subscribers/${detail.id}/${action}`, { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) }, token);
       await openDetail(detail.id);
       await load();
     } catch (e: any) { setError(e.message); }
@@ -219,9 +220,11 @@ export default function SubscribersPage() {
   };
   const toggleFupExempt = async () => {
     if (!token || !detail) return;
+    const next = !detail.fup_exempt;
+    const reason = window.prompt('Optional reason (leave blank to skip):', next ? 'Marked FUP exempt by admin' : 'FUP exemption removed by admin') || undefined;
     setFupBusy(true); setError(null);
     try {
-      await apiFetch(`/api/billing/fup/subscribers/${detail.id}/exempt`, { method: 'POST', body: JSON.stringify({ exempt: !detail.fup_exempt }) }, token);
+      await apiFetch(`/api/billing/fup/subscribers/${detail.id}/exempt`, { method: 'POST', body: JSON.stringify({ exempt: next, ...(reason ? { reason } : {}) }) }, token);
       await openDetail(detail.id);
       await load();
     } catch (e: any) { setError(e.message); }
@@ -404,7 +407,7 @@ export default function SubscribersPage() {
                   <div className="space-y-1.5 max-h-[140px] overflow-auto">
                     {fupLogs.slice(0,6).map((l:any)=>(
                       <div key={l.id} className="text-[11px] p-2 rounded-lg border border-border bg-muted/20 flex items-center justify-between gap-2">
-                        <div><span className={`font-semibold ${l.action==='APPLIED'?'text-amber-400':'text-emerald-400'}`}>{l.action}</span> • {Number(l.used_bytes||0)>1e9?(Number(l.used_bytes)/1e9).toFixed(2)+' GB':Number(l.used_bytes||0)>1e6?(Number(l.used_bytes)/1e6).toFixed(2)+' MB':`${Number(l.used_bytes||0)} B`} / {l.cap_gb!=null?Number(l.cap_gb)+' GB':'-'} {l.fup_speed_mbps?`• FUP ${l.fup_speed_mbps} Mbps`:''}</div>
+                        <div className="min-w-0"><div><span className={`font-semibold ${l.action==='APPLIED'?'text-amber-400':'text-emerald-400'}`}>{l.action}</span> • {Number(l.used_bytes||0)>1e9?(Number(l.used_bytes)/1e9).toFixed(2)+' GB':Number(l.used_bytes||0)>1e6?(Number(l.used_bytes)/1e6).toFixed(2)+' MB':`${Number(l.used_bytes||0)} B`} / {l.cap_gb!=null?Number(l.cap_gb)+' GB':'-'} {l.fup_speed_mbps?`• FUP ${l.fup_speed_mbps} Mbps`:''}</div>{l.details?.reason && <div className="text-muted-foreground truncate">Reason: {String(l.details.reason)}</div>}</div>
                         <div className="text-muted-foreground whitespace-nowrap">{l.created_at ? new Date(l.created_at).toLocaleString() : ''}</div>
                       </div>
                     ))}

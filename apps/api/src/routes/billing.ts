@@ -94,28 +94,29 @@ router.post('/fup/evaluate', asyncHandler(async (req, res) => {
 
 router.post('/fup/subscribers/:id/evaluate', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
-  const result = await evaluateFupForSubscriber(req.params.id);
+  const result = await evaluateFupForSubscriber(req.params.id, { reason: req.body?.reason || null });
   res.json(result);
 }));
 
 router.post('/fup/subscribers/:id/clear', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
-  const result = await evaluateFupForSubscriber(req.params.id, { forceAction: 'CLEAR' });
+  const result = await evaluateFupForSubscriber(req.params.id, { forceAction: 'CLEAR', reason: req.body?.reason || null });
   res.json(result);
 }));
 
 router.post('/fup/subscribers/:id/apply', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
-  const result = await evaluateFupForSubscriber(req.params.id, { forceAction: 'APPLY' });
+  const result = await evaluateFupForSubscriber(req.params.id, { forceAction: 'APPLY', reason: req.body?.reason || null });
   res.json(result);
 }));
 
 router.post('/fup/subscribers/:id/exempt', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
   const exempt = req.body?.exempt !== false; // default true
+  const reason = req.body?.reason || null;
   const sub = (await pool.query('UPDATE subscribers SET fup_exempt=$2, updated_at=now() WHERE id=$1 RETURNING id,fup_exempt', [req.params.id, exempt])).rows[0];
   if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
-  const result = await evaluateFupForSubscriber(req.params.id);
+  const result = await evaluateFupForSubscriber(req.params.id, { reason: reason || (exempt ? 'Marked FUP exempt by admin' : 'FUP exemption removed by admin') });
   res.json({ ok: true, subscriber: sub, evaluation: result });
 }));
 
