@@ -52,6 +52,7 @@ export default function SubscribersPage() {
   const [step, setStep] = useState(1);
   const [geoLoading, setGeoLoading] = useState(false);
   const [geoMsg, setGeoMsg] = useState<string | null>(null);
+  const [fupBusy, setFupBusy] = useState(false);
 
   const loadRefs = useCallback(async () => {
     if (!token) return;
@@ -198,6 +199,18 @@ export default function SubscribersPage() {
     } catch {
       setGeoMsg('Could not auto-fill address (reverse geocoding unavailable or limited data for this point). You can fill fields manually.');
     } finally { setGeoLoading(false); }
+  };
+
+
+  const fupAction = async (action: 'evaluate'|'clear'|'apply') => {
+    if (!token || !detail) return;
+    setFupBusy(true); setError(null);
+    try {
+      await apiFetch(`/api/billing/fup/subscribers/${detail.id}/${action}`, { method: 'POST' }, token);
+      await openDetail(detail.id);
+      await load();
+    } catch (e: any) { setError(e.message); }
+    finally { setFupBusy(false); }
   };
 
   const onPickLocation = (lat: number, lng: number) => {
@@ -352,6 +365,19 @@ export default function SubscribersPage() {
               <div className="flex flex-wrap gap-2 pt-1">
                 <a href={`/subscribers/live`} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50">Live Sessions</a>
                 <a href={`/billing`} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50">Billing</a>
+              </div>
+              <div className="pt-2 border-t border-border">
+                <div className="font-semibold text-sm mb-2">FUP / Quota Enforcement</div>
+                <div className="text-xs text-muted-foreground mb-2">
+                  Status: {detail.fup_exceeded ? <span className="text-amber-400 font-semibold">Throttled (FUP enforced)</span> : <span className="text-emerald-400">Not throttled</span>}
+                  {detail.fup_applied_at ? ` • applied ${new Date(detail.fup_applied_at).toLocaleString()}` : ''}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button disabled={fupBusy} onClick={()=>fupAction('evaluate')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50 disabled:opacity-50">Evaluate</button>
+                  <button disabled={fupBusy} onClick={()=>fupAction('clear')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50">Clear FUP</button>
+                  <button disabled={fupBusy} onClick={()=>fupAction('apply')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-amber-500/30 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50">Force Apply</button>
+                </div>
+                <div className="text-[11px] text-muted-foreground mt-2">Best-effort: RADIUS/CoA and direct PPPoE profile throttling (ROUTER mode) with session refresh. Billing restrictions take precedence.</div>
               </div>
               <div className="pt-2 border-t border-border">
                 <div className="font-semibold text-sm flex items-center gap-2 mb-2"><FileText className="w-4 h-4 text-primary"/>KYC Documents</div>
