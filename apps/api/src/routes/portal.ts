@@ -46,7 +46,7 @@ router.get('/me', portalAuth, asyncHandler(async (req, res) => {
   const r = await pool.query(`SELECT id, client_code, full_name, username, phone, email, status, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, address, connection_type, provisioning_mode, suspension_stage, walled_garden, created_at
     FROM subscribers WHERE id=$1`, [id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Subscriber not found' });
-  const session = (await pool.query(`SELECT status, rx_bps, tx_bps, uptime_seconds, ip_address, updated_at FROM subscriber_sessions WHERE subscriber_id=$1 ORDER BY updated_at DESC LIMIT 1`, [id])).rows[0] || null;
+  const session = (await pool.query(`SELECT status, rx_bps, tx_bps, uptime_sec as uptime_seconds, ip_address, updated_at FROM subscriber_sessions WHERE subscriber_id=$1 ORDER BY updated_at DESC LIMIT 1`, [id])).rows[0] || null;
   res.json({ ok: true, subscriber: r.rows[0], session });
 }));
 
