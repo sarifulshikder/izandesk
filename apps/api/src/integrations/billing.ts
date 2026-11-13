@@ -471,7 +471,65 @@ export async function tryAcquireSchedulerLock(name: string, ttlMs = 55_000, hold
   return !!r.rows?.[0];
 }
 
-export async function startBillingScheduler() {
+function fupRateString(mbps: number) {
+  const m = Math.max(1, Math.round(Number(mbps) || 1));
+  return `${m}M/${m}M`;
+}
+
+export async function runFupEnforcementSweep() {
+  // Best-effort: apply/remove RADIUS rate-limit for subscribers over monthly data cap (FUP).
+  // Billing suspension/walled-garden states take precedence and are not overridden.
+  const rows = (await pool.query(`
+    SELECT s.id, s.username, s.password, s.status, s.suspension_stage, s.walled_garden, s.ip_address, s.package_name, s.router_id, s.provisioning_mode, s.fup_exceeded,
+           bp.profile_name, bp.data_cap_gb, bp.fup_speed_mbps,
+           COALESCE((SELECT SUM(COALESCE(acctinputoctets,0)+COALESCE(acctoutputoctets,0))::bigint FROM radacct r
+             WHERE (r.username=s.username OR r.username IN (SELECT username FROM subscribers ss WHERE ss.id=s.id AND ss.username IS NOT NULL))
+               AND r.acctstarttime >= date_trunc('month', now())),0) as used_bytes
+    FROM subscribers s
+    LEFT JOIN bandwidth_packages bp ON bp.name=s.package_name
+    WHERE s.username IS NOT NULL AND s.username <> '' AND s.status <> 'TERMINATED'
+  `)).rows;
+  let applied = 0, cleared = 0, skipped = 0, errors = 0;
+  for (const sub of rows) {
+    const capGb = sub.data_cap_gb != null ? Number(sub.data_cap_gb) : null;
+    const fupMbps = sub.fup_speed_mbps != null ? Number(sub.fup_speed_mbps) : null;
+    const used = Number(sub.used_bytes || 0);
+    const capBytes = capGb != null ? capGb * 1024 * 1024 * 1024 : null;
+    const over = capBytes != null && capBytes > 0 && fupMbps != null && fupMbps > 0 && used > capBytes;
+    const billingRestricted = String(sub.status).toUpperCase() !== 'ACTIVE' || ['WALLED_GARDEN','ISOLATED','SUSPENDED'].includes(String(sub.suspension_stage||'').toUpperCase()) || !!sub.walled_garden;
+    const shouldFup = over && !billingRestricted;
+    const was = !!sub.fup_exceeded;
+    if (shouldFup === was) { skipped++; continue; }
+    try {
+      await pool.query('UPDATE subscribers SET fup_exceeded=$2, fup_applied_at=CASE WHEN $2 THEN now() ELSE NULL END, updated_at=now() WHERE id=$1', [sub.id, shouldFup]);
+      const effective: any = { ...sub, profile_name: sub.profile_name || sub.package_name || 'default' };
+      const rl = shouldFup ? fupRateString(fupMbps as number) : null;
+      try { await syncSubscriberToRadiusDb(effective, { fupRateLimit: rl, fupExceeded: shouldFup }); } catch {}
+      try {
+        const nas = await resolveNasForSubscriber(sub);
+        if (nas?.radius_secret && nas?.host && sub.username) {
+          const coa = await sendCoaPacket({ host: nas.host, port: Number(nas.coa_port || 3799), secret: String(nas.radius_secret), username: sub.username, action: 'COA', attributes: rl ? { 'Mikrotik-Rate-Limit': rl } : {} });
+          if (!coa.ok) {
+            await sendCoaPacket({ host: nas.host, port: Number(nas.coa_port || 3799), secret: String(nas.radius_secret), username: sub.username, action: 'DISCONNECT' }).catch(()=>{});
+          }
+        }
+      } catch {}
+      if (shouldFup) applied++; else cleared++;
+    } catch { errors++; }
+  }
+  return { ok: true, evaluated: rows.length, applied, cleared, skipped, errors };
+}
+
+async function runFup() {
+  try {
+    const locked = await tryAcquireSchedulerLock('fup-enforcement-sweep', 25 * 60 * 1000).catch(()=>false);
+    if (!locked) return;
+    const res = await runFupEnforcementSweep();
+    if (res.applied || res.cleared) console.log(`[FUP] evaluated=${res.evaluated} applied=${res.applied} cleared=${res.cleared} skipped=${res.skipped}`);
+  } catch (e:any) { console.error('[FUP] sweep failed', e.message); }
+}
+
+export function startBillingScheduler() {
   // in-process scheduler with DB-backed lock to avoid overlapping runs across instances
   const run = async () => {
     const got = await tryAcquireSchedulerLock('billing-due-policy-sweep', 55_000).catch(()=>false);
@@ -485,6 +543,8 @@ export async function startBillingScheduler() {
   setInterval(run, 60 * 1000); // every minute for timely grace/suspension evaluation
   setTimeout(runMsg, 15000);
   setInterval(runMsg, 10 * 60 * 1000); // messaging summaries/reminders every 10 minutes
+  setTimeout(runFup, 45000);
+  setInterval(runFup, 30 * 60 * 1000); // FUP enforcement sweep
 }
 
 export async function ingestMfsSmsEvent(input: { gateway?: string; sender?: string; message?: string; amount?: number; trx_id?: string; payer_number?: string; payload?: any }) {

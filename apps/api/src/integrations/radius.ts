@@ -39,7 +39,7 @@ export async function syncAllRadiusNas() {
   return { synced: r.rows.length };
 }
 
-export async function syncSubscriberToRadiusDb(sub: any, opts: { walledGarden?: boolean; restrictedRateLimit?: string; addressList?: string } = {}) {
+export async function syncSubscriberToRadiusDb(sub: any, opts: { walledGarden?: boolean; restrictedRateLimit?: string; addressList?: string; fupRateLimit?: string | null; fupExceeded?: boolean } = {}) {
   const username = String(sub.username || '').trim();
   if (!username) return { skipped: true, reason: 'no username' };
   const password = String(sub.password || 'changeme');
@@ -59,15 +59,19 @@ export async function syncSubscriberToRadiusDb(sub: any, opts: { walledGarden?: 
   }
   if (profile) await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Mikrotik-Group',':=',$2)", [username, profile]);
   if (ip) await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Framed-IP-Address',':=',$2)", [username, String(ip)]);
+  const fup = !suspended && !walled && (opts.fupExceeded || !!opts.fupRateLimit) && opts.fupRateLimit ? String(opts.fupRateLimit) : null;
   if (walled && !suspended) {
     const addrList = opts.addressList || 'izn-walled-garden';
     const rl = opts.restrictedRateLimit || '64k/64k';
     await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Mikrotik-Address-List',':=',$2)", [username, addrList]);
     await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Mikrotik-Rate-Limit',':=',$2)", [username, rl]);
     await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Reply-Message',':=',$2)", [username, 'Account restricted: please pay outstanding dues to restore service']);
+  } else if (fup) {
+    await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Mikrotik-Rate-Limit',':=',$2)", [username, fup]);
+    await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Reply-Message',':=',$2)", [username, 'FUP/data cap reached: speed reduced until next billing cycle']);
   }
   await pool.query("INSERT INTO radusergroup(username,groupname,priority) VALUES($1,$2,1)", [username, profile || 'default']);
-  return { ok: true, username, profile, walled_garden: walled && !suspended, suspended: suspended && !walled };
+  return { ok: true, username, profile, walled_garden: walled && !suspended, suspended: suspended && !walled, fup_applied: !!fup, fup_rate_limit: fup };
 }
 
 function encodeAttr(type: number, value: Buffer) {

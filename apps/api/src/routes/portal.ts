@@ -37,7 +37,7 @@ function portalAuth(req: any, res: any, next: any) {
 }
 
 async function getSubscriber(id: string) {
-  const r = await pool.query(`SELECT id, client_code, full_name, username, phone, email, status, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, address, connection_type, provisioning_mode, suspension_stage, walled_garden, created_at, nid_number, auto_pay_enabled, preferred_gateway
+  const r = await pool.query(`SELECT id, client_code, full_name, username, phone, email, status, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, address, connection_type, provisioning_mode, suspension_stage, walled_garden, created_at, nid_number, auto_pay_enabled, preferred_gateway, fup_exceeded, fup_applied_at
     FROM subscribers WHERE id=$1`, [id]);
   return r.rows[0] || null;
 }
