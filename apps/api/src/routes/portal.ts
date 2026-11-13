@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import express = require('express');
 import jwt = require('jsonwebtoken');
+import multer = require('multer');
+import path = require('path');
+import fs = require('fs');
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { getInvoiceWithItems } from '../integrations/billing';
@@ -9,6 +12,16 @@ import { renderSimpleInvoicePdf } from '../integrations/pdf';
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
+const uploadDir = path.resolve(__dirname, '../../../uploads/kyc');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadDir),
+  filename: (_req, file, cb) => {
+    const safe = Date.now() + '-' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, safe);
+  },
+});
+const upload = multer({ storage });
 
 function issuePortalToken(sub: any) {
   return jwt.sign({ type: 'PORTAL_SUBSCRIBER', sub: sub.id, client_code: sub.client_code }, JWT_SECRET, { expiresIn: '7d' });
@@ -251,6 +264,80 @@ router.get('/announcements', asyncHandler(async (_req, res) => {
     { id: 'welcome', title: 'Welcome to IzanDesk Self-Care', body: 'Manage your subscription, invoices, payments, tickets, usage and Wi-Fi settings from this portal.', created_at: new Date().toISOString() }
   ]});
 }));
+
+
+
+router.get('/packages', portalAuth, asyncHandler(async (_req, res) => {
+  const r = await pool.query(`SELECT id, name, download_mbps, upload_mbps, price, description, is_active FROM bandwidth_packages WHERE is_active=true ORDER BY download_mbps ASC`);
+  res.json({ ok: true, data: r.rows });
+}));
+
+router.post('/package-request', portalAuth, asyncHandler(async (req, res) => {
+  const sub = await getSubscriber((req as any).portal.sub);
+  if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
+  const b = req.body || {};
+  const pkg = b.package_id ? (await pool.query('SELECT * FROM bandwidth_packages WHERE id=$1', [b.package_id])).rows[0] : (b.package_name ? (await pool.query('SELECT * FROM bandwidth_packages WHERE name=$1 LIMIT 1', [b.package_name])).rows[0] : null);
+  const pkgName = pkg?.name || b.package_name || 'Requested package';
+  const priority = 'MEDIUM';
+  const hours = 24; const due = new Date(Date.now() + hours*3600*1000);
+  const count = (await pool.query('SELECT COUNT(*)::int AS n FROM tickets')).rows[0]?.n || 0;
+  const ticketNo = `TKT-${String(count+1).padStart(6,'0')}`;
+  const full = (await pool.query('SELECT latitude, longitude, address, reseller_id FROM subscribers WHERE id=$1', [sub.id])).rows[0] || {};
+  const desc = `Package change/upgrade request from customer portal.\nCurrent: ${sub.package_name || '-'} (${sub.bandwidth_mbps || '-'} Mbps)\nRequested: ${pkgName}${pkg ? ` (${pkg.download_mbps}/${pkg.upload_mbps} Mbps, ${pkg.price})` : ''}\nNotes: ${b.notes || '-'}`;
+  const gpsUrl = (full.latitude!=null && full.longitude!=null) ? `https://www.google.com/maps/search/?api=1&query=${full.latitude},${full.longitude}` : (full.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(full.address)}` : null);
+  const r = await pool.query(`INSERT INTO tickets(ticket_no,subscriber_id,reseller_id,subject,description,category,priority,status,sla_policy,sla_due_at,dispatch_status,site_latitude,site_longitude,site_address,gps_nav_url,source,created_by)
+    VALUES($1,$2,$3,$4,$5,'BILLING',$6,'OPEN',$7,$8,'UNASSIGNED',$9,$10,$11,$12,'PORTAL',$13) RETURNING *`,
+    [ticketNo, sub.id, full.reseller_id || null, `Package change request: ${pkgName}`, desc, priority, `${priority} SLA`, due, full.latitude ?? null, full.longitude ?? null, full.address || null, gpsUrl, sub.client_code || sub.username || sub.id]);
+  res.status(201).json({ ok: true, data: r.rows[0], requested_package: pkg || { name: pkgName } });
+}));
+
+router.get('/documents', portalAuth, asyncHandler(async (req, res) => {
+  const id = (req as any).portal.sub;
+  const r = await pool.query('SELECT id, doc_type, file_name, file_path, mime_type, uploaded_at FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [id]);
+  res.json({ ok: true, data: r.rows });
+}));
+
+router.get('/documents/:docId/download', portalAuth, asyncHandler(async (req, res) => {
+  const id = (req as any).portal.sub;
+  const r = await pool.query('SELECT * FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, id]);
+  const doc = r.rows[0];
+  if (!doc) return res.status(404).json({ message: 'Document not found' });
+  const fp = path.join(uploadDir, doc.file_path);
+  if (!fs.existsSync(fp)) return res.status(404).json({ message: 'File not found' });
+  res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.file_name || 'document')}"`);
+  fs.createReadStream(fp).pipe(res);
+}));
+
+router.post('/documents', portalAuth, upload.single('file'), asyncHandler(async (req, res) => {
+  const id = (req as any).portal.sub;
+  if (!(req as any).file) return res.status(400).json({ message: 'file is required' });
+  const f = (req as any).file;
+  const docType = String(req.body.doc_type || 'OTHER');
+  const r = await pool.query(
+    'INSERT INTO kyc_documents(subscriber_id,doc_type,file_name,file_path,mime_type) VALUES($1,$2,$3,$4,$5) RETURNING id,doc_type,file_name,mime_type,uploaded_at',
+    [id, docType, f.originalname, f.filename, f.mimetype]
+  );
+  res.status(201).json({ ok: true, data: r.rows[0] });
+}));
+
+router.get('/notifications', portalAuth, asyncHandler(async (req, res) => {
+  const sub = await getSubscriber((req as any).portal.sub);
+  if (!sub) return res.json({ ok: true, data: [] });
+  const phone = sub.phone ? String(sub.phone) : null;
+  let msgs: any[] = [];
+  try {
+    const r = await pool.query(`SELECT id, channel_type, provider, recipient, subject, body, status, related_type, created_at, sent_at
+      FROM message_logs
+      WHERE ($1::text IS NOT NULL AND recipient = $1)
+         OR (related_type='SUBSCRIBER' AND related_id=$2)
+      ORDER BY created_at DESC LIMIT 50`, [phone, String(sub.id)]);
+    msgs = r.rows;
+  } catch {}
+  const ann = [{ id: 'welcome', type:'ANNOUNCEMENT', title: 'Welcome to IzanDesk Self-Care', body: 'Manage subscription, invoices, payments, usage, tickets, documents and Wi-Fi from your portal.', created_at: new Date().toISOString() }];
+  res.json({ ok: true, announcements: ann, messages: msgs });
+}));
+
 
 router.get('/speedtest/download', (_req, res) => {
   const size = 2 * 1024 * 1024;
