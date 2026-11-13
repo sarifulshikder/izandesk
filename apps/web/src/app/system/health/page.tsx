@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
-import { RefreshCw, Database, Server, HardDrive, Activity, ShieldCheck } from 'lucide-react';
+import { RefreshCw, Database, Server, HardDrive, Activity, ShieldCheck, Clock } from 'lucide-react';
 
 export default function SystemHealthPage() {
   const { token } = useAuth();
@@ -34,16 +34,18 @@ export default function SystemHealthPage() {
     setBusy(true); setErr(null); setMsg(null);
     try {
       const r = await apiFetch<any>('/api/system/backups/run', { method:'POST' }, token);
-      setMsg(`Backup created: ${r.backup?.name}`);
+      const pruned = r.retention?.deleted ? ` (pruned ${r.retention.deleted})` : '';
+      setMsg(`Backup created: ${r.backup?.name}${pruned}`);
       await load();
     } catch(e:any){ setErr(e.message || 'Backup failed'); } finally { setBusy(false); }
   };
 
   const ok = (v:any) => v?.ok === true;
+  const cfg = backups?.config;
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
-        <div><h1 className="text-2xl font-black tracking-tight">System Health & Diagnostics</h1><p className="text-sm text-muted-foreground">Runtime health checks, diagnostics, and automated database backups.</p></div>
+        <div><h1 className="text-2xl font-black tracking-tight">System Health & Diagnostics</h1><p className="text-sm text-muted-foreground">Runtime health checks, diagnostics, and database backups (manual, scheduled, retention).</p></div>
         <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
       </div>
       {err && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>}
@@ -66,9 +68,16 @@ export default function SystemHealthPage() {
             </div>
           )}
         </div>
-        <div className="rounded-2xl border border-border bg-card p-4"><div className="flex items-center justify-between mb-3"><h2 className="font-bold flex items-center gap-2"><Database className="w-4 h-4 text-primary"/>Automated Database Backups</h2><button onClick={runBackup} disabled={busy} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50">{busy?'Running...':'Run Backup Now'}</button></div>
-          {!backups ? <div className="text-sm text-muted-foreground">Backup management requires admin access. Backups are stored on the server and require <code>pg_dump</code> availability.</div> : (
-            <div className="space-y-2">{(backups.files||[]).slice(0,10).map((f:any)=>(<div key={f.name} className="p-2.5 rounded-xl border border-border bg-muted/20 flex items-center justify-between text-sm"><div><div className="font-medium">{f.name}</div><div className="text-xs text-muted-foreground">{new Date(f.created_at).toLocaleString()}</div></div><div className="text-xs text-muted-foreground">{(Number(f.size||0)/1024/1024).toFixed(2)} MB</div></div>))}{!(backups.files||[]).length && <div className="text-sm text-muted-foreground">No backups yet.</div>}</div>
+        <div className="rounded-2xl border border-border bg-card p-4"><div className="flex items-center justify-between mb-3"><h2 className="font-bold flex items-center gap-2"><Database className="w-4 h-4 text-primary"/>Database Backups</h2><button onClick={runBackup} disabled={busy} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50">{busy?'Running...':'Run Backup Now'}</button></div>
+          {!backups ? <div className="text-sm text-muted-foreground">Backup management requires admin access. Backups require <code>pg_dump</code> availability and writable storage.</div> : (
+            <div className="space-y-3">
+              <div className="text-xs p-3 rounded-xl border border-border bg-muted/20 space-y-1">
+                <div className="flex items-center gap-2 font-medium"><Clock className="w-3.5 h-3.5"/>Schedule: <span className={cfg?.enabled?'text-emerald-400':'text-muted-foreground'}>{cfg?.enabled ? `Enabled every ${cfg.schedule_hours}h` : 'Disabled'}</span></div>
+                <div>Retention: keep last <b>{cfg?.retention_count ?? 0}</b> files and/or <b>{cfg?.retention_days ?? 0}</b> days (applied after runs).</div>
+                <div className="text-muted-foreground">Configure via env: <code>BACKUP_SCHEDULE_ENABLED</code>, <code>BACKUP_SCHEDULE_HOURS</code>, <code>BACKUP_RETENTION_COUNT</code>, <code>BACKUP_RETENTION_DAYS</code>, <code>BACKUP_DIR</code>.</div>
+              </div>
+              <div className="space-y-2">{(backups.files||[]).slice(0,10).map((f:any)=>(<div key={f.name} className="p-2.5 rounded-xl border border-border bg-muted/20 flex items-center justify-between text-sm"><div><div className="font-medium">{f.name}</div><div className="text-xs text-muted-foreground">{new Date(f.created_at).toLocaleString()}</div></div><div className="text-xs text-muted-foreground">{(Number(f.size||0)/1024/1024).toFixed(2)} MB</div></div>))}{!(backups.files||[]).length && <div className="text-sm text-muted-foreground">No backups yet.</div>}</div>
+            </div>
           )}
         </div>
       </div>

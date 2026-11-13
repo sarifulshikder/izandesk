@@ -26,6 +26,7 @@ import portalRouter from './routes/portal';
 import systemRouter from './routes/system';
 import acsRouter from './routes/acs';
 import { startBillingScheduler } from './integrations/billing';
+import { startBackupScheduler } from './routes/system';
 
 const PORT = Number(process.env.API_PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
@@ -93,7 +94,7 @@ async function bootstrap() {
   });
   app.use('/api/branding', brandingRouter);
   app.use('/api/portal', portalRouter);
-  app.use('/api/system', systemRouter);
+  app.use('/api/system', (req, res, next) => { const h = req.headers.authorization; if (h?.startsWith('Bearer ')) return authMiddleware(req, res, next); return next(); }, systemRouter);
   app.use('/api/acs', acsRouter);
 
   app.post('/api/auth/login', (req, res) => {
@@ -248,7 +249,10 @@ async function bootstrap() {
     console.log(`[Bootstrap] DB ready: ${dbReady}, Plugins loaded: ${kernel.listPlugins().length}`);
   });
 
-  if (dbReady) startBillingScheduler();
+  if (dbReady) {
+    startBillingScheduler();
+    startBackupScheduler();
+  }
 }
 
 bootstrap().catch((err) => { console.error('Failed to bootstrap API', err); process.exit(1); });
