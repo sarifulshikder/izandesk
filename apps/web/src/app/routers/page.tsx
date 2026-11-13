@@ -114,7 +114,10 @@ export default function RoutersPage() {
         </div>
 
         <div className="rounded-2xl border border-border bg-card p-4">
-          <h2 className="font-bold mb-3 flex items-center gap-2"><Activity className="w-4 h-4 text-primary"/>Live Subscriber Sessions (Throughput)</h2>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <h2 className="font-bold flex items-center gap-2"><Activity className="w-4 h-4 text-primary"/>Live Subscriber Sessions (Throughput)</h2>
+            <a href="/subscribers/live" className="text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50">Open Full Live View</a>
+          </div>
           <div className="text-xs text-muted-foreground mb-2">Respects provisioning: <b>ROUTER</b> → specific API/REST router, <b>RADIUS</b> → RADIUS-enabled NAS pool. SSE: <code className="font-mono">/api/network/sessions/stream</code></div>
           <div className="overflow-auto max-h-[520px]">
             <table className="w-full text-xs">

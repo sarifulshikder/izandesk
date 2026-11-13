@@ -120,6 +120,11 @@ export default function BillingPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight">Billing & Payments</h1>
           <p className="text-sm text-muted-foreground">Automated invoicing, due policies, suspension/walled-garden enforcement, and payment gateway collections with instant reactivation.</p>
+          <div className="flex flex-wrap gap-2 mt-2 text-[11px]">
+            <a href="/plugins" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Payment Gateways (Plugins)</a>
+            <a href="/subscribers" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Subscribers</a>
+            <a href="/subscribers/live" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Live Sessions</a>
+          </div>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
