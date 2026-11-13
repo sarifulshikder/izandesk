@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { RefreshCw, Plus, Pencil, Trash2, Server, Wifi, Activity, Cpu, HardDrive, ArrowDown, ArrowUp, Play, X, ShieldCheck, Link2 } from 'lucide-react';
+import { RefreshCw, Plus, Pencil, Trash2, Server, Wifi, Activity, Cpu, HardDrive, ArrowDown, ArrowUp, Play, X, ShieldCheck, Link2, Globe } from 'lucide-react';
 
 const modeBadge = (m: string) => m === 'RADIUS' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' : m === 'REST' ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' : 'bg-blue-500/10 text-blue-400 border-blue-500/20';
 
@@ -44,6 +44,13 @@ export default function RoutersPage() {
   };
   const del = async (id: string) => { if (!token || !confirm('Delete router?')) return; await apiFetch(`/api/network/routers/${id}`, { method: 'DELETE' }, token); load(); };
   const testConn = async (id: string) => { if (!token) return; try { const r = await apiFetch<any>(`/api/network/routers/${id}/test`, { method: 'POST' }, token); alert(r.message); load(); } catch(e:any){ setError(e.message); } };
+  const provisionWalledGarden = async (rtr: any) => {
+    if (!token) return;
+    try {
+      const r = await apiFetch<any>('/api/billing/walled-garden/provision-router', { method: 'POST', body: JSON.stringify({ router_id: rtr.id }) }, token);
+      alert(r.ok ? `Walled-garden redirect rules provisioned on ${rtr.name}. ${r.result?.steps?.redirect?.ok ? 'HTTP redirect ready.' : 'Check steps for details.'}` : (r.message || 'Provisioning completed with notes'));
+    } catch(e:any){ setError(e.message || 'Failed to provision walled-garden rules'); }
+  };
 
   const fmtBps = (bps: number) => bps > 1e9 ? `${(bps/1e9).toFixed(2)} Gbps` : bps > 1e6 ? `${(bps/1e6).toFixed(2)} Mbps` : `${(bps/1e3).toFixed(1)} Kbps`;
   const mode = String(form.integration_mode || 'API').toUpperCase();
@@ -92,9 +99,10 @@ export default function RoutersPage() {
                     </div>
                   </div>
                   <div className="flex gap-1 shrink-0">
-                    <button onClick={()=>testConn(r.id)} className="p-2 rounded-lg hover:bg-muted" title="Test"><Play className="w-4 h-4"/></button>
-                    <button onClick={()=>{setForm({...r, integration_mode: m, radius_secret: r.radius_secret||'', coa_port: r.coa_port||3799, nas_identifier: r.nas_identifier||''}); setModal(r);}} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button>
-                    <button onClick={()=>del(r.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400"><Trash2 className="w-4 h-4"/></button>
+                    <button onClick={()=>testConn(r.id)} className="p-2 rounded-lg hover:bg-muted" title="Test connection"><Play className="w-4 h-4"/></button>
+                    {m !== 'RADIUS' && <button onClick={()=>provisionWalledGarden(r)} className="p-2 rounded-lg hover:bg-amber-500/10 text-amber-400" title="Provision walled-garden redirect rules (API/REST router)"><Globe className="w-4 h-4"/></button>}
+                    <button onClick={()=>{setForm({...r, integration_mode: m, radius_secret: r.radius_secret||'', coa_port: r.coa_port||3799, nas_identifier: r.nas_identifier||''}); setModal(r);}} className="p-2 rounded-lg hover:bg-muted" title="Edit"><Pencil className="w-4 h-4"/></button>
+                    <button onClick={()=>del(r.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400" title="Delete"><Trash2 className="w-4 h-4"/></button>
                   </div>
                 </div>
                 {m !== 'RADIUS' ? (
@@ -104,7 +112,7 @@ export default function RoutersPage() {
                   <Meter icon={ArrowDown} label="RX" value={fmtBps(Number(r.rx_bps||0))} />
                   <Meter icon={ArrowUp} label="TX" value={fmtBps(Number(r.tx_bps||0))} />
                 </div>) : (
-                <div className="mt-3 text-xs p-2 rounded-lg bg-violet-500/5 border border-violet-500/20 text-violet-300 inline-flex items-center gap-2"><ShieldCheck className="w-4 h-4"/>RADIUS NAS: authenticates subscribers assigned to RADIUS pool (all RADIUS-enabled routers). Per-NAS shared secret & CoA port stored for RFC3576.</div>
+                <div className="mt-3 text-xs p-2 rounded-lg bg-violet-500/5 border border-violet-500/20 text-violet-300 space-y-1"><div className="inline-flex items-center gap-2"><ShieldCheck className="w-4 h-4"/>RADIUS NAS: authenticates subscribers assigned to RADIUS pool.</div><div className="text-violet-200/80">Walled-garden redirect/captive rules must be configured on this NAS/device for address-list <code className="font-mono">izn-walled-garden</code> (IzanDesk can enforce profile/attrs/CoA but cannot push firewall/NAT redirect rules to RADIUS-only NAS).</div></div>
                 )}
                 <div className="text-[11px] text-muted-foreground mt-2">Uptime: {formatUptime(Number(r.uptime_seconds||0))} • Last seen: {r.last_seen_at ? new Date(r.last_seen_at).toLocaleTimeString() : '-'}</div>
               </div>);

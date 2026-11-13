@@ -164,7 +164,10 @@ export default function GatewayConfigPage() {
             <label className="text-sm block"><div className="text-xs text-muted-foreground mb-1">Webhook Secret / Signature Token (set/rotate)</div>
               <input type="password" className="w-full p-2.5 rounded-xl border border-border bg-card" placeholder={cfg?.has_webhook_secret ? '•••••• (leave blank to keep existing)' : 'Enter webhook secret'} value={webhookSecret} onChange={e=>setWebhookSecret(e.target.value)} disabled={!canManage} />
             </label>
-            <div className="text-xs text-muted-foreground">Webhook endpoint: <code className="font-mono">/api/billing/webhooks/{gateway}</code></div>
+            <div className="text-xs text-muted-foreground space-y-1">
+              <div>Webhook endpoint (configure at provider): <code className="font-mono">https://&lt;your-domain&gt;/api/billing/webhooks/{gateway}</code></div>
+              {gateway === 'bkash' && <div>Personal MFS SMS ingest: <code className="font-mono">https://&lt;your-domain&gt;/api/billing/payments/sms/ingest</code> (set <code className="font-mono">MFS_SMS_INGEST_TOKEN</code> for unauthenticated forwarders).</div>}
+            </div>
           </div>
 
           <div className="rounded-2xl border border-border bg-card p-4 space-y-4">
@@ -200,6 +203,7 @@ export default function GatewayConfigPage() {
           <div className="rounded-2xl border border-border bg-card p-4 text-xs text-muted-foreground space-y-2">
             <div className="font-semibold text-foreground">Notes</div>
             <p>{meta.notes || 'Configure this payment gateway plugin. Settings are stored in gateway config and used by the hot-reloadable plugin driver.'}</p>
+            <p>Use <b>SANDBOX</b> for testing, then switch to <b>LIVE</b> with real credentials, webhook secrets and provider callback configuration.</p>
             {gateway === 'bkash' && <p>Personal MFS SMS hook supported by plugin; ingest via <code className="font-mono">POST /api/billing/payments/sms/ingest</code> (use <code>MFS_SMS_INGEST_TOKEN</code> if needed).</p>}
           </div>
         </div>
