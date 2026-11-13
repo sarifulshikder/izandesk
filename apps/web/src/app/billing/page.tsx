@@ -140,16 +140,16 @@ export default function BillingPage() {
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         {[
-          { label: 'This Month Billed', value: money(metrics?.monthlyBillGenerated), icon: FileText },
-          { label: 'Today Collections', value: money(metrics?.todayCollections), icon: CreditCard },
-          { label: 'Month Collections', value: money(metrics?.thisMonthCollections), icon: Wallet },
-          { label: 'Outstanding Due', value: money(metrics?.totalDueOutstanding), icon: AlertTriangle },
-          { label: 'Suspended/Isolated', value: String(metrics?.suspendedDue ?? 0), icon: ShieldAlert },
-          { label: 'Expired', value: String(metrics?.expiredThisMonth ?? 0), icon: Clock3 },
+          { label: 'This Month Billed', value: money(metrics?.monthlyBillGenerated), icon: FileText, accent: 'text-foreground' },
+          { label: 'Today Collections', value: money(metrics?.todayCollections), icon: CreditCard, accent: 'text-emerald-400' },
+          { label: 'Month Collections', value: money(metrics?.thisMonthCollections), icon: Wallet, accent: 'text-cyan-400' },
+          { label: 'Outstanding Due', value: money(metrics?.totalDueOutstanding), icon: AlertTriangle, accent: 'text-amber-400' },
+          { label: 'Suspended/Isolated', value: String(metrics?.suspendedDue ?? 0), icon: ShieldAlert, accent: 'text-red-400' },
+          { label: 'Expired', value: String(metrics?.expiredThisMonth ?? 0), icon: Clock3, accent: 'text-orange-400' },
         ].map((c:any) => (
-          <div key={c.label} className="p-4 rounded-2xl bg-card border border-border/80">
-            <div className="flex items-center justify-between text-xs uppercase font-bold text-muted-foreground tracking-wider"><span>{c.label}</span><c.icon className="w-4 h-4"/></div>
-            <div className="mt-2 text-lg font-black">{c.value}</div>
+          <div key={c.label} className="p-4 rounded-2xl bg-card border border-border/80 hover:border-primary/30 transition-colors">
+            <div className="flex items-center justify-between text-xs uppercase font-bold text-muted-foreground tracking-wider"><span>{c.label}</span><c.icon className={`w-4 h-4 ${c.accent}`}/></div>
+            <div className={`mt-2 text-lg font-black ${c.accent}`}>{c.value}</div>
           </div>
         ))}
       </div>
@@ -162,12 +162,12 @@ export default function BillingPage() {
               <thead className="bg-muted/40 text-xs uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-3">Invoice</th><th className="text-left px-4 py-3">Subscriber</th><th className="text-left px-4 py-3">Period</th><th className="text-left px-4 py-3">Amounts</th><th className="text-left px-4 py-3">Status</th></tr></thead>
               <tbody>
                 {invoices.map((inv:any) => (
-                  <tr key={inv.id} className={`border-t border-border/70 ${payForm.invoice_id===inv.id?'bg-primary/5':''}`} onClick={()=>setPayForm(f=>({...f, invoice_id: inv.id, amount: String(inv.due_amount || inv.total_amount || '')}))}>
-                    <td className="px-4 py-3"><div className="font-semibold">{inv.invoice_number}</div><div className="text-xs text-muted-foreground">{inv.bill_month || '-'} {inv.prorated ? <span className="text-cyan-400">• prorated</span> : null}</div></td>
+                  <tr key={inv.id} className={`border-t border-border/70 cursor-pointer hover:bg-muted/30 transition-colors ${payForm.invoice_id===inv.id?'bg-primary/5':''}`} onClick={()=>setPayForm(f=>({...f, invoice_id: inv.id, amount: String(inv.due_amount || inv.total_amount || '')}))}>
+                    <td className="px-4 py-3"><div className="font-semibold">{inv.invoice_number}</div><div className="text-xs text-muted-foreground">{inv.bill_month || '-'} {inv.prorated ? <span className="text-cyan-400 font-medium">• prorated</span> : null}</div></td>
                     <td className="px-4 py-3"><div className="font-medium">{inv.subscriber_name || '-'}</div><div className="text-xs text-muted-foreground font-mono">{inv.client_code || ''} {inv.username ? `• ${inv.username}`:''}</div></td>
                     <td className="px-4 py-3 text-xs"><div>{inv.period_start || '-'} → {inv.period_end || '-'}</div><div className="text-muted-foreground">Due {inv.due_date || '-'}</div></td>
-                    <td className="px-4 py-3 text-xs"><div>Total {money(inv.total_amount||inv.amount)}</div><div className="text-muted-foreground">Paid {money(inv.paid_amount)} • Due {money(inv.due_amount)}</div></td>
-                    <td className="px-4 py-3 text-xs"><span className={`px-2 py-0.5 rounded-full border ${inv.status==='PAID'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':inv.status==='OVERDUE'?'bg-red-500/10 text-red-400 border-red-500/20':inv.status==='PARTIAL'?'bg-amber-500/10 text-amber-400 border-amber-500/20':'bg-muted text-muted-foreground border-border'}`}>{inv.status}</span></td>
+                    <td className="px-4 py-3 text-xs"><div>Total {money(inv.total_amount||inv.amount)}</div><div className="text-muted-foreground">Paid <span className="text-emerald-400">{money(inv.paid_amount)}</span> • Due <span className={Number(inv.due_amount||0)>0?'text-amber-400 font-medium':''}>{money(inv.due_amount)}</span></div></td>
+                    <td className="px-4 py-3 text-xs"><span className={`px-2 py-0.5 rounded-full border font-semibold ${inv.status==='PAID'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':inv.status==='OVERDUE'?'bg-red-500/10 text-red-400 border-red-500/20':inv.status==='PARTIAL'?'bg-amber-500/10 text-amber-400 border-amber-500/20':inv.status==='PENDING'?'bg-blue-500/10 text-blue-400 border-blue-500/20':'bg-muted text-muted-foreground border-border'}`}>{inv.status}</span></td>
                   </tr>
                 ))}
                 {!invoices.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No invoices yet. Run "Generate Batch Invoices" (supports prorated mid-month for new subscribers).</td></tr>}
