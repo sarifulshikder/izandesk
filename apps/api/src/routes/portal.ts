@@ -37,7 +37,7 @@ function portalAuth(req: any, res: any, next: any) {
 }
 
 async function getSubscriber(id: string) {
-  const r = await pool.query(`SELECT id, client_code, full_name, username, phone, email, status, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, address, connection_type, provisioning_mode, suspension_stage, walled_garden, created_at, nid_number
+  const r = await pool.query(`SELECT id, client_code, full_name, username, phone, email, status, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, address, connection_type, provisioning_mode, suspension_stage, walled_garden, created_at, nid_number, auto_pay_enabled, preferred_gateway
     FROM subscribers WHERE id=$1`, [id]);
   return r.rows[0] || null;
 }
@@ -336,6 +336,42 @@ router.get('/notifications', portalAuth, asyncHandler(async (req, res) => {
   } catch {}
   const ann = [{ id: 'welcome', type:'ANNOUNCEMENT', title: 'Welcome to IzanDesk Self-Care', body: 'Manage subscription, invoices, payments, usage, tickets, documents and Wi-Fi from your portal.', created_at: new Date().toISOString() }];
   res.json({ ok: true, announcements: ann, messages: msgs });
+}));
+
+
+
+router.get('/preferences', portalAuth, asyncHandler(async (req, res) => {
+  const id = (req as any).portal.sub;
+  const r = await pool.query('SELECT auto_pay_enabled, preferred_gateway FROM subscribers WHERE id=$1', [id]);
+  res.json({ ok: true, preferences: r.rows[0] || { auto_pay_enabled: false, preferred_gateway: null } });
+}));
+
+router.put('/preferences', portalAuth, asyncHandler(async (req, res) => {
+  const id = (req as any).portal.sub;
+  const b = req.body || {};
+  const auto = b.auto_pay_enabled === true || b.auto_pay_enabled === 'true';
+  const gw = b.preferred_gateway ? String(b.preferred_gateway).toLowerCase() : null;
+  const r = await pool.query('UPDATE subscribers SET auto_pay_enabled=$1, preferred_gateway=$2, updated_at=now() WHERE id=$3 RETURNING auto_pay_enabled, preferred_gateway', [auto, gw, id]);
+  res.json({ ok: true, preferences: r.rows[0] });
+}));
+
+router.get('/live', portalAuth, asyncHandler(async (req, res) => {
+  const sub = await getSubscriber((req as any).portal.sub);
+  if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
+  const sess = (await pool.query(`SELECT status, rx_bps, tx_bps, uptime_sec as uptime_seconds, ip_address, updated_at, username FROM subscriber_sessions WHERE subscriber_id=$1 ORDER BY updated_at DESC LIMIT 1`, [sub.id])).rows[0] || null;
+  let live = sess;
+  try {
+    const rad = (await pool.query(`
+      SELECT username, framedipaddress::text as ip_address, COALESCE(acctsessiontime,0) as uptime_seconds,
+             COALESCE(acctinputoctets,0) as rx_bytes, COALESCE(acctoutputoctets,0) as tx_bytes, COALESCE(acctupdatetime, acctstarttime) as last_seen
+      FROM radacct WHERE (username=$1 OR username IN (SELECT username FROM subscribers WHERE id=$2 AND username IS NOT NULL)) AND acctstoptime IS NULL
+      ORDER BY COALESCE(acctupdatetime, acctstarttime) DESC NULLS LAST LIMIT 1`, [sub.username || '', sub.id])).rows[0];
+    if (rad) {
+      const fresh = rad.last_seen && (Date.now() - new Date(rad.last_seen).getTime()) < 30*60*1000;
+      live = { status: fresh ? 'ONLINE' : (sess?.status||'ONLINE'), ip_address: rad.ip_address || sess?.ip_address, rx_bps: sess?.rx_bps||0, tx_bps: sess?.tx_bps||0, uptime_seconds: Number(rad.uptime_seconds||0), rx_bytes: Number(rad.rx_bytes||0), tx_bytes: Number(rad.tx_bytes||0), updated_at: rad.last_seen || sess?.updated_at, source:'radacct' };
+    }
+  } catch {}
+  res.json({ ok: true, session: live, t: Date.now() });
 }));
 
 

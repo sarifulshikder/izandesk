@@ -77,7 +77,7 @@ All complete architectural blueprints, database schemas, and feature catalogs ar
   - **SLA-driven trouble ticketing (CRM):** ticket CRUD with priority-based SLA due times/breach indicators, technician assignment/dispatch, comments/activity, subscriber/site context, and GPS navigation links with mobile-friendly resolution workflow (`/api/tickets`, `/tickets`).
   - **Omnichannel messaging engine:** channel/config/template/log models and APIs for Local BD SMS (GreenWeb), Twilio SMS, WhatsApp Business API (invoice delivery/PDF link support hooks), and Telegram Bot (NOC alerts/daily revenue summary hooks), plus built-in **Gateway Tester** for test dispatch (`/api/messaging`, `/messaging`).
   - *Notes:* Live external delivery requires provider credentials/tokens and API-specific integration setup (Twilio/GreenWeb/Meta WhatsApp Cloud/Telegram). White-label subdomain/custom-domain routing requires DNS and reverse-proxy host mapping in deployment.
-- **Phase 6:** Customer Self-Care Portal & 1-Click Plug-and-Play Packaging
+- **Phase 6:** Customer Self-Care Portal & 1-Click Plug-and-Play Packaging *(Implemented foundation)*
 
 ## ▶️ Local Run
 
