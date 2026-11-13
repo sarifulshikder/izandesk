@@ -63,10 +63,10 @@ export default function RoutersPage() {
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Stat label="Routers/NAS Online" value={routers.filter(r=>r.status==='ONLINE').length + '/' + routers.length} icon={Server} />
-        <Stat label="Active Sessions" value={summary.online || 0} icon={Wifi} />
-        <Stat label="Aggregate RX" value={fmtBps(summary.aggRxBps||0)} icon={ArrowDown} />
-        <Stat label="Aggregate TX" value={fmtBps(summary.aggTxBps||0)} icon={ArrowUp} />
+        <Stat label="Routers/NAS Online" value={routers.filter(r=>r.status==='ONLINE').length + '/' + routers.length} icon={Server} accent="text-emerald-400" />
+        <Stat label="Active Sessions" value={summary.online || 0} icon={Wifi} accent="text-cyan-400" />
+        <Stat label="Aggregate RX" value={fmtBps(summary.aggRxBps||0)} icon={ArrowDown} accent="text-blue-400" />
+        <Stat label="Aggregate TX" value={fmtBps(summary.aggTxBps||0)} icon={ArrowUp} accent="text-indigo-400" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
@@ -82,7 +82,7 @@ export default function RoutersPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold">{r.name}</span>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full border ${modeBadge(m)}`}>{m}</span>
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full border ${r.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>{r.status}</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border ${r.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-red-500/10 text-red-400 border-red-500/20'}`}>{r.status}</span>
                       <span className="text-[10px] text-muted-foreground">{r.router_type} {r.ros_version}</span>
                     </div>
                     <div className="text-xs text-muted-foreground mt-1">
@@ -169,7 +169,7 @@ export default function RoutersPage() {
   );
 }
 
-function Stat({label,value,icon:Icon}:any){ return <div className="p-4 rounded-2xl border border-border bg-card"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{label}</span><Icon className="w-4 h-4"/></div><div className="mt-2 text-xl font-black text-foreground">{value}</div></div>; }
+function Stat({label,value,icon:Icon,accent='text-foreground'}:any){ return <div className="p-4 rounded-2xl border border-border bg-card hover:border-primary/30 transition-colors"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{label}</span><Icon className={`w-4 h-4 ${accent}`}/></div><div className={`mt-2 text-xl font-black ${accent}`}>{value}</div></div>; }
 function Meter({icon:Icon,label,value}:any){ return <div className="p-2 rounded-lg bg-card border border-border"><div className="flex items-center gap-1 text-muted-foreground"><Icon className="w-3.5 h-3.5"/>{label}</div><div className="font-semibold text-foreground mt-0.5">{value}</div></div>; }
 function F({label,children}:any){ return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>{children}</label>; }
 function formatUptime(sec:number){ if(!sec) return '-'; const d=Math.floor(sec/86400),h=Math.floor((sec%86400)/3600),m=Math.floor((sec%3600)/60); return `${d}d ${h}h ${m}m`; }

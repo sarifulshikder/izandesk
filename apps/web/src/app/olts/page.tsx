@@ -87,7 +87,7 @@ export default function OltsPage() {
                   <div>
                     <div className="font-semibold">{o.name}</div>
                     <div className="text-xs text-muted-foreground">{o.vendor} {o.model||''} • {o.host}</div>
-                    <div className="text-[11px] mt-1"><span className={`px-2 py-0.5 rounded-full border ${o.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>{o.status}</span> {o.site?`• ${o.site}`:''}</div>
+                    <div className="text-[11px] mt-1"><span className={`px-2 py-0.5 rounded-full border font-semibold ${o.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-red-500/10 text-red-400 border-red-500/20'}`}>{o.status}</span> {o.site?`• ${o.site}`:''}</div>
                     {o.wg_peer_name && <div className="text-[11px] mt-1 text-cyan-400">WG: {o.wg_peer_name}{o.wg_peer_tunnel_ip ? ` (${o.wg_peer_tunnel_ip})` : ''}</div>}
                   </div>
                   <div className="flex gap-1 shrink-0" onClick={e=>e.stopPropagation()}>
@@ -134,7 +134,7 @@ export default function OltsPage() {
                       <td className="px-4 py-2">{o.olt_name}<div className="text-muted-foreground">{o.olt_vendor}</div></td>
                       <td className="px-4 py-2">{o.subscriber_name ? <><div>{o.subscriber_name}</div><div className="text-muted-foreground">{o.subscriber_code||''}</div></> : <span className="text-muted-foreground">Unlinked</span>}</td>
                       <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full border mr-1 ${opticalTone(o.optical_status)}`}>Rx {o.rx_power_dbm ?? '-'}</span><span className="text-muted-foreground">Tx {o.tx_power_dbm ?? '-'}</span><div className="mt-1 text-[10px] text-muted-foreground">Thresholds: NORMAL ≥ -27 dBm, WARNING &lt; -27 dBm, CRITICAL ≤ -30 or ≥ -8 dBm</div></td>
-                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full border ${o.status==='AUTHORIZED'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-muted text-muted-foreground border-border'}`}>{o.status}</span><div className={`text-[10px] mt-1 font-semibold ${o.optical_status==='CRITICAL'?'text-red-400':o.optical_status==='WARNING'?'text-amber-400':'text-emerald-400'}`}>{o.optical_status}</div></td>
+                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full border font-semibold ${o.status==='AUTHORIZED'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':o.status==='OFFLINE'?'bg-red-500/10 text-red-400 border-red-500/20':'bg-muted text-muted-foreground border-border'}`}>{o.status}</span><div className={`text-[10px] mt-1 font-semibold ${o.optical_status==='CRITICAL'?'text-red-400':o.optical_status==='WARNING'?'text-amber-400':'text-emerald-400'}`}>{o.optical_status}</div></td>
                     </tr>
                   ))}
                   {!activeOnus.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No ONUs yet. Discover and authorize ONUs to see telemetry.</td></tr>}
