@@ -32,6 +32,11 @@ export default function SubscribersPage() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [type, setType] = useState('');
+
+  useEffect(() => {
+    const s = searchParams?.get('status') || '';
+    if (s) setStatus(s);
+  }, [searchParams]);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);

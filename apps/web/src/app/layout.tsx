@@ -19,7 +19,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
         <Sidebar />
 
         {/* Desktop spacer so content doesn't go under fixed sidebar */}
-        <div className="hidden lg:block w-64 shrink-0" />
+        <div className="hidden lg:block w-72 shrink-0" />
 
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col min-w-0">

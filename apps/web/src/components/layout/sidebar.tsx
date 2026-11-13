@@ -29,6 +29,9 @@ import {
   Globe,
   Activity,
   UserPlus,
+  UserX,
+  UserMinus,
+  Clock3,
 } from 'lucide-react';
 
 interface NavLeaf {
@@ -61,16 +64,19 @@ const sidebarGroups: NavGroup[] = [
   {
     label: 'Subscribers',
     items: [
-      { name: 'All Subscribers', href: '/subscribers', icon: Users, badge: '3,842' },
+      { name: 'All Subscribers', href: '/subscribers', icon: Users, badge: 'All' },
       { name: 'Add Subscriber', href: '/subscribers?new=1', icon: UserPlus },
-      { name: 'Live Subscribers', href: '/subscribers/live', icon: Activity },
+      { name: 'Live Sessions', href: '/subscribers/live', icon: Activity },
+      { name: 'Expired Subscribers', href: '/subscribers?status=EXPIRED', icon: Clock3 },
+      { name: 'Suspended Subscribers', href: '/subscribers?status=SUSPENDED', icon: UserX },
+      { name: 'Pending / Inactive', href: '/subscribers?status=PENDING', icon: UserMinus },
     ],
   },
   {
     label: 'Network',
     items: [
       { name: 'Bandwidth & QoS', href: '/bandwidth', icon: Radio },
-      { name: 'Network & Routers', href: '/routers', icon: Network, badge: '12 Live' },
+      { name: 'Network & Routers', href: '/routers', icon: Network, badge: 'NAS' },
       { name: 'WireGuard Overlay', href: '/wireguard', icon: Shield, badge: 'WG' },
       { name: 'RADIUS & AAA', href: '/radius', icon: ShieldCheck },
       { name: 'FTTH & OLTs', href: '/olts', icon: Package },
@@ -79,26 +85,21 @@ const sidebarGroups: NavGroup[] = [
   {
     label: 'Billing',
     items: [
-      { name: 'Billing & Invoices', href: '/billing', icon: CreditCard, badge: 'Due: 42' },
+      { name: 'Billing & Invoices', href: '/billing', icon: CreditCard },
       { name: 'Resellers & Wallet', href: '/resellers', icon: Briefcase },
     ],
   },
   {
     label: 'Support',
     items: [
-      { name: 'CRM & Tickets', href: '/tickets', icon: LifeBuoy, badge: '5 Open' },
+      { name: 'CRM & Tickets', href: '/tickets', icon: LifeBuoy },
       { name: 'Omnichannel SMS', href: '/messaging', icon: MessageSquare },
     ],
   },
   {
     label: 'Plugins',
     items: [
-      {
-        name: 'Plugin Manager',
-        href: '/plugins',
-        icon: Puzzle,
-        badge: 'Plugins',
-      },
+      { name: 'Plugin Manager', href: '/plugins', icon: Puzzle },
       {
         name: 'Payment Gateways',
         icon: Wallet,
@@ -132,7 +133,6 @@ function isItemActive(pathname: string, searchParams: URLSearchParams | null, hr
     }
     return true;
   }
-  // special: /subscribers should be active for list but not when ?new=1 (handled above)
   if (href === '/subscribers' && pathname === '/subscribers') {
     if (searchParams?.get('new') === '1' || searchParams?.get('action') === 'new' || searchParams?.get('add') === '1') return false;
     return true;
@@ -144,7 +144,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { activeRole, user, isMobileMenuOpen, setMobileMenuOpen } = useAuth();
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Network: true, Billing: true, Support: false, Plugins: true, System: false });
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Network: true, Billing: true, Support: true, Plugins: true, System: false });
   const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true });
 
   useEffect(() => {
@@ -162,62 +162,65 @@ export function Sidebar() {
     <>
       <aside
         className={[
-          'flex flex-col w-72 border-r border-border bg-card/95 dark:bg-card/80 backdrop-blur-md h-screen z-40 transition-transform duration-300 shadow-xl lg:shadow-none',
+          'flex flex-col w-72 border-r border-border bg-card/95 dark:bg-[#0b1020]/95 backdrop-blur-md h-screen z-40 transition-transform duration-300 shadow-2xl lg:shadow-none',
           'fixed inset-y-0 left-0',
           'lg:sticky lg:top-0 lg:translate-x-0',
           isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full',
         ].join(' ')}
       >
-        <div className="flex items-center justify-between px-6 py-5 border-b border-border">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border/80">
           <Link href="/" className="flex items-center gap-2.5" onClick={() => setMobileMenuOpen(false)}>
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-primary to-secondary flex items-center justify-center shadow-lg shadow-primary/20 text-white font-black text-xl tracking-wider">I</div>
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-primary to-cyan-500 flex items-center justify-center shadow-lg shadow-primary/25 text-white font-black text-lg">I</div>
             <div>
               <div className="flex items-center gap-1.5">
                 <span className="font-bold text-lg tracking-tight text-foreground">Izan<span className="text-primary">Desk</span></span>
-                <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">ERP v1.0</span>
+                <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">ERP</span>
               </div>
-              <p className="text-[11px] text-muted-foreground font-medium">ISP Automation Core</p>
+              <p className="text-[11px] text-muted-foreground">ISP Billing & Network OSS</p>
             </div>
           </Link>
-          <button onClick={() => setMobileMenuOpen(false)} className="lg:hidden p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors" aria-label="Close menu"><X className="w-5 h-5" /></button>
+          <button onClick={() => setMobileMenuOpen(false)} className="lg:hidden p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted" aria-label="Close menu"><X className="w-5 h-5" /></button>
         </div>
 
-        <div className="px-4 py-3 mx-3 my-2 rounded-lg bg-muted/60 border border-border/80 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-            <div className="text-xs">
-              <div className="font-semibold text-foreground truncate max-w-[120px]">{user.name}</div>
-              <div className="text-[10px] text-muted-foreground uppercase tracking-wider">{activeRole.replace(/_/g, ' ')}</div>
+        <div className="px-3 py-3 border-b border-border/60">
+          <div className="px-3 py-2.5 rounded-xl bg-muted/50 border border-border/70 flex items-center justify-between">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-foreground truncate">{user.name}</div>
+                <div className="text-[10px] text-muted-foreground uppercase tracking-wider truncate">{activeRole.replace(/_/g, ' ')}</div>
+              </div>
             </div>
+            <ShieldCheck className="w-4 h-4 text-primary shrink-0" />
           </div>
-          <ShieldCheck className="w-4 h-4 text-primary" />
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+        <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
           {sidebarGroups.map((group) => (
-            <div key={group.label} className="space-y-1">
-              <button onClick={() => toggleGroup(group.label)} className="w-full flex items-center justify-between px-2 py-1.5 text-[10px] uppercase tracking-wider font-bold text-muted-foreground hover:text-foreground">
+            <div key={group.label} className="rounded-xl border border-border/50 bg-muted/10">
+              <button onClick={() => toggleGroup(group.label)} className="w-full flex items-center justify-between px-3 py-2 text-[11px] uppercase tracking-wider font-bold text-muted-foreground hover:text-foreground">
                 <span>{group.label}</span>
                 {openGroups[group.label] ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
               </button>
               {openGroups[group.label] && (
-                <div className="space-y-0.5">
+                <div className="px-2 pb-2 space-y-0.5">
                   {group.items.map((item: any) => {
                     if (item.children && item.children.length) {
                       const isOpen = !!openSub[item.name];
+                      const subActive = item.children.some((c: any) => isItemActive(pathname, searchParams, c.href));
                       return (
-                        <div key={item.name}>
-                          <button onClick={() => toggleSub(item.name)} className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-foreground/80 hover:bg-muted/80">
-                            <span className="flex items-center gap-2">{item.icon && <item.icon className="w-4 h-4 text-foreground/70" />}{item.name}</span>
+                        <div key={item.name} className="rounded-lg">
+                          <button onClick={() => toggleSub(item.name)} className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${subActive ? 'bg-primary/10 text-primary' : 'text-foreground/80 hover:bg-muted/70 hover:text-foreground'}`}>
+                            <span className="flex items-center gap-2.5">{item.icon && <item.icon className="w-4 h-4" />}{item.name}</span>
                             {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                           </button>
                           {isOpen && (
-                            <div className="ml-4 pl-3 border-l border-border/70 space-y-0.5 mt-0.5">
+                            <div className="ml-4 mt-0.5 pl-3 border-l border-primary/20 space-y-0.5">
                               {item.children.map((c: any) => {
                                 const active = isItemActive(pathname, searchParams, c.href);
                                 return (
-                                  <Link key={c.href} href={c.href} onClick={() => setMobileMenuOpen(false)} className={`block px-3 py-2 rounded-lg text-xs ${active ? 'bg-primary text-primary-foreground font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-muted/80'}`}>
-                                    {c.name}
+                                  <Link key={c.href} href={c.href} onClick={() => setMobileMenuOpen(false)} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-colors ${active ? 'bg-primary text-primary-foreground font-semibold shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-muted/70'}`}>
+                                    <span>{c.name}</span>
                                   </Link>
                                 );
                               })}
@@ -229,9 +232,9 @@ export function Sidebar() {
                     const active = isItemActive(pathname, searchParams, item.href);
                     const Icon = item.icon;
                     return (
-                      <Link key={item.name} href={item.href!} onClick={() => setMobileMenuOpen(false)} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium ${active ? 'bg-primary text-primary-foreground font-semibold' : 'text-foreground/80 hover:bg-muted/80'}`}>
-                        <span className="flex items-center gap-2">{Icon && <Icon className="w-4 h-4" />}{item.name}</span>
-                        {item.badge && <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${active ? 'bg-primary-foreground/20' : 'bg-muted text-muted-foreground'}`}>{item.badge}</span>}
+                      <Link key={item.name} href={item.href!} onClick={() => setMobileMenuOpen(false)} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-transparent ${active ? 'bg-primary text-primary-foreground font-semibold shadow-sm shadow-primary/20' : 'text-foreground/80 hover:bg-muted/70 hover:text-foreground'}`}>
+                        <span className="flex items-center gap-2.5">{Icon && <Icon className={`w-4 h-4 ${active ? '' : 'text-primary/80'}`} />}{item.name}</span>
+                        {item.badge && <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${active ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-muted text-muted-foreground border border-border/60'}`}>{item.badge}</span>}
                       </Link>
                     );
                   })}
@@ -241,12 +244,12 @@ export function Sidebar() {
           ))}
         </nav>
 
-        <div className="p-4 border-t border-border bg-muted/30">
-          <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+        <div className="p-4 border-t border-border/70 bg-muted/20">
+          <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
             <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" />Carrier Engine</span>
-            <span className="font-mono text-[11px] text-emerald-400">99.99% UP</span>
+            <span className="font-mono text-[11px] text-emerald-400">ONLINE</span>
           </div>
-          <div className="w-full bg-border rounded-full h-1 overflow-hidden"><div className="bg-primary h-1 rounded-full w-[94%]" /></div>
+          <div className="w-full bg-border/70 rounded-full h-1.5 overflow-hidden"><div className="bg-gradient-to-r from-primary to-cyan-500 h-1.5 rounded-full w-[94%]" /></div>
         </div>
       </aside>
 
