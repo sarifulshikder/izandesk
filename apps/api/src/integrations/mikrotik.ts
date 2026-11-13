@@ -551,3 +551,11 @@ function parseUptime(s: string): number {
   }
   return sec || 0;
 }
+
+
+
+export async function mikrotikEnsureFupProfile(r: RouterRow, opts: { speedMbps: number; profileName?: string }) {
+  const speed = Math.max(1, Math.round(Number(opts.speedMbps) || 1));
+  const profileName = String(opts.profileName || `izn-fup-${speed}m`).trim() || `izn-fup-${speed}m`;
+  return mikrotikEnsureWalledGarden(r, { profileName, rateLimit: `${speed}M/${speed}M` });
+}

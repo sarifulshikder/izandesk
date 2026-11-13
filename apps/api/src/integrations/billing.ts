@@ -1,5 +1,5 @@
 import { pool } from '../db';
-import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden } from './mikrotik';
+import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
 
@@ -506,6 +506,7 @@ export async function runFupEnforcementSweep() {
       const rl = shouldFup ? fupRateString(fupMbps as number) : null;
       let radiusSyncOk = true, coaOk: any = null;
       try { await syncSubscriberToRadiusDb(effective, { fupRateLimit: rl, fupExceeded: shouldFup }); } catch { radiusSyncOk = false; }
+      let routerOk: any = null;
       try {
         const nas = await resolveNasForSubscriber(sub);
         if (nas?.radius_secret && nas?.host && sub.username) {
@@ -517,10 +518,25 @@ export async function runFupEnforcementSweep() {
           }
         }
       } catch {}
+      // Direct router PPPoE (ROUTER mode): switch secret profile to FUP profile or restore package profile
+      try {
+        if (String(sub.provisioning_mode||'').toUpperCase() === 'ROUTER' && sub.router_id && sub.username) {
+          const rr = (await pool.query('SELECT * FROM network_routers WHERE id=$1', [sub.router_id])).rows[0];
+          if (rr && ['API','REST'].includes(String(rr.integration_mode||'').toUpperCase()) && rr.is_enabled !== false) {
+            if (shouldFup && fupMbps) {
+              const prof = `izn-fup-${Math.max(1, Math.round(Number(fupMbps)||1))}m`;
+              await mikrotikEnsureFupProfile(rr, { speedMbps: Number(fupMbps), profileName: prof }).catch(()=>{});
+              routerOk = await mikrotikSyncPppSecret(rr, { ...effective, profile_name: prof, profile: prof }).catch((e:any)=>({ ok:false, error: e.message }));
+            } else {
+              routerOk = await mikrotikSyncPppSecret(rr, { ...effective, profile_name: sub.profile_name || sub.package_name || 'default' }).catch((e:any)=>({ ok:false, error: e.message }));
+            }
+          }
+        }
+      } catch {}
       try {
         await pool.query(`INSERT INTO fup_enforcement_logs(subscriber_id, action, over_cap, used_bytes, cap_gb, fup_speed_mbps, details)
           VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,
-          [sub.id, shouldFup ? 'APPLIED' : 'CLEARED', over, used, capGb, fupMbps, JSON.stringify({ previous: was, rate_limit: rl, billing_restricted: billingRestricted, radius_sync_ok: radiusSyncOk, coa_ok: coaOk, period: 'current_month' })]);
+          [sub.id, shouldFup ? 'APPLIED' : 'CLEARED', over, used, capGb, fupMbps, JSON.stringify({ previous: was, rate_limit: rl, billing_restricted: billingRestricted, radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null, router_mode: String(sub.provisioning_mode||'').toUpperCase()==='ROUTER', period: 'current_month' })]);
       } catch {}
       if (shouldFup) applied++; else cleared++;
     } catch { errors++; }
