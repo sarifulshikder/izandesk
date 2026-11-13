@@ -3,16 +3,18 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
-import { RefreshCw, Database, Server, HardDrive, Activity, ShieldCheck, Clock } from 'lucide-react';
+import { RefreshCw, Database, Server, HardDrive, Activity, ShieldCheck, Clock, Gauge, Play } from 'lucide-react';
 
 export default function SystemHealthPage() {
   const { token } = useAuth();
   const [health, setHealth] = useState<any>(null);
   const [diag, setDiag] = useState<any>(null);
   const [backups, setBackups] = useState<any>(null);
+  const [fupLogs, setFupLogs] = useState<any[]>([]);
   const [msg, setMsg] = useState<string|null>(null);
   const [err, setErr] = useState<string|null>(null);
   const [busy, setBusy] = useState(false);
+  const [fupBusy, setFupBusy] = useState(false);
 
   const load = async () => {
     if (!token) return;
@@ -20,11 +22,12 @@ export default function SystemHealthPage() {
     try {
       const h = await fetch(`${getApiBaseUrl()}/api/system/health`).then(r=>r.json());
       setHealth(h);
-      const [d,b] = await Promise.all([
+      const [d,b,f] = await Promise.all([
         apiFetch<any>('/api/system/diagnostics', {}, token).catch(()=>null),
         apiFetch<any>('/api/system/backups', {}, token).catch(()=>null),
+        apiFetch<any>('/api/billing/fup/logs', {}, token).catch(()=>({data:[]})),
       ]);
-      setDiag(d); setBackups(b);
+      setDiag(d); setBackups(b); setFupLogs(f?.data || []);
     } catch(e:any){ setErr(e.message); }
   };
   useEffect(()=>{ load(); }, [token]);
@@ -40,12 +43,22 @@ export default function SystemHealthPage() {
     } catch(e:any){ setErr(e.message || 'Backup failed'); } finally { setBusy(false); }
   };
 
+  const runFup = async () => {
+    if (!token) return;
+    setFupBusy(true); setErr(null); setMsg(null);
+    try {
+      const r = await apiFetch<any>('/api/billing/fup/evaluate', { method:'POST' }, token);
+      setMsg(`FUP sweep: evaluated ${r.evaluated ?? 0}, applied ${r.applied ?? 0}, cleared ${r.cleared ?? 0}, skipped ${r.skipped ?? 0}`);
+      await load();
+    } catch(e:any){ setErr(e.message || 'FUP evaluation failed'); } finally { setFupBusy(false); }
+  };
+
   const ok = (v:any) => v?.ok === true;
   const cfg = backups?.config;
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-3">
-        <div><h1 className="text-2xl font-black tracking-tight">System Health & Diagnostics</h1><p className="text-sm text-muted-foreground">Runtime health checks, diagnostics, and database backups (manual, scheduled, retention).</p></div>
+        <div><h1 className="text-2xl font-black tracking-tight">System Health & Diagnostics</h1><p className="text-sm text-muted-foreground">Runtime health checks, diagnostics, backups, and FUP enforcement audit.</p></div>
         <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
       </div>
       {err && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>}
@@ -79,6 +92,32 @@ export default function SystemHealthPage() {
               <div className="space-y-2">{(backups.files||[]).slice(0,10).map((f:any)=>(<div key={f.name} className="p-2.5 rounded-xl border border-border bg-muted/20 flex items-center justify-between text-sm"><div><div className="font-medium">{f.name}</div><div className="text-xs text-muted-foreground">{new Date(f.created_at).toLocaleString()}</div></div><div className="text-xs text-muted-foreground">{(Number(f.size||0)/1024/1024).toFixed(2)} MB</div></div>))}{!(backups.files||[]).length && <div className="text-sm text-muted-foreground">No backups yet.</div>}</div>
             </div>
           )}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-card p-4">
+        <div className="flex items-center justify-between mb-3 gap-3">
+          <div><h2 className="font-bold flex items-center gap-2"><Gauge className="w-4 h-4 text-primary"/>FUP Enforcement & Audit</h2><p className="text-xs text-muted-foreground mt-1">Monthly cap/FUP evaluation (RADIUS CoA/rate-limit and best-effort direct PPPoE profile throttling). Billing restrictions take precedence.</p></div>
+          <button onClick={runFup} disabled={fupBusy} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2 disabled:opacity-50"><Play className="w-4 h-4"/>{fupBusy?'Running...':'Run FUP Sweep'}</button>
+        </div>
+        <div className="space-y-2 max-h-[360px] overflow-auto">
+          {fupLogs.map((l:any)=>(
+            <div key={l.id} className="p-3 rounded-xl border border-border bg-muted/20 text-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                <div className="font-medium">{l.client_code || '-'} — {l.full_name || l.username || l.subscriber_id || 'Subscriber'} <span className="text-xs text-muted-foreground">({l.package_name || '-'})</span></div>
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full border ${l.action==='APPLIED'?'border-amber-500/40 text-amber-400 bg-amber-500/10':'border-emerald-500/40 text-emerald-400 bg-emerald-500/10'}`}>{l.action}</span>
+                  <span className="text-xs text-muted-foreground">{l.created_at ? new Date(l.created_at).toLocaleString() : ''}</span>
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">
+                Used {Number(l.used_bytes||0) > 1e9 ? (Number(l.used_bytes)/1e9).toFixed(2)+' GB' : Number(l.used_bytes||0) > 1e6 ? (Number(l.used_bytes)/1e6).toFixed(2)+' MB' : `${Number(l.used_bytes||0)} B`}
+                {l.cap_gb!=null ? ` / ${Number(l.cap_gb)} GB` : ''}{l.fup_speed_mbps!=null ? ` • FUP ${l.fup_speed_mbps} Mbps` : ''} • over_cap: {String(!!l.over_cap)}
+              </div>
+              {l.details && <div className="text-[11px] text-muted-foreground mt-1">RADIUS sync: {String(l.details.radius_sync_ok)} • CoA: {String(l.details.coa_ok)} • Router PPPoE: {String(l.details.router_ok)} {l.details.rate_limit ? `• rate ${l.details.rate_limit}` : ''}</div>}
+            </div>
+          ))}
+          {!fupLogs.length && <div className="text-sm text-muted-foreground">No FUP enforcement actions logged yet (transitions appear when caps are applied/cleared).</div>}
         </div>
       </div>
 
