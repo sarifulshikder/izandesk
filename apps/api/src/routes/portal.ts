@@ -389,6 +389,37 @@ router.get('/live', portalAuth, asyncHandler(async (req, res) => {
 }));
 
 
+
+router.get('/payment-methods', portalAuth, asyncHandler(async (req, res) => {
+  const id = (req as any).portal.sub;
+  const r = await pool.query(`SELECT id, gateway, label, masked_identifier, is_default, status, created_at, updated_at FROM saved_payment_methods WHERE subscriber_id=$1 ORDER BY is_default DESC, created_at DESC`, [id]);
+  res.json({ ok: true, data: r.rows });
+}));
+
+router.post('/payment-methods', portalAuth, asyncHandler(async (req, res) => {
+  const id = (req as any).portal.sub;
+  const b = req.body || {};
+  const gateway = String(b.gateway || '').toLowerCase().trim();
+  if (!gateway) return res.status(400).json({ message: 'gateway is required' });
+  // Scaffolding: stores a method reference/label. Real tokenization/mandates must be established via gateway-specific flows/callbacks.
+  const label = b.label ? String(b.label).slice(0, 120) : null;
+  const masked = b.masked_identifier ? String(b.masked_identifier).slice(0, 120) : null;
+  const tokenRef = b.token_ref ? String(b.token_ref).slice(0, 255) : null;
+  const isDefault = !!b.is_default;
+  if (isDefault) await pool.query('UPDATE saved_payment_methods SET is_default=false WHERE subscriber_id=$1', [id]);
+  const r = await pool.query(`INSERT INTO saved_payment_methods(subscriber_id,gateway,label,token_ref,masked_identifier,is_default,status,metadata)
+    VALUES($1,$2,$3,$4,$5,$6,'ACTIVE',$7::jsonb) RETURNING id,gateway,label,masked_identifier,is_default,status,created_at,updated_at`,
+    [id, gateway, label, tokenRef, masked, isDefault, JSON.stringify({ source: 'portal_scaffold', note: 'Requires gateway tokenization/mandate flow for real auto-pay' })]);
+  res.status(201).json({ ok: true, data: r.rows[0], note: 'Saved as a payment method reference. Automatic charging requires gateway tokenization/mandate integration.' });
+}));
+
+router.delete('/payment-methods/:id', portalAuth, asyncHandler(async (req, res) => {
+  const subId = (req as any).portal.sub;
+  await pool.query('DELETE FROM saved_payment_methods WHERE id=$1 AND subscriber_id=$2', [req.params.id, subId]);
+  res.json({ ok: true });
+}));
+
+
 router.get('/speedtest/download', (_req, res) => {
   const size = 2 * 1024 * 1024;
   res.setHeader('Content-Type', 'application/octet-stream');

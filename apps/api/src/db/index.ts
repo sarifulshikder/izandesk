@@ -749,6 +749,23 @@ export async function initDb() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fup_logs_sub ON fup_enforcement_logs(subscriber_id, created_at DESC)`).catch(()=>{});
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS saved_payment_methods (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subscriber_id UUID NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+      gateway TEXT NOT NULL,
+      label TEXT,
+      token_ref TEXT,
+      masked_identifier TEXT,
+      is_default BOOLEAN NOT NULL DEFAULT false,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      metadata JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_saved_pm_sub ON saved_payment_methods(subscriber_id, created_at DESC)`).catch(()=>{});
+
   // Portal self-care preferences
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS auto_pay_enabled BOOLEAN NOT NULL DEFAULT false`).catch(()=>{});
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS preferred_gateway TEXT`).catch(()=>{});
