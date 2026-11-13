@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
-import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses, ingestMfsSmsEvent } from '../integrations/billing';
+import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses, ingestMfsSmsEvent, runFupEnforcementSweep } from '../integrations/billing';
 import { getKernel } from '../kernel/kernel-instance';
 import { mikrotikProvisionWalledGardenRedirect } from '../integrations/mikrotik';
 import crypto from 'crypto';
@@ -81,6 +81,12 @@ router.post('/suspension/evaluate', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
   await ensureOverdueInvoiceStatuses();
   const result = await evaluateDuePolicies();
+  res.json(result);
+}));
+
+router.post('/fup/evaluate', asyncHandler(async (req, res) => {
+  if (!requireBillingRole(req, res)) return;
+  const result = await runFupEnforcementSweep();
   res.json(result);
 }));
 
