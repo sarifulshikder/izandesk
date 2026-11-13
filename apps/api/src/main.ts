@@ -101,8 +101,32 @@ async function bootstrap() {
     { role: 'RESELLER', label: 'CyberNet Reseller', desc: 'Sub-ISP wholesale wallet' },
   ]}));
 
-  // Phase 1: plugins
-  app.get('/api/plugins', authMiddleware, (_req, res) => res.json({ plugins: kernel.listPlugins(), kernelReady: kernel.isReady() }));
+  // Phase 1: plugins (hot-reload kernel + categorized configuration)
+  const pluginGatewayId = (p: any) => {
+    const id = String(p?.id || '');
+    const m = id.match(/^payment-(.+)$/i);
+    if (m) return m[1].toLowerCase();
+    if (String(p?.type) === 'PAYMENT_GATEWAY') return id.toLowerCase();
+    return null;
+  };
+
+  app.get('/api/plugins', authMiddleware, async (_req, res) => {
+    try {
+      const plugins = kernel.listPlugins();
+      let gatewayCfgs: any[] = [];
+      try { gatewayCfgs = (await pool.query('SELECT gateway, enabled, mode, config, updated_at, (credentials IS NOT NULL AND credentials <> \'{}\'::jsonb) as has_credentials, (webhook_secret IS NOT NULL AND webhook_secret <> \'\') as has_webhook_secret FROM payment_gateway_configs ORDER BY gateway')).rows; } catch {}
+      const cfgByGateway = new Map(gatewayCfgs.map((g:any)=>[String(g.gateway).toLowerCase(), g]));
+      const enriched = plugins.map((p:any) => {
+        const gw = pluginGatewayId(p);
+        return gw ? { ...p, category: p.type, gateway: gw, gatewayConfig: cfgByGateway.get(gw) || null } : { ...p, category: p.type };
+      });
+      const categories = enriched.reduce((acc:any, p:any) => { const k = p.type || 'OTHER'; (acc[k] = acc[k] || []).push(p); return acc; }, {} as Record<string, any[]>);
+      res.json({ plugins: enriched, categories, kernelReady: kernel.isReady(), paymentGateways: gatewayCfgs });
+    } catch (e:any) {
+      res.json({ plugins: kernel.listPlugins(), kernelReady: kernel.isReady() });
+    }
+  });
+
   app.post('/api/plugins/reload', authMiddleware, async (req, res) => {
     const user = (req as any).user as UserSession;
     if (user.role !== 'SUPER_ADMIN' && user.role !== 'NOC_ENGINEER') return res.status(403).json({ message: 'Insufficient permissions to reload plugins' });
@@ -114,6 +138,28 @@ async function bootstrap() {
     }
     const plugins = await kernel.reloadAll();
     res.json({ ok: true, plugins, reloadedAll: true });
+  });
+
+  app.get('/api/plugins/payment-gateways', authMiddleware, async (_req, res) => {
+    const plugins = kernel.listPlugins().filter((p:any)=>p.type==='PAYMENT_GATEWAY');
+    let cfgs: any[] = [];
+    try { cfgs = (await pool.query('SELECT gateway, enabled, mode, config, updated_at, (credentials IS NOT NULL AND credentials <> \'{}\'::jsonb) as has_credentials, (webhook_secret IS NOT NULL AND webhook_secret <> \'\') as has_webhook_secret FROM payment_gateway_configs ORDER BY gateway')).rows; } catch {}
+    const cfgBy = new Map(cfgs.map((g:any)=>[String(g.gateway).toLowerCase(), g]));
+    res.json({ ok: true, data: plugins.map((p:any)=>{ const gw = pluginGatewayId(p); return { ...p, gateway: gw, gatewayConfig: gw ? (cfgBy.get(gw) || null) : null }; }), configs: cfgs });
+  });
+
+  app.post('/api/plugins/payment-gateways/:gateway', authMiddleware, async (req, res) => {
+    const user = (req as any).user as UserSession;
+    if (!['SUPER_ADMIN','BILLING_OPERATOR'].includes(user.role)) return res.status(403).json({ message: 'Insufficient permissions to configure payment gateway plugins' });
+    const b = req.body || {};
+    const gateway = String(req.params.gateway || '').toLowerCase().replace(/^payment-/, '');
+    if (!gateway) return res.status(400).json({ message: 'gateway is required' });
+    const r = await pool.query(`INSERT INTO payment_gateway_configs(gateway, enabled, mode, config, credentials, webhook_secret, updated_at)
+      VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,now())
+      ON CONFLICT (gateway) DO UPDATE SET enabled=COALESCE($2,payment_gateway_configs.enabled), mode=COALESCE($3,payment_gateway_configs.mode), config=COALESCE($4::jsonb,payment_gateway_configs.config), credentials=COALESCE($5::jsonb,payment_gateway_configs.credentials), webhook_secret=COALESCE($6,payment_gateway_configs.webhook_secret), updated_at=now()
+      RETURNING gateway,enabled,mode,config,updated_at,(credentials IS NOT NULL AND credentials <> '{}'::jsonb) as has_credentials,(webhook_secret IS NOT NULL AND webhook_secret <> '') as has_webhook_secret`,
+      [gateway, b.enabled, b.mode, b.config ? JSON.stringify(b.config) : null, b.credentials ? JSON.stringify(b.credentials) : null, b.webhook_secret || null]);
+    res.json({ ok: true, gateway: r.rows[0] });
   });
 
   // Phase 2: BSS core
