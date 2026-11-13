@@ -1,0 +1,23 @@
+{
+	# Set ACME email via env CADDY_ACME_EMAIL for production certificates
+	# email {$CADDY_ACME_EMAIL}
+}
+
+# Configure site address via env CADDY_SITE_ADDRESS (e.g. example.com or :80)
+{$CADDY_SITE_ADDRESS:localhost} {
+	encode zstd gzip
+
+	# Reverse proxy to IzanDesk web (Next.js). Web proxies /api to API internally.
+	reverse_proxy {$CADDY_UPSTREAM:http://host.docker.internal:3000}
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}
+
+# Optional: expose API directly on separate host/port if needed (disabled by default)
+# {$CADDY_API_ADDRESS:api.localhost} {
+# 	reverse_proxy {$CADDY_API_UPSTREAM:http://host.docker.internal:4000}
+# }

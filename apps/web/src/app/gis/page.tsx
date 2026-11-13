@@ -1,338 +1,173 @@
 'use client';
 
-import React, { useState } from 'react';
-import {
-  MapPin,
-  Radio,
-  Layers,
-  Search,
-  AlertTriangle,
-  Zap,
-  Activity,
-  Compass,
-  Maximize2,
-  Box,
-  Plus,
-  Route,
-  Target,
-} from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { useAuth } from '@/lib/auth-context';
+import { apiFetch } from '@/lib/api';
+import { MapPin, Route, Plus, RefreshCw, X, Box, LocateFixed } from 'lucide-react';
 
-interface FiberNode {
-  id: string;
-  name: string;
-  type: 'POP' | 'TJ_BOX' | 'SPLITTER' | 'SUBSCRIBER';
-  x: number;
-  y: number;
-  opticalPower?: number; // dBm
-  portsUsed?: number;
-  totalPorts?: number;
-  status: 'NORMAL' | 'WARNING' | 'CRITICAL_LOS';
-  zone: string;
-  clients?: string[];
-}
-
-const initialNodes: FiberNode[] = [
-  { id: 'pop-01', name: 'Central NOC POP (Mirpur 10)', type: 'POP', x: 120, y: 150, status: 'NORMAL', zone: 'Mirpur' },
-  { id: 'tj-01', name: 'TJ-MIR-01 (Main Avenue)', type: 'TJ_BOX', x: 280, y: 140, portsUsed: 14, totalPorts: 16, status: 'NORMAL', zone: 'Mirpur' },
-  { id: 'tj-02', name: 'TJ-MIR-02 (Block D)', type: 'TJ_BOX', x: 440, y: 90, portsUsed: 16, totalPorts: 16, status: 'CRITICAL_LOS', zone: 'Mirpur' },
-  { id: 'tj-04', name: 'TJ-MIR-04 (Section 10)', type: 'TJ_BOX', x: 420, y: 240, portsUsed: 8, totalPorts: 16, status: 'NORMAL', zone: 'Mirpur' },
-  { id: 'sub-01', name: 'Rohit Sharma (IZN-00142)', type: 'SUBSCRIBER', x: 560, y: 260, opticalPower: -19.4, status: 'NORMAL', zone: 'Mirpur' },
-  { id: 'sub-02', name: 'Rahim Chowdhury (IZN-00109)', type: 'SUBSCRIBER', x: 580, y: 180, opticalPower: -21.8, status: 'NORMAL', zone: 'Mirpur' },
-  { id: 'sub-05', name: 'Fatema Tuz Zohra (IZN-00214)', type: 'SUBSCRIBER', x: 580, y: 80, opticalPower: -26.9, status: 'CRITICAL_LOS', zone: 'Mirpur' },
-];
+const GisMap = dynamic(() => import('./gis-map'), { ssr: false, loading: () => <div className="h-[600px] rounded-2xl border border-border bg-card flex items-center justify-center text-muted-foreground">Loading map...</div> });
 
 export default function GisPage() {
-  const [nodes, setNodes] = useState<FiberNode[]>(initialNodes);
-  const [selectedNode, setSelectedNode] = useState<FiberNode | null>(null);
-  const [otdrDistance, setOtdrDistance] = useState<string>('1450');
-  const [otdrFaultPinned, setOtdrFaultPinned] = useState<{ x: number; y: number } | null>(null);
-  const [mapTool, setMapTool] = useState<'inspect' | 'otdr' | 'measure'>('inspect');
-  const [cableDistanceResult, setCableDistanceResult] = useState<string | null>(null);
+  const { token } = useAuth();
+  const [data, setData] = useState<any>(null);
+  const [zones, setZones] = useState<any[]>([]);
+  const [boxesList, setBoxesList] = useState<any[]>([]);
+  const [subscribers, setSubscribers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<'none'|'add-box'|'add-route'|'trace'>('none');
+  const [picked, setPicked] = useState<{lat:number,lng:number}|null>(null);
+  const [draftPoints, setDraftPoints] = useState<[number,number][]>([]);
+  const [form, setForm] = useState<any>({});
 
-  const handleLocateOtdrFault = () => {
-    // Calculates estimated fiber fault spot between TJ-01 and TJ-02
-    setOtdrFaultPinned({ x: 380, y: 110 });
-    setSelectedNode(nodes.find((n) => n.id === 'tj-02') || null);
+  const load = useCallback(async () => {
+    if (!token) return;
+    setLoading(true); setError(null);
+    try {
+      const [g, z, b, s] = await Promise.all([
+        apiFetch<any>('/api/gis/overview', {}, token),
+        apiFetch<{data:any[]}>('/api/topology/zones', {}, token),
+        apiFetch<{data:any[]}>('/api/topology/boxes', {}, token),
+        apiFetch<{data:any[]}>('/api/subscribers?limit=200', {}, token),
+      ]);
+      setData(g); setZones(z.data||[]); setBoxesList(b.data||[]); setSubscribers(s.data||[]);
+    } catch(e:any){ setError(e.message); } finally { setLoading(false); }
+  }, [token]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const onPick = (lat:number,lng:number) => {
+    setPicked({lat,lng});
+    if (mode === 'add-box') setForm((f:any)=>({ ...f, latitude: lat.toFixed(6), longitude: lng.toFixed(6) }));
+    if (mode === 'add-route' || mode === 'trace') setDraftPoints(p => [...p, [lat,lng]]);
   };
 
-  return (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-card border border-border shadow-sm">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <h1 className="text-xl sm:text-2xl font-black text-foreground tracking-tight">
-              Fiber & FTTH GIS Topology Map
-            </h1>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-              PostGIS 3.4 Spatial Layer
-            </span>
-          </div>
-          <p className="text-xs text-muted-foreground font-medium">
-            Central POPs, TJ Splitter Distribution Boxes, Core Cables & Optical Attenuation
-          </p>
-        </div>
+  const createBox = async () => {
+    if (!token) return;
+    try {
+      await apiFetch('/api/topology/boxes', { method:'POST', body: JSON.stringify(form) }, token);
+      setMode('none'); setForm({}); setPicked(null); await load();
+    } catch(e:any){ setError(e.message); }
+  };
 
-        {/* Map Tool Switcher */}
-        <div className="flex items-center gap-2 bg-muted/60 p-1.5 rounded-xl border border-border">
-          <button
-            onClick={() => setMapTool('inspect')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-              mapTool === 'inspect' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Inspect Mode
-          </button>
-          <button
-            onClick={() => setMapTool('otdr')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-              mapTool === 'otdr' ? 'bg-rose-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            OTDR Fault Locator
-          </button>
-          <button
-            onClick={() => {
-              setMapTool('measure');
-              setCableDistanceResult('Estimated Drop Cable: 84 meters (32% drum remaining)');
-            }}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-              mapTool === 'measure' ? 'bg-indigo-500 text-white shadow-sm' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Route Measure
-          </button>
+  const createRoute = async () => {
+    if (!token) return;
+    try {
+      const path = draftPoints.map(([lat,lng]) => [lng,lat]);
+      const payload = { ...form, path: path.length >= 2 ? path : undefined };
+      await apiFetch('/api/topology/fiber-routes', { method:'POST', body: JSON.stringify(payload) }, token);
+      setMode('none'); setForm({}); setDraftPoints([]); await load();
+    } catch(e:any){ setError(e.message); }
+  };
+
+  const traceToSubscriber = async () => {
+    if (!token || !form.from_box_id || !form.subscriber_id) return setError('Select source box and subscriber');
+    const sub = subscribers.find(s=>s.id===form.subscriber_id);
+    const box = boxesList.find(b=>b.id===form.from_box_id);
+    if (!sub || !box) return setError('Box or subscriber not found');
+    const points: [number,number][] = [];
+    if (box.latitude && box.longitude) points.push([Number(box.longitude), Number(box.latitude)]);
+    if (draftPoints.length) points.push(...draftPoints.map(([lat,lng]) => [lng,lat] as [number,number]));
+    if (sub.longitude && sub.latitude) points.push([Number(sub.longitude), Number(sub.latitude)]);
+    if (points.length < 2) return setError('Need coordinates for box and subscriber (or draw path points)');
+    try {
+      await apiFetch('/api/topology/fiber-routes', { method:'POST', body: JSON.stringify({ name: form.name || `Trace ${box.code||box.name} -> ${sub.client_code}`, route_type: 'DROP_FIBER', from_box_id: box.id, to_box_id: null, path: points, notes: `Traced to subscriber ${sub.client_code}` }) }, token);
+      setMode('none'); setForm({}); setDraftPoints([]); await load();
+    } catch(e:any){ setError(e.message); }
+  };
+
+  const boxCount = data?.boxes?.features?.length || 0;
+  const subCount = data?.subscribers?.features?.length || 0;
+  const routeCount = data?.fiberRoutes?.features?.length || 0;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-black tracking-tight">Fiber GIS Map & Topology</h1>
+          <p className="text-sm text-muted-foreground">PostGIS-backed subscriber pins, distribution boxes, and fiber route tracing. {subCount} subscribers • {boxCount} boxes • {routeCount} routes</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
+          <button onClick={()=>{setMode('add-box'); setForm({name:'', code:'', box_type:'TJ', capacity_ports:8, zone_id: zones[0]?.id || '', latitude:'', longitude:'', address:''}); setPicked(null);}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Distribution Box</button>
+          <button onClick={()=>{setMode('add-route'); setForm({name:'', route_type:'FIBER', from_box_id:'', to_box_id:''}); setDraftPoints([]);}} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><Route className="w-4 h-4"/>Draw Fiber Route</button>
+          <button onClick={()=>{setMode('trace'); setForm({name:'', from_box_id:'', subscriber_id:''}); setDraftPoints([]);}} className="px-3 py-2 rounded-xl border border-cyan-500/40 text-cyan-400 text-sm font-semibold inline-flex items-center gap-2"><LocateFixed className="w-4 h-4"/>Trace to Subscriber</button>
         </div>
       </div>
 
-      {cableDistanceResult && (
-        <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold flex items-center justify-between animate-in fade-in">
-          <div className="flex items-center gap-2">
-            <Route className="w-4 h-4" />
-            <span>{cableDistanceResult}</span>
-          </div>
-          <button onClick={() => setCableDistanceResult(null)}>
-            <span className="text-xs font-bold">Dismiss</span>
-          </button>
+      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        <div className="xl:col-span-2 h-[650px] rounded-2xl border border-border overflow-hidden bg-card">
+          <GisMap data={data} onPick={(mode!=='none')?onPick:undefined} draftLine={draftPoints} />
         </div>
-      )}
-
-      {/* Main Map Container */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Interactive Vector GIS Canvas */}
-        <div className="lg:col-span-3 rounded-2xl bg-card border border-border shadow-sm overflow-hidden flex flex-col relative h-[520px]">
-          {/* Map Controls Overlay */}
-          <div className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-card/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-border text-xs text-muted-foreground shadow-lg">
-            <Compass className="w-4 h-4 text-primary" />
-            <span>Mirpur Sector 10 Topology</span>
-          </div>
-
-          <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-            <span className="text-[11px] font-mono font-semibold px-2.5 py-1 rounded-xl bg-card/80 backdrop-blur-md border border-border text-foreground flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              Optical Loss: 0.28 dB/km
-            </span>
-          </div>
-
-          {/* SVG Map Canvas */}
-          <svg className="w-full h-full bg-slate-950/60 cursor-crosshair">
-            <defs>
-              <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255, 255, 255, 0.04)" strokeWidth="1" />
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#grid)" />
-
-            {/* Fiber Trunk Line (POP -> TJ-01) */}
-            <line x1="120" y1="150" x2="280" y2="140" stroke="#06B6D4" strokeWidth="4" />
-            <text x="180" y="135" fill="#06B6D4" fontSize="10" fontFamily="monospace">48F Trunk</text>
-
-            {/* Fiber Distribution Lines */}
-            <line x1="280" y1="140" x2="440" y2="90" stroke="#EF4444" strokeWidth="3" strokeDasharray="4" />
-            <text x="340" y="105" fill="#EF4444" fontSize="10" fontFamily="monospace">24F Cut Alert</text>
-
-            <line x1="280" y1="140" x2="420" y2="240" stroke="#10B981" strokeWidth="3" />
-            <text x="330" y="200" fill="#10B981" fontSize="10" fontFamily="monospace">24F Active</text>
-
-            {/* Drop Cables to Subscribers */}
-            <line x1="420" y1="240" x2="560" y2="260" stroke="#F59E0B" strokeWidth="2" strokeDasharray="3" />
-            <line x1="420" y1="240" x2="580" y2="180" stroke="#F59E0B" strokeWidth="2" strokeDasharray="3" />
-            <line x1="440" y1="90" x2="580" y2="80" stroke="#EF4444" strokeWidth="2" strokeDasharray="3" />
-
-            {/* OTDR Fault Pin Animation */}
-            {otdrFaultPinned && (
-              <g>
-                <circle cx={otdrFaultPinned.x} cy={otdrFaultPinned.y} r="16" fill="rgba(239, 68, 68, 0.2)" className="animate-ping" />
-                <circle cx={otdrFaultPinned.x} cy={otdrFaultPinned.y} r="8" fill="#EF4444" />
-                <text x={otdrFaultPinned.x - 30} y={otdrFaultPinned.y - 14} fill="#EF4444" fontSize="11" fontWeight="bold">
-                  ⚡ OTDR Break Point (1,450m)
-                </text>
-              </g>
-            )}
-
-            {/* Map Nodes Rendering */}
-            {nodes.map((node) => {
-              const isSelected = selectedNode?.id === node.id;
-
-              return (
-                <g
-                  key={node.id}
-                  onClick={() => setSelectedNode(node)}
-                  className="cursor-pointer transition-transform hover:scale-110"
-                >
-                  {node.type === 'POP' && (
-                    <>
-                      <rect
-                        x={node.x - 14}
-                        y={node.y - 14}
-                        width="28"
-                        height="28"
-                        rx="6"
-                        fill="#6366F1"
-                        stroke={isSelected ? '#FFFFFF' : '#4F46E5'}
-                        strokeWidth="3"
-                      />
-                      <text x={node.x - 25} y={node.y + 28} fill="#FFFFFF" fontSize="11" fontWeight="bold">
-                        {node.name}
-                      </text>
-                    </>
-                  )}
-
-                  {node.type === 'TJ_BOX' && (
-                    <>
-                      <polygon
-                        points={`${node.x},${node.y - 12} ${node.x + 12},${node.y} ${node.x},${node.y + 12} ${node.x - 12},${node.y}`}
-                        fill={node.status === 'CRITICAL_LOS' ? '#EF4444' : '#06B6D4'}
-                        stroke="#FFFFFF"
-                        strokeWidth="2"
-                      />
-                      <text x={node.x - 20} y={node.y + 26} fill="#E2E8F0" fontSize="10">
-                        {node.name}
-                      </text>
-                    </>
-                  )}
-
-                  {node.type === 'SUBSCRIBER' && (
-                    <>
-                      <circle
-                        cx={node.x}
-                        cy={node.y}
-                        r="6"
-                        fill={node.status === 'CRITICAL_LOS' ? '#EF4444' : '#10B981'}
-                        stroke="#FFFFFF"
-                        strokeWidth="1.5"
-                      />
-                      <text x={node.x + 10} y={node.y + 4} fill="#94A3B8" fontSize="10">
-                        {node.name.split(' ')[0]} ({node.opticalPower} dBm)
-                      </text>
-                    </>
-                  )}
-                </g>
-              );
-            })}
-          </svg>
-
-          {/* Map Legend Footer */}
-          <div className="p-3 border-t border-border bg-card/80 backdrop-blur-md flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-4">
-              <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded bg-indigo-500" /> NOC POP
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rotate-45 bg-cyan-400" /> TJ Box (Splitter)
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" /> Normal Optical Signal
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500" /> LOS / Critical Degradation
-              </span>
-            </div>
-            <span className="text-[11px] text-muted-foreground font-mono">Click any element to inspect details</span>
-          </div>
-        </div>
-
-        {/* Right Sidebar: Element Inspector & OTDR Panel */}
         <div className="space-y-4">
-          {/* OTDR Fault Tool */}
-          <div className="p-4 rounded-2xl bg-card border border-border shadow-sm space-y-3">
-            <div className="flex items-center gap-2 text-rose-400 font-bold text-xs uppercase tracking-wider">
-              <Target className="w-4 h-4" />
-              <span>OTDR Distance Fault Locator</span>
-            </div>
-            <p className="text-[11px] text-muted-foreground">
-              Enter measured OTDR meterage to pinpoint physical cable cuts on the GIS map.
-            </p>
-            <div>
-              <label className="block text-[11px] font-semibold text-foreground mb-1">
-                OTDR Meter Distance
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  value={otdrDistance}
-                  onChange={(e) => setOtdrDistance(e.target.value)}
-                  className="flex-1 px-3 py-1.5 text-xs rounded-xl bg-muted/60 border border-border text-foreground font-mono font-bold outline-none"
-                />
-                <button
-                  onClick={handleLocateOtdrFault}
-                  className="px-3 py-1.5 text-xs font-bold rounded-xl bg-rose-500 text-white hover:bg-rose-600 transition-colors"
-                >
-                  Locate
-                </button>
-              </div>
+          <div className="p-4 rounded-2xl border border-border bg-card">
+            <h3 className="font-bold mb-2">Map Layers & Legend</h3>
+            <div className="text-sm space-y-2 text-muted-foreground">
+              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-blue-500 inline-block"></span> Distribution Boxes (TJ/Splitter) — click for details</div>
+              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-emerald-500 inline-block"></span> Active subscribers</div>
+              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-red-500 inline-block"></span> Suspended subscribers</div>
+              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-amber-500 inline-block"></span> Pending/Other subscribers</div>
+              <div className="flex items-center gap-2"><span className="w-6 h-0.5 bg-cyan-400 inline-block"></span> Fiber routes / traces</div>
+              {mode !== 'none' && <div className="mt-2 p-2 rounded-lg bg-primary/10 border border-primary/20 text-primary text-xs">Map click mode: {mode === 'add-box' ? 'pick box location' : 'add route/trace points'} {picked ? `• picked ${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}` : ''}</div>}
             </div>
           </div>
 
-          {/* Node Inspector */}
-          {selectedNode ? (
-            <div className="p-4 rounded-2xl bg-card border border-primary/30 shadow-md space-y-3 animate-in fade-in">
-              <div className="flex items-center justify-between pb-2 border-b border-border">
-                <span className="text-xs font-bold text-foreground">{selectedNode.name}</span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                  {selectedNode.type}
-                </span>
+          {mode === 'add-box' && (
+            <Panel title="Add Distribution Box" onClose={()=>{setMode('none'); setPicked(null);}}>
+              <div className="text-xs text-muted-foreground mb-2">Click on the map to set latitude/longitude.</div>
+              <div className="space-y-2">
+                <Inp label="Name" value={form.name||''} onChange={v=>setForm({...form,name:v})} />
+                <Inp label="Code" value={form.code||''} onChange={v=>setForm({...form,code:v})} />
+                <Sel label="Zone" value={form.zone_id||''} onChange={v=>setForm({...form,zone_id:v})} options={[{v:'',l:'Select zone'}, ...zones.map(z=>({v:z.id,l:`${z.area_name} / ${z.name}`}))]} />
+                <Sel label="Type" value={form.box_type||'TJ'} onChange={v=>setForm({...form,box_type:v})} options={['TJ','Splitter','FAT','FDB','Closure']} />
+                <Inp label="Capacity Ports" value={form.capacity_ports||8} onChange={v=>setForm({...form,capacity_ports:Number(v)})} type="number" />
+                <div className="grid grid-cols-2 gap-2"><Inp label="Latitude" value={form.latitude||''} onChange={v=>setForm({...form,latitude:v})} /><Inp label="Longitude" value={form.longitude||''} onChange={v=>setForm({...form,longitude:v})} /></div>
+                <Inp label="Address" value={form.address||''} onChange={v=>setForm({...form,address:v})} />
+                <button onClick={createBox} className="w-full mt-2 px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">Save Distribution Box</button>
               </div>
+            </Panel>
+          )}
 
-              <div className="space-y-2 text-xs">
-                {selectedNode.totalPorts && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Port Utilization:</span>
-                    <span className="font-bold text-foreground">
-                      {selectedNode.portsUsed} / {selectedNode.totalPorts} Ports
-                    </span>
-                  </div>
-                )}
-
-                {selectedNode.opticalPower && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Optical RX:</span>
-                    <span className={`font-mono font-bold ${selectedNode.opticalPower < -25 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                      {selectedNode.opticalPower} dBm
-                    </span>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Health Status:</span>
-                  <span className={`font-semibold ${selectedNode.status === 'NORMAL' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                    {selectedNode.status}
-                  </span>
+          {mode === 'add-route' && (
+            <Panel title="Draw Fiber Route" onClose={()=>{setMode('none'); setDraftPoints([]);}}>
+              <div className="text-xs text-muted-foreground mb-2">Click map to add path points ({draftPoints.length} points). Select from/to boxes for topology link.</div>
+              <div className="space-y-2">
+                <Inp label="Route Name" value={form.name||''} onChange={v=>setForm({...form,name:v})} />
+                <Sel label="From Box" value={form.from_box_id||''} onChange={v=>setForm({...form,from_box_id:v})} options={[{v:'',l:'None'}, ...boxesList.map(b=>({v:b.id,l:b.name}))]} />
+                <Sel label="To Box" value={form.to_box_id||''} onChange={v=>setForm({...form,to_box_id:v})} options={[{v:'',l:'None'}, ...boxesList.map(b=>({v:b.id,l:b.name}))]} />
+                <div className="flex gap-2">
+                  <button onClick={()=>setDraftPoints(p=>p.slice(0,-1))} className="px-3 py-2 rounded-xl border border-border text-xs">Undo point</button>
+                  <button onClick={()=>setDraftPoints([])} className="px-3 py-2 rounded-xl border border-border text-xs">Clear points</button>
                 </div>
+                <button onClick={createRoute} disabled={draftPoints.length<2 || !form.name} className="w-full mt-2 px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold disabled:opacity-50">Save Fiber Route</button>
               </div>
+            </Panel>
+          )}
 
-              <div className="pt-2 border-t border-border flex items-center justify-between">
-                <button
-                  onClick={() => setSelectedNode(null)}
-                  className="text-xs text-muted-foreground hover:text-foreground"
-                >
-                  Clear Selection
-                </button>
+          {mode === 'trace' && (
+            <Panel title="Trace Fiber Line to Subscriber" onClose={()=>{setMode('none'); setDraftPoints([]);}}>
+              <div className="text-xs text-muted-foreground mb-2">Select source box and subscriber. Optionally click map to add intermediate path points; subscriber/box coordinates are used as endpoints when available.</div>
+              <div className="space-y-2">
+                <Inp label="Trace Name (optional)" value={form.name||''} onChange={v=>setForm({...form,name:v})} />
+                <Sel label="From Distribution Box" value={form.from_box_id||''} onChange={v=>setForm({...form,from_box_id:v})} options={[{v:'',l:'Select box'}, ...boxesList.map(b=>({v:b.id,l:b.name}))]} />
+                <Sel label="Subscriber (residence)" value={form.subscriber_id||''} onChange={v=>setForm({...form,subscriber_id:v})} options={[{v:'',l:'Select subscriber'}, ...subscribers.map(s=>({v:s.id,l:`${s.full_name} (${s.client_code})`}))]} />
+                <div className="flex gap-2"><button onClick={()=>setDraftPoints(p=>p.slice(0,-1))} className="px-3 py-2 rounded-xl border border-border text-xs">Undo</button><button onClick={()=>setDraftPoints([])} className="px-3 py-2 rounded-xl border border-border text-xs">Clear</button></div>
+                <button onClick={traceToSubscriber} className="w-full mt-2 px-4 py-2 rounded-xl bg-cyan-600 text-white font-semibold">Create Trace</button>
               </div>
-            </div>
-          ) : (
-            <div className="p-6 rounded-2xl bg-muted/20 border border-border/60 text-center text-xs text-muted-foreground">
-              Select any POP, TJ Box, or Subscriber on the map to inspect live optical signal and port capacity.
+            </Panel>
+          )}
+
+          {mode === 'none' && (
+            <div className="p-4 rounded-2xl border border-border bg-card space-y-3">
+              <h3 className="font-bold flex items-center gap-2"><Box className="w-4 h-4 text-primary"/>Topology Summary</h3>
+              <div className="text-sm text-muted-foreground">Areas/Zones: {new Set(zones.map(z=>z.area_id)).size} / {zones.length}</div>
+              <div className="text-sm text-muted-foreground">Distribution boxes: {boxesList.length}</div>
+              <div className="text-sm text-muted-foreground">Mapped subscribers (with geo): {subCount}</div>
+              <div className="text-sm text-muted-foreground">Fiber routes/traces: {routeCount}</div>
+              <div className="text-xs text-muted-foreground pt-2 border-t border-border">Use "Add Distribution Box" then click map to place it. Use "Trace to Subscriber" to draw a fiber line from a box to a subscriber residence.</div>
             </div>
           )}
         </div>
@@ -340,3 +175,7 @@ export default function GisPage() {
     </div>
   );
 }
+
+function Panel({title,onClose,children}: {title:string;onClose:()=>void;children:React.ReactNode}){ return <div className="p-4 rounded-2xl border border-border bg-card"><div className="flex items-center justify-between mb-3"><h3 className="font-bold">{title}</h3><button onClick={onClose} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4"/></button></div>{children}</div>; }
+function Inp({label,value,onChange,type='text'}: {label:string;value:any;onChange:(v:string)=>void;type?:string}){ return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div><input type={type} value={value} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground"/></label>; }
+function Sel({label,value,onChange,options}: {label:string;value:any;onChange:(v:string)=>void;options:any[]}){ return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div><select value={value} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground">{options.map((o:any)=><option key={o.v} value={o.v}>{o.l}</option>)}</select></label>; }

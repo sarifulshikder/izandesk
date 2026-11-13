@@ -11,12 +11,14 @@ import {
   Command,
   UserCheck,
   ChevronDown,
-  Wifi,
   Radio,
+  Menu,
+  LogOut,
 } from 'lucide-react';
 
 export function Header() {
-  const { user, activeRole, switchRole, theme, toggleTheme, setCommandPaletteOpen } = useAuth();
+  const { user, activeRole, switchRole, theme, toggleTheme, setCommandPaletteOpen, toggleMobileMenu, logout } = useAuth();
+  if (!user || !activeRole) return null;
   const [isRoleDropdownOpen, setRoleDropdownOpen] = useState(false);
   const [isNotificationOpen, setNotificationOpen] = useState(false);
 
@@ -29,25 +31,35 @@ export function Header() {
   ];
 
   return (
-    <header className="sticky top-0 z-20 w-full border-b border-border bg-card/60 backdrop-blur-md px-4 lg:px-8 py-3.5 flex items-center justify-between gap-4">
+    <header className="sticky top-0 z-20 w-full border-b border-border bg-card/80 dark:bg-card/60 backdrop-blur-md px-3 sm:px-4 lg:px-8 py-2.5 sm:py-3.5">
+      <div className="flex items-center justify-between gap-2 sm:gap-4 flex-wrap sm:flex-nowrap">
+      {/* Hamburger — mobile only */}
+      <button
+        onClick={toggleMobileMenu}
+        className="lg:hidden p-2 rounded-xl text-foreground/80 hover:text-foreground bg-muted/50 hover:bg-muted border border-border transition-all shrink-0"
+        aria-label="Open menu"
+      >
+        <Menu className="w-4 h-4" />
+      </button>
+
       {/* Search & Command Palette Trigger */}
-      <div className="flex items-center gap-3 flex-1 max-w-md">
+      <div className="flex items-center gap-3 flex-1 min-w-[140px] max-w-md order-last sm:order-none w-full sm:w-auto">
         <button
           onClick={() => setCommandPaletteOpen(true)}
-          className="w-full flex items-center justify-between px-3.5 py-2 text-xs text-muted-foreground bg-muted/60 border border-border rounded-xl hover:border-primary/50 hover:bg-muted transition-all group shadow-sm"
+          className="w-full flex items-center justify-between px-3 py-2 text-xs text-foreground/70 dark:text-muted-foreground bg-muted/60 border border-border rounded-xl hover:border-primary/50 hover:bg-muted transition-all group shadow-sm"
         >
-          <div className="flex items-center gap-2.5">
-            <Search className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
-            <span>Search subscribers, routers, invoices...</span>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Search className="w-4 h-4 text-foreground/60 dark:text-muted-foreground group-hover:text-primary transition-colors shrink-0" />
+            <span className="truncate">Search subscribers, routers, invoices...</span>
           </div>
-          <kbd className="hidden sm:inline-flex items-center gap-1 font-mono text-[10px] font-semibold bg-background px-1.5 py-0.5 rounded border border-border text-muted-foreground">
+          <kbd className="hidden sm:inline-flex items-center gap-1 font-mono text-[10px] font-semibold bg-background px-1.5 py-0.5 rounded border border-border text-muted-foreground shrink-0 ml-2">
             <Command className="w-3 h-3" /> K
           </kbd>
         </button>
       </div>
 
       {/* Right Controls */}
-      <div className="flex items-center gap-2.5 sm:gap-4">
+      <div className="flex items-center gap-1.5 sm:gap-3 shrink-0 ml-auto sm:ml-0">
         {/* Live Network Health Indicator */}
         <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-semibold">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
@@ -97,6 +109,15 @@ export function Header() {
           )}
         </div>
 
+        {/* Logout */}
+        <button
+          onClick={logout}
+          className="p-2 rounded-xl text-muted-foreground hover:text-red-400 bg-muted/50 hover:bg-red-500/10 border border-border hover:border-red-500/30 transition-all"
+          title="Logout"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
+
         {/* Theme Switcher */}
         <button
           onClick={toggleTheme}
@@ -141,7 +162,7 @@ export function Header() {
         </div>
 
         {/* User Profile Avatar */}
-        <div className="flex items-center gap-2.5 pl-2 border-l border-border">
+        <div className="flex items-center gap-2 pl-1 sm:pl-2 border-l border-border shrink-0">
           <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-primary to-secondary p-[2px] shadow-sm">
             <div className="w-full h-full rounded-[10px] bg-card flex items-center justify-center font-bold text-xs text-primary">
               {user.name.charAt(0)}
@@ -152,6 +173,7 @@ export function Header() {
             <div className="text-[10px] text-muted-foreground leading-tight">{user.email}</div>
           </div>
         </div>
+      </div>
       </div>
     </header>
   );

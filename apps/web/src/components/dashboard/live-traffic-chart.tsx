@@ -42,20 +42,20 @@ export function LiveTrafficChart() {
   return (
     <div className="p-5 rounded-2xl bg-card border border-border/80 shadow-sm flex flex-col justify-between">
       {/* Header */}
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2.5">
-          <div className="p-2 rounded-xl bg-primary/10 border border-primary/20 text-primary">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="p-2 rounded-xl bg-primary/10 border border-primary/20 text-primary shrink-0">
             <Radio className="w-4 h-4 animate-pulse" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h3 className="text-sm font-bold text-foreground tracking-tight">Core Interface Real-Time Throughput</h3>
             <p className="text-[11px] text-muted-foreground">Aggregated BDIX + IIG Upstream (Live WebSocket Telemetry)</p>
           </div>
         </div>
 
         {/* Live Gauges */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
             <ArrowDown className="w-3.5 h-3.5" />
             <div className="text-right">
               <span className="text-[10px] uppercase font-bold tracking-wider block text-cyan-400/70">RX (Down)</span>
@@ -63,7 +63,7 @@ export function LiveTrafficChart() {
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
             <ArrowUp className="w-3.5 h-3.5" />
             <div className="text-right">
               <span className="text-[10px] uppercase font-bold tracking-wider block text-indigo-400/70">TX (Up)</span>

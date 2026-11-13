@@ -1,0 +1,16 @@
+[Unit]
+Description=IzanDesk Web (Next.js Production)
+After=network.target izandesk-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/server/izandesk
+Environment=NODE_ENV=production
+ExecStart=/home/server/.local/bin/pnpm --filter web start
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/izandesk-web.log
+StandardError=append:/var/log/izandesk-web.log
+
+[Install]
+WantedBy=multi-user.target

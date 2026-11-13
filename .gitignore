@@ -1,5 +1,18 @@
-node_modules/
-.next/
+apps/api/uploads/
 dist/
-*.log
 .DS_Store
+*.log
+.next/
+node_modules/
+
+# local env/secrets
+.env
+.env.*
+!.env.example
+apps/api/.env
+apps/web/.env.local
+docker/.env
+docker/radius/clients.conf
+docker/wg-hub/config/wg0.conf
+docker/wg-hub/config/status.json
+apps/docker/wg-hub/config/wg0.conf

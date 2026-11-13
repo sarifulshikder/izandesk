@@ -1,415 +1,184 @@
 'use client';
 
-import React, { useState } from 'react';
-import {
-  Boxes,
-  PackagePlus,
-  Search,
-  Filter,
-  CheckCircle2,
-  AlertTriangle,
-  QrCode,
-  HardDrive,
-  Radio,
-  Warehouse,
-  Truck,
-  FileSpreadsheet,
-  X,
-  Zap,
-} from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '@/lib/auth-context';
+import { apiFetch } from '@/lib/api';
+import { Plus, Pencil, Trash2, RefreshCw, Warehouse, Package, Barcode, X } from 'lucide-react';
 
-interface InventoryItem {
-  id: string;
-  serialNumber: string;
-  category: 'ONT' | 'ROUTER' | 'CABLE' | 'SPLICER';
-  modelName: string;
-  warehouse: string;
-  assignedClient?: string;
-  assignedTechnician?: string;
-  status: 'IN_STOCK' | 'ASSIGNED_CLIENT' | 'DEFECTIVE_RMA' | 'TRANSIT';
-  warrantyUntil: string;
-}
-
-const initialInventory: InventoryItem[] = [
-  {
-    id: 'inv-01',
-    serialNumber: 'HWTC-8921B-4091',
-    category: 'ONT',
-    modelName: 'Huawei EchoLife HG8310M GPON',
-    warehouse: 'Central Warehouse (Mirpur)',
-    assignedClient: 'Rohit Sharma (IZN-MIR-00142)',
-    status: 'ASSIGNED_CLIENT',
-    warrantyUntil: '2027-01-15',
-  },
-  {
-    id: 'inv-02',
-    serialNumber: 'BDCM-3600-9912',
-    category: 'ONT',
-    modelName: 'BDCOM GPON ONU 1GE',
-    warehouse: 'Central Warehouse (Mirpur)',
-    status: 'IN_STOCK',
-    warrantyUntil: '2026-12-31',
-  },
-  {
-    id: 'inv-03',
-    serialNumber: 'VSOL-V2801-1102',
-    category: 'ONT',
-    modelName: 'VSOL EPON/GPON XPON Hybrid',
-    warehouse: 'Mobile Van #1 (Field Team)',
-    assignedTechnician: 'Kamrul Hasan (Field Lead)',
-    status: 'IN_STOCK',
-    warrantyUntil: '2027-04-10',
-  },
-  {
-    id: 'inv-04',
-    serialNumber: 'MK-CCR-2004-8991',
-    category: 'ROUTER',
-    modelName: 'MikroTik CCR2004-16G-2S+',
-    warehouse: 'Central Warehouse (Mirpur)',
-    status: 'IN_STOCK',
-    warrantyUntil: '2027-08-20',
-  },
-  {
-    id: 'inv-05',
-    serialNumber: 'FBR-DRUM-1000M-04',
-    category: 'CABLE',
-    modelName: '2-Core FTTH Drop Cable (1,000m Drum)',
-    warehouse: 'Central Warehouse (Mirpur)',
-    status: 'IN_STOCK',
-    warrantyUntil: 'Lifetime',
-  },
-  {
-    id: 'inv-06',
-    serialNumber: 'HWTC-7712A-1004',
-    category: 'ONT',
-    modelName: 'Huawei HG8245H5 Dual-Band WiFi',
-    warehouse: 'Dhanmondi Branch',
-    status: 'DEFECTIVE_RMA',
-    warrantyUntil: '2026-11-30',
-  },
-];
+type Tab = 'warehouses' | 'items' | 'serials';
 
 export default function InventoryPage() {
-  const [inventory, setInventory] = useState<InventoryItem[]>(initialInventory);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('ALL');
-  const [categoryFilter, setCategoryFilter] = useState('ALL');
-  const [warehouseFilter, setWarehouseFilter] = useState('ALL');
+  const { token } = useAuth();
+  const [tab, setTab] = useState<Tab>('warehouses');
+  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [items, setItems] = useState<any[]>([]);
+  const [serials, setSerials] = useState<any[]>([]);
+  const [subscribers, setSubscribers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [modal, setModal] = useState<{type: Tab|'edit-warehouse'|'edit-item'|'edit-serial', data?: any} | null>(null);
+  const [form, setForm] = useState<any>({});
+  const [serialFilter, setSerialFilter] = useState({ q: '', status: '', item_id: '', warehouse_id: '' });
 
-  // Add Item Modal
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [actionAlert, setActionAlert] = useState<string | null>(null);
-  const [newItem, setNewItem] = useState({
-    serialNumber: 'HWTC-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-    category: 'ONT' as any,
-    modelName: 'Huawei EchoLife HG8310M GPON',
-    warehouse: 'Central Warehouse (Mirpur)',
-  });
+  const load = useCallback(async () => {
+    if (!token) return;
+    setLoading(true); setError(null);
+    try {
+      const [w, i, s, subs] = await Promise.all([
+        apiFetch<{data:any[]}>('/api/inventory/warehouses', {}, token),
+        apiFetch<{data:any[]}>('/api/inventory/items', {}, token),
+        apiFetch<{data:any[]}>(`/api/inventory/serials?${new URLSearchParams(Object.entries(serialFilter).filter(([,v])=>v) as any)}`, {}, token),
+        apiFetch<{data:any[]}>('/api/subscribers?limit=200', {}, token),
+      ]);
+      setWarehouses(w.data||[]); setItems(i.data||[]); setSerials(s.data||[]); setSubscribers(subs.data||[]);
+    } catch(e:any){ setError(e.message); } finally { setLoading(false); }
+  }, [token, serialFilter]);
 
-  const showNotification = (msg: string) => {
-    setActionAlert(msg);
-    setTimeout(() => setActionAlert(null), 3000);
+  useEffect(() => { load(); }, [load]);
+
+  const save = async () => {
+    if (!token || !modal) return;
+    try {
+      if (modal.type === 'warehouses') await apiFetch('/api/inventory/warehouses', { method:'POST', body: JSON.stringify(form) }, token);
+      else if (modal.type === 'edit-warehouse') await apiFetch(`/api/inventory/warehouses/${modal.data.id}`, { method:'PUT', body: JSON.stringify(form) }, token);
+      else if (modal.type === 'items') await apiFetch('/api/inventory/items', { method:'POST', body: JSON.stringify(form) }, token);
+      else if (modal.type === 'edit-item') await apiFetch(`/api/inventory/items/${modal.data.id}`, { method:'PUT', body: JSON.stringify(form) }, token);
+      else if (modal.type === 'serials') await apiFetch('/api/inventory/serials', { method:'POST', body: JSON.stringify(form) }, token);
+      else if (modal.type === 'edit-serial') await apiFetch(`/api/inventory/serials/${modal.data.id}`, { method:'PUT', body: JSON.stringify(form) }, token);
+      setModal(null); setForm({}); await load();
+    } catch(e:any){ setError(e.message); }
   };
 
-  const filteredInventory = inventory.filter((item) => {
-    const matchesSearch =
-      item.serialNumber.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.modelName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (item.assignedClient && item.assignedClient.toLowerCase().includes(searchQuery.toLowerCase()));
+  const del = async (path: string) => {
+    if (!token || !confirm('Delete this record?')) return;
+    await apiFetch(path, { method:'DELETE' }, token);
+    await load();
+  };
 
-    const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
-    const matchesCategory = categoryFilter === 'ALL' || item.category === categoryFilter;
-    const matchesWarehouse = warehouseFilter === 'ALL' || item.warehouse === warehouseFilter;
-
-    return matchesSearch && matchesStatus && matchesCategory && matchesWarehouse;
-  });
-
-  const handleAddItem = (e: React.FormEvent) => {
-    e.preventDefault();
-    const created: InventoryItem = {
-      id: 'inv-' + Date.now(),
-      serialNumber: newItem.serialNumber,
-      category: newItem.category,
-      modelName: newItem.modelName,
-      warehouse: newItem.warehouse,
-      status: 'IN_STOCK',
-      warrantyUntil: '2027-11-12',
-    };
-
-    setInventory([created, ...inventory]);
-    setIsAddModalOpen(false);
-    showNotification(`Added ${created.modelName} (SN: ${created.serialNumber}) to inventory!`);
+  const openNew = (type: Tab) => {
+    if (type === 'warehouses') setForm({ name:'', location:'' });
+    if (type === 'items') setForm({ name:'', category:'ONT', brand:'', model:'', unit:'pcs', reorder_level:0 });
+    if (type === 'serials') setForm({ item_id: items[0]?.id || '', warehouse_id: warehouses[0]?.id || '', serial_number:'', mac_address:'', status:'IN_STOCK', assigned_subscriber_id:'', notes:'' });
+    setModal({ type });
+  };
+  const openEdit = (type: Tab, data: any) => {
+    setForm({ ...data });
+    setModal({ type: (type === 'warehouses' ? 'edit-warehouse' : type === 'items' ? 'edit-item' : 'edit-serial') as any, data });
   };
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-card border border-border shadow-sm">
+    <div className="space-y-5">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <h1 className="text-xl sm:text-2xl font-black text-foreground tracking-tight">
-              Hardware Inventory & Asset Serials
-            </h1>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-              {inventory.length} Tracked Units
-            </span>
-          </div>
-          <p className="text-xs text-muted-foreground font-medium">
-            Multi-Warehouse Tracking, ONT Serial Barcodes, Routers & Fiber Drums
-          </p>
+          <h1 className="text-2xl font-black tracking-tight">Inventory & Serial Tracking</h1>
+          <p className="text-sm text-muted-foreground">Warehouses, hardware items, and serial-number lifecycle (stock, assigned, faulty).</p>
         </div>
+        <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2 w-fit"><RefreshCw className="w-4 h-4"/>Refresh</button>
+      </div>
+      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
 
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-primary text-primary-foreground hover:bg-primary-hover transition-all shadow-md shadow-primary/20"
-        >
-          <PackagePlus className="w-4 h-4" />
-          <span>Add Stock Batch</span>
-        </button>
+      <div className="flex gap-2 flex-wrap">
+        {([['warehouses','Warehouses',Warehouse],['items','Items',Package],['serials','Serial Numbers',Barcode]] as any[]).map(([k,label,Icon]) => (
+          <button key={k} onClick={()=>setTab(k)} className={`px-4 py-2 rounded-xl text-sm font-medium border inline-flex items-center gap-2 ${tab===k?'bg-primary text-primary-foreground border-primary':'bg-card border-border'}`}><Icon className="w-4 h-4"/>{label}</button>
+        ))}
+        <button onClick={()=>openNew(tab)} className="ml-auto px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add {tab==='warehouses'?'Warehouse':tab==='items'?'Item':'Serial'}</button>
       </div>
 
-      {actionAlert && (
-        <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold flex items-center justify-between animate-in fade-in">
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4" />
-            <span>{actionAlert}</span>
+      {tab === 'warehouses' && (
+        <CardTable loading={loading} headers={['Name','Location','In Stock Serials','Created','Actions']} rows={warehouses.map(w => [
+          <b key="n">{w.name}</b>, w.location||'-', String(w.in_stock_count ?? 0), new Date(w.created_at).toLocaleDateString(),
+          <Actions key="a" onEdit={()=>openEdit('warehouses',w)} onDelete={()=>del(`/api/inventory/warehouses/${w.id}`)} />
+        ])} empty="No warehouses." />
+      )}
+
+      {tab === 'items' && (
+        <CardTable loading={loading} headers={['Item','Category','Brand/Model','Stock (In/Assigned/Faulty)','Reorder','Actions']} rows={items.map(i => [
+          <div key="n"><div className="font-semibold">{i.name}</div><div className="text-xs text-muted-foreground">{i.unit}</div></div>,
+          i.category, `${i.brand||'-'} ${i.model||''}`.trim(), `${i.in_stock||0} / ${i.assigned||0} / ${i.faulty||0}`, String(i.reorder_level||0),
+          <Actions key="a" onEdit={()=>openEdit('items',i)} onDelete={()=>del(`/api/inventory/items/${i.id}`)} />
+        ])} empty="No inventory items." />
+      )}
+
+      {tab === 'serials' && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+            <input value={serialFilter.q} onChange={e=>setSerialFilter({...serialFilter,q:e.target.value})} placeholder="Search serial/MAC..." className="px-3 py-2 rounded-xl bg-card border border-border text-sm"/>
+            <select value={serialFilter.status} onChange={e=>setSerialFilter({...serialFilter,status:e.target.value})} className="px-3 py-2 rounded-xl bg-card border border-border text-sm">
+              <option value="">All statuses</option>{['IN_STOCK','ASSIGNED','FAULTY','RMA','RETIRED'].map(s=><option key={s} value={s}>{s}</option>)}
+            </select>
+            <select value={serialFilter.item_id} onChange={e=>setSerialFilter({...serialFilter,item_id:e.target.value})} className="px-3 py-2 rounded-xl bg-card border border-border text-sm">
+              <option value="">All items</option>{items.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
+            <select value={serialFilter.warehouse_id} onChange={e=>setSerialFilter({...serialFilter,warehouse_id:e.target.value})} className="px-3 py-2 rounded-xl bg-card border border-border text-sm">
+              <option value="">All warehouses</option>{warehouses.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
           </div>
-          <button onClick={() => setActionAlert(null)}>
-            <X className="w-4 h-4" />
-          </button>
+          <CardTable loading={loading} headers={['Serial / MAC','Item','Warehouse','Status','Assigned To','Actions']} rows={serials.map(s => [
+            <div key="n"><div className="font-mono text-xs font-semibold">{s.serial_number}</div><div className="text-xs text-muted-foreground">{s.mac_address||'-'}</div></div>,
+            <div key="i"><div>{s.item_name}</div><div className="text-xs text-muted-foreground">{s.item_category} {s.brand?`• ${s.brand}`:''}</div></div>,
+            s.warehouse_name||'-', <span key="st" className="text-[11px] px-2 py-1 rounded-full border border-border">{s.status}</span>,
+            s.subscriber_name ? `${s.subscriber_name} (${s.subscriber_code})` : '-',
+            <Actions key="a" onEdit={()=>openEdit('serials',s)} onDelete={()=>del(`/api/inventory/serials/${s.id}`)} />
+          ])} empty="No serials found." />
         </div>
       )}
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-4 rounded-2xl bg-card border border-border">
-          <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-            <span>ONTs in Stock</span>
-            <HardDrive className="w-4 h-4 text-primary" />
-          </div>
-          <div className="text-2xl font-black text-foreground">142 Units</div>
-          <span className="text-[11px] text-emerald-400 font-medium">92% Ready for Dispatch</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-card border border-border">
-          <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-            <span>Core Routers</span>
-            <Radio className="w-4 h-4 text-secondary" />
-          </div>
-          <div className="text-2xl font-black text-foreground">6 Units</div>
-          <span className="text-[11px] text-muted-foreground">CCR2004 & CHR Standby</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-card border border-border">
-          <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-            <span>Fiber Drop Cable</span>
-            <Boxes className="w-4 h-4 text-cyan-400" />
-          </div>
-          <div className="text-2xl font-black text-foreground">4,850 Meters</div>
-          <span className="text-[11px] text-muted-foreground">5 Drums in Central Hub</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-card border border-border">
-          <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-            <span>Defective / RMA</span>
-            <AlertTriangle className="w-4 h-4 text-rose-400" />
-          </div>
-          <div className="text-2xl font-black text-rose-400">1 Unit</div>
-          <span className="text-[11px] text-rose-400 font-medium">Ready for Supplier Claim</span>
-        </div>
-      </div>
-
-      {/* Search & Filter Bar */}
-      <div className="p-4 rounded-2xl bg-card border border-border shadow-sm space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <div className="relative md:col-span-2">
-            <Search className="w-4 h-4 text-muted-foreground absolute left-3.5 top-3" />
-            <input
-              type="text"
-              placeholder="Search serial number, model, or assigned customer..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground placeholder:text-muted-foreground outline-none focus:border-primary"
-            />
-          </div>
-
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            className="px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-          >
-            <option value="ALL">All Categories</option>
-            <option value="ONT">ONTs & ONUs</option>
-            <option value="ROUTER">Core Routers</option>
-            <option value="CABLE">Fiber Cables</option>
-          </select>
-
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-          >
-            <option value="ALL">All Statuses</option>
-            <option value="IN_STOCK">In Stock</option>
-            <option value="ASSIGNED_CLIENT">Assigned to Client</option>
-            <option value="DEFECTIVE_RMA">Defective RMA</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Inventory Data Table */}
-      <div className="rounded-2xl bg-card border border-border shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] tracking-wider bg-muted/40">
-                <th className="py-3 px-4">Serial / Barcode</th>
-                <th className="py-3 px-4">Category & Model</th>
-                <th className="py-3 px-4">Warehouse Location</th>
-                <th className="py-3 px-4">Assigned To</th>
-                <th className="py-3 px-4">Warranty</th>
-                <th className="py-3 px-4">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/60">
-              {filteredInventory.map((item) => (
-                <tr key={item.id} className="hover:bg-muted/40 transition-colors">
-                  <td className="py-3 px-4 font-mono font-bold text-primary flex items-center gap-1.5">
-                    <QrCode className="w-3.5 h-3.5 text-muted-foreground" />
-                    <span>{item.serialNumber}</span>
-                  </td>
-
-                  <td className="py-3 px-4">
-                    <div className="font-bold text-foreground">{item.modelName}</div>
-                    <div className="text-[10px] font-mono text-muted-foreground">{item.category}</div>
-                  </td>
-
-                  <td className="py-3 px-4 text-foreground">
-                    {item.warehouse}
-                  </td>
-
-                  <td className="py-3 px-4">
-                    {item.assignedClient ? (
-                      <span className="font-semibold text-foreground">{item.assignedClient}</span>
-                    ) : item.assignedTechnician ? (
-                      <span className="font-medium text-indigo-400">{item.assignedTechnician}</span>
-                    ) : (
-                      <span className="text-muted-foreground">Unassigned (Free Stock)</span>
-                    )}
-                  </td>
-
-                  <td className="py-3 px-4 font-mono text-[11px] text-muted-foreground">
-                    {item.warrantyUntil}
-                  </td>
-
-                  <td className="py-3 px-4">
-                    <span
-                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                        item.status === 'IN_STOCK'
-                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                          : item.status === 'ASSIGNED_CLIENT'
-                          ? 'bg-primary/10 text-primary border border-primary/20'
-                          : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                      }`}
-                    >
-                      {item.status === 'IN_STOCK' && <CheckCircle2 className="w-3 h-3" />}
-                      {item.status.replace('_', ' ')}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Add Stock Modal */}
-      {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
-          <div className="w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <div className="flex items-center gap-2">
-                <PackagePlus className="w-4 h-4 text-primary" />
-                <h3 className="text-sm font-bold text-foreground">Add Hardware Item</h3>
-              </div>
-              <button
-                onClick={() => setIsAddModalOpen(false)}
-                className="p-1 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
+      {modal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto">
+          <div className="w-full max-w-xl bg-card border border-border rounded-2xl shadow-2xl my-8">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <h2 className="font-bold capitalize">{modal.type.replace('-', ' ')}</h2>
+              <button onClick={()=>setModal(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button>
             </div>
-
-            <form onSubmit={handleAddItem} className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-1">
-                  Serial Number (Barcode) *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={newItem.serialNumber}
-                  onChange={(e) => setNewItem({ ...newItem, serialNumber: e.target.value })}
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground font-mono font-bold outline-none focus:border-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-1">Category</label>
-                <select
-                  value={newItem.category}
-                  onChange={(e) => setNewItem({ ...newItem, category: e.target.value as any })}
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                >
-                  <option value="ONT">ONT / ONU</option>
-                  <option value="ROUTER">Core Router</option>
-                  <option value="CABLE">Fiber Cable</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-1">Model Name *</label>
-                <input
-                  type="text"
-                  required
-                  value={newItem.modelName}
-                  onChange={(e) => setNewItem({ ...newItem, modelName: e.target.value })}
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-1">Storage Warehouse</label>
-                <select
-                  value={newItem.warehouse}
-                  onChange={(e) => setNewItem({ ...newItem, warehouse: e.target.value })}
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                >
-                  <option value="Central Warehouse (Mirpur)">Central Warehouse (Mirpur)</option>
-                  <option value="Dhanmondi Branch">Dhanmondi Branch</option>
-                  <option value="Mobile Van #1 (Field Team)">Mobile Van #1 (Field Team)</option>
-                </select>
-              </div>
-
-              <div className="pt-3 border-t border-border flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-muted hover:bg-muted/80 text-foreground"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 text-xs font-bold rounded-xl bg-primary text-primary-foreground hover:bg-primary-hover shadow-sm"
-                >
-                  Save Item
-                </button>
-              </div>
-            </form>
+            <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(modal.type === 'warehouses' || modal.type === 'edit-warehouse') && (<>
+                <Field label="Name"><input className="inp" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})}/></Field>
+                <Field label="Location"><input className="inp" value={form.location||''} onChange={e=>setForm({...form,location:e.target.value})}/></Field>
+              </>)}
+              {(modal.type === 'items' || modal.type === 'edit-item') && (<>
+                <Field label="Name"><input className="inp" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})}/></Field>
+                <Field label="Category"><select className="inp" value={form.category||'ONT'} onChange={e=>setForm({...form,category:e.target.value})}>{['ONT','Router','Fiber','Cable','SFP','OLT','Accessory','Other'].map(c=><option key={c}>{c}</option>)}</select></Field>
+                <Field label="Brand"><input className="inp" value={form.brand||''} onChange={e=>setForm({...form,brand:e.target.value})}/></Field>
+                <Field label="Model"><input className="inp" value={form.model||''} onChange={e=>setForm({...form,model:e.target.value})}/></Field>
+                <Field label="Unit"><input className="inp" value={form.unit||'pcs'} onChange={e=>setForm({...form,unit:e.target.value})}/></Field>
+                <Field label="Reorder Level"><input className="inp" type="number" value={form.reorder_level||0} onChange={e=>setForm({...form,reorder_level:Number(e.target.value)})}/></Field>
+              </>)}
+              {(modal.type === 'serials' || modal.type === 'edit-serial') && (<>
+                <Field label="Item"><select className="inp" value={form.item_id||''} onChange={e=>setForm({...form,item_id:e.target.value})}><option value="">Select</option>{items.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select></Field>
+                <Field label="Warehouse"><select className="inp" value={form.warehouse_id||''} onChange={e=>setForm({...form,warehouse_id:e.target.value})}><option value="">None</option>{warehouses.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></Field>
+                <Field label="Serial Number"><input className="inp" value={form.serial_number||''} onChange={e=>setForm({...form,serial_number:e.target.value})}/></Field>
+                <Field label="MAC Address"><input className="inp" value={form.mac_address||''} onChange={e=>setForm({...form,mac_address:e.target.value})}/></Field>
+                <Field label="Status"><select className="inp" value={form.status||'IN_STOCK'} onChange={e=>setForm({...form,status:e.target.value})}>{['IN_STOCK','ASSIGNED','FAULTY','RMA','RETIRED'].map(s=><option key={s}>{s}</option>)}</select></Field>
+                <Field label="Assigned Subscriber"><select className="inp" value={form.assigned_subscriber_id||''} onChange={e=>setForm({...form,assigned_subscriber_id:e.target.value||null})}><option value="">None</option>{subscribers.map(s=><option key={s.id} value={s.id}>{s.full_name} ({s.client_code})</option>)}</select></Field>
+                <div className="md:col-span-2"><Field label="Notes"><input className="inp" value={form.notes||''} onChange={e=>setForm({...form,notes:e.target.value})}/></Field></div>
+              </>)}
+            </div>
+            <div className="px-5 py-4 border-t border-border flex justify-end gap-2">
+              <button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button>
+              <button onClick={save} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">Save</button>
+            </div>
           </div>
         </div>
       )}
+
+      <style jsx>{`
+        .inp { width: 100%; padding: 0.5rem 0.75rem; border-radius: 0.75rem; background: var(--card); color: var(--foreground); border: 1px solid var(--border); font-size: 0.875rem; }
+      `}</style>
     </div>
+  );
+}
+
+function Field({label, children}: any) { return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>{children}</label>; }
+function Actions({onEdit, onDelete}: any) { return <div className="flex justify-end gap-1"><button onClick={onEdit} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button><button onClick={onDelete} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400"><Trash2 className="w-4 h-4"/></button></div>; }
+function CardTable({headers, rows, loading, empty}: any) {
+  return (
+    <div className="rounded-2xl border border-border bg-card overflow-hidden"><div className="overflow-auto"><table className="w-full text-sm">
+      <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr>{headers.map((h:string,i:number)=><th key={i} className={`px-4 py-3 ${i===headers.length-1?'text-right':'text-left'}`}>{h}</th>)}</tr></thead>
+      <tbody>
+        {loading ? <tr><td colSpan={headers.length} className="px-4 py-8 text-center text-muted-foreground">Loading...</td></tr> :
+         rows.length===0 ? <tr><td colSpan={headers.length} className="px-4 py-8 text-center text-muted-foreground">{empty}</td></tr> :
+         rows.map((r:any,i:number)=><tr key={i} className="border-t border-border/70 hover:bg-muted/20">{r.map((c:any,j:number)=><td key={j} className={`px-4 py-3 ${j===r.length-1?'text-right':''}`}>{c}</td>)}</tr>)}
+      </tbody>
+    </table></div></div>
   );
 }

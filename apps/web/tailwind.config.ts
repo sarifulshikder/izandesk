@@ -3,9 +3,7 @@ import type { Config } from 'tailwindcss';
 const config: Config = {
   darkMode: 'class',
   content: [
-    './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/components/**/*.{js,ts,jsx,tsx,mdx}',
-    './src/app/**/*.{js,ts,jsx,tsx,mdx}',
+    './src/**/*.{js,ts,jsx,tsx,mdx}',
   ],
   theme: {
     extend: {
@@ -18,24 +16,24 @@ const config: Config = {
         },
         border: 'var(--border)',
         primary: {
-          DEFAULT: '#06B6D4', // Electric Cyan
+          DEFAULT: '#06B6D4',
           foreground: '#0B0F17',
           hover: '#0891B2',
         },
         secondary: {
-          DEFAULT: '#6366F1', // Vivid Indigo
+          DEFAULT: '#6366F1',
           foreground: '#FFFFFF',
         },
         accent: {
-          DEFAULT: '#10B981', // Emerald Active
+          DEFAULT: '#10B981',
           foreground: '#FFFFFF',
         },
         destructive: {
-          DEFAULT: '#EF4444', // Danger / Suspended
+          DEFAULT: '#EF4444',
           foreground: '#FFFFFF',
         },
         warning: {
-          DEFAULT: '#F59E0B', // Expiring / Grace
+          DEFAULT: '#F59E0B',
           foreground: '#0B0F17',
         },
         muted: {

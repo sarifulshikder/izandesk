@@ -1,0 +1,16 @@
+[Unit]
+Description=IzanDesk API (Plugin Kernel + Auth + APIs)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/server/izandesk
+Environment=NODE_ENV=production
+ExecStart=/home/server/.local/bin/pnpm --filter api start
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/izandesk-api.log
+StandardError=append:/var/log/izandesk-api.log
+
+[Install]
+WantedBy=multi-user.target

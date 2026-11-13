@@ -97,17 +97,44 @@ export interface Invoice {
   status: 'UNPAID' | 'PAID' | 'PARTIAL' | 'OVERDUE';
 }
 
+export type PluginType = 'PAYMENT_GATEWAY' | 'SMS_GATEWAY' | 'OLT_DRIVER' | 'CUSTOM_HOOK';
+export type PluginStatus = 'OK' | 'ERROR' | 'RELOAD_PENDING';
+
 export interface PluginMetadata {
   id: string;
   name: string;
   title: string;
   version: string;
-  type: 'PAYMENT_GATEWAY' | 'SMS_GATEWAY' | 'OLT_DRIVER' | 'CUSTOM_HOOK';
+  type: PluginType;
   isActive: boolean;
   lastReloadAt: string;
-  status: 'OK' | 'ERROR' | 'RELOAD_PENDING';
+  status: PluginStatus;
   author?: string;
   description?: string;
+  filePath?: string;
+  lastError?: string;
+}
+
+export interface PluginKernelEvent {
+  type: 'loaded' | 'reloaded' | 'error' | 'removed';
+  pluginId: string;
+  timestamp: string;
+  message?: string;
+  plugin?: PluginMetadata;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: UserSession;
+}
+
+export interface ApiError {
+  message: string;
 }
 
 export interface ExecutiveMetrics {

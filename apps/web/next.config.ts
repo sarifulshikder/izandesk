@@ -1,21 +1,19 @@
 import type { NextConfig } from 'next';
 
+const allowedDevOrigins = (process.env.ALLOWED_DEV_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const nextConfig: NextConfig = {
-  reactStrictMode: true,
-  transpilePackages: ['@izandesk/shared-types'],
-  experimental: {
-    // Allow external dev origins when accessing from reverse proxies or remote IPs
-  },
-  // Allow all dev origins
-  async headers() {
+  // Allow remote/NAT public access during development via env: ALLOWED_DEV_ORIGINS=host1,host2
+  ...(allowedDevOrigins.length ? { allowedDevOrigins } : {}),
+  async rewrites() {
+    const api = process.env.INTERNAL_API_URL || 'http://localhost:4000';
     return [
       {
-        source: '/:path*',
-        headers: [
-          { key: 'Access-Control-Allow-Origin', value: '*' },
-          { key: 'Access-Control-Allow-Methods', value: 'GET,POST,PUT,DELETE,OPTIONS' },
-          { key: 'Access-Control-Allow-Headers', value: 'X-Requested-With, Content-Type, Authorization' },
-        ],
+        source: '/api/:path*',
+        destination: `${api}/api/:path*`,
       },
     ];
   },

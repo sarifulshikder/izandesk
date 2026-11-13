@@ -21,6 +21,64 @@ services:
     volumes:
       - redisdata:/data
 
+  freeradius:
+    image: freeradius/freeradius-server:latest-3.2-alpine
+    container_name: izandesk-freeradius
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    volumes:
+      - ./radius/clients.conf:/etc/raddb/clients.conf:ro
+      - ./radius/mods-enabled/sql:/etc/raddb/mods-enabled/sql:ro
+      - ./radius/mods-config/sql/main/postgresql/queries.conf:/etc/raddb/mods-config/sql/main/postgresql/queries.conf:ro
+      - ./radius/sites-enabled/default:/etc/raddb/sites-enabled/default:ro
+    command: ["sh", "-c", "apk add --no-cache postgresql-libs >/dev/null 2>&1 || apk add --no-cache libpq >/dev/null 2>&1 || true; exec radiusd -f -l stdout"]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: izandesk-caddy
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      # Set your public domain for automatic HTTPS, e.g. izandesk.example.com
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-:80}
+      # Upstream web app (Next.js). Host network mode allows reaching localhost services.
+      CADDY_UPSTREAM: ${CADDY_UPSTREAM:-http://localhost:3000}
+      # Optional: ACME email for Let's Encrypt
+      CADDY_ACME_EMAIL: ${CADDY_ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - postgres
+      - redis
+
+  wg-hub:
+    build:
+      context: ./wg-hub
+    container_name: izandesk-wg-hub
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+    environment:
+      WG_INTERFACE: ${WG_INTERFACE:-wg0}
+    ports:
+      - "${WG_HUB_PORT:-51820}:51820/udp"
+    volumes:
+      - ./wg-hub/config:/etc/wireguard
+      - /lib/modules:/lib/modules:ro
+    # Plug-and-play WireGuard hub for NAT/CGNAT sites. Ensure UDP ${WG_HUB_PORT:-51820} is reachable on the host's public endpoint.
+
 volumes:
   pgdata:
   redisdata:
+  caddy_data:
+  caddy_config:

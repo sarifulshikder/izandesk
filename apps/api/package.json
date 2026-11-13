@@ -5,13 +5,28 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
+    "dev": "tsc -w --preserveWatchOutput",
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@izandesk/shared-types": "workspace:*"
+    "@izandesk/shared-types": "workspace:*",
+    "@types/ws": "^8.18.2",
+    "chokidar": "^4.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^18.0.10",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "node-routeros": "^1.6.9",
+    "ws": "^8.22.2"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.9",
+    "@types/multer": "^2.3.0",
     "@types/node": "^22.13.4",
+    "@types/pg": "^8.23.1",
+    "@types/uuid": "^11.0.0",
     "typescript": "^5.7.3"
   }
 }

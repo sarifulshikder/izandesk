@@ -1,0 +1,174 @@
+import { Router } from 'express';
+import { pool } from '../db';
+import { asyncHandler } from './helpers';
+import { oltTest, oltDiscoverOnus, oltRefreshTelemetry } from '../integrations/olt';
+
+const router: Router = Router();
+
+function opticalStatus(rx: number | null) {
+  if (rx == null) return 'UNKNOWN';
+  if (rx >= -8 || rx <= -30) return 'CRITICAL';
+  if (rx <= -27) return 'WARNING';
+  return 'NORMAL';
+}
+
+router.get('/olts', asyncHandler(async (_req, res) => {
+  const r = await pool.query(`SELECT o.*, p.name as wg_peer_name, p.tunnel_ip as wg_peer_tunnel_ip, p.site_name as wg_peer_site
+    FROM olts o LEFT JOIN wg_peers p ON p.id=o.wg_peer_id ORDER BY o.created_at DESC`);
+  res.json({ data: r.rows });
+}));
+
+router.post('/olts', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  if (!b.name || !b.host) return res.status(400).json({ message: 'name and host are required' });
+  const wg_peer_id = b.wg_peer_id || null;
+  const r = await pool.query(`INSERT INTO olts(name,vendor,model,host,ssh_port,snmp_port,username,password,snmp_community,site,wg_peer_id,is_enabled,status)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'UNKNOWN') RETURNING *`,
+    [b.name,b.vendor||'HUAWEI',b.model||null,b.host,b.ssh_port||23,b.snmp_port||161,b.username||'admin',b.password||null,b.snmp_community||'public',b.site||null,wg_peer_id,b.is_enabled!==false]);
+  const row = r.rows[0];
+  // auto-sync OLT host route into bound WG peer for tunnel-aware polling
+  if (row && row.wg_peer_id && row.host) {
+    try {
+      await pool.query(`UPDATE wg_peers SET olt_mgmt_cidrs = ARRAY(SELECT DISTINCT unnest(COALESCE(olt_mgmt_cidrs,'{}'::text[]) || ARRAY[$2::text])), updated_at=now() WHERE id=$1`,
+        [row.wg_peer_id, `${String(row.host).trim()}/32`]);
+      const { writeHubConfigFile, buildRouterOsScript } = await import('../integrations/wireguard');
+      const path = await import('path');
+      const WG_CONFIG_DIR = process.env.WG_CONFIG_DIR || path.resolve(__dirname, '../../../../docker/wg-hub/config');
+      const hub = (await pool.query('SELECT * FROM wg_hub_config ORDER BY created_at ASC LIMIT 1')).rows[0];
+      if (hub) {
+        const peers = (await pool.query('SELECT * FROM wg_peers')).rows;
+        await writeHubConfigFile(WG_CONFIG_DIR, hub, peers);
+      }
+    } catch {}
+  }
+  res.status(201).json(row);
+}));
+
+router.put('/olts/:id', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  const c = (await pool.query('SELECT * FROM olts WHERE id=$1',[req.params.id])).rows[0];
+  if (!c) return res.status(404).json({ message: 'OLT not found' });
+  const wg_peer_id = (b.wg_peer_id !== undefined) ? (b.wg_peer_id || null) : c.wg_peer_id;
+  const r = await pool.query(`UPDATE olts SET name=$1,vendor=$2,model=$3,host=$4,ssh_port=$5,snmp_port=$6,username=$7,password=COALESCE(NULLIF($8,''),password),snmp_community=$9,site=$10,wg_peer_id=$11,is_enabled=$12,updated_at=now() WHERE id=$13 RETURNING *`,
+    [b.name??c.name,b.vendor??c.vendor,b.model??c.model,b.host??c.host,b.ssh_port??c.ssh_port,b.snmp_port??c.snmp_port,b.username??c.username,b.password??'',b.snmp_community??c.snmp_community,b.site??c.site,wg_peer_id,b.is_enabled??c.is_enabled,req.params.id]);
+  const row = r.rows[0];
+  if (row && row.wg_peer_id && row.host) {
+    try {
+      await pool.query(`UPDATE wg_peers SET olt_mgmt_cidrs = ARRAY(SELECT DISTINCT unnest(COALESCE(olt_mgmt_cidrs,'{}'::text[]) || ARRAY[$2::text])), updated_at=now() WHERE id=$1`,
+        [row.wg_peer_id, `${String(row.host).trim()}/32`]);
+      const { writeHubConfigFile } = await import('../integrations/wireguard');
+      const path = await import('path');
+      const WG_CONFIG_DIR = process.env.WG_CONFIG_DIR || path.resolve(__dirname, '../../../../docker/wg-hub/config');
+      const hub = (await pool.query('SELECT * FROM wg_hub_config ORDER BY created_at ASC LIMIT 1')).rows[0];
+      if (hub) {
+        const peers = (await pool.query('SELECT * FROM wg_peers')).rows;
+        await writeHubConfigFile(WG_CONFIG_DIR, hub, peers);
+      }
+    } catch {}
+  }
+  res.json(row);
+}));
+
+router.delete('/olts/:id', asyncHandler(async (req, res) => {
+  await pool.query('DELETE FROM olts WHERE id=$1',[req.params.id]);
+  res.json({ ok: true });
+}));
+
+router.post('/olts/:id/test', asyncHandler(async (req, res) => {
+  const olt = (await pool.query('SELECT * FROM olts WHERE id=$1',[req.params.id])).rows[0];
+  if (!olt) return res.status(404).json({ message: 'OLT not found' });
+  const result = await oltTest(olt);
+  if (result.ok) {
+    const r = await pool.query('UPDATE olts SET status=\'ONLINE\', last_seen_at=now(), updated_at=now(), model=COALESCE($2,model) WHERE id=$1 RETURNING *',[req.params.id, result.sysName || null]);
+    return res.json({ ok: true, mode: result.mode, message: `OLT reachable via SNMP${result.sysName ? ` (${result.sysName})` : ''}.`, sysDescr: result.sysDescr, sysName: result.sysName, uptime: result.uptime, olt: r.rows[0] });
+  }
+  const r = await pool.query('UPDATE olts SET status=\'OFFLINE\', updated_at=now() WHERE id=$1 RETURNING *',[req.params.id]);
+  return res.json({ ok: false, mode: result.mode, message: `SNMP test failed/unavailable: ${result.error}. Configure SNMP access and ensure SNMP tools are available for real polling.`, olt: r.rows[0] });
+}));
+
+// ONUs list
+router.get('/onus', asyncHandler(async (req, res) => {
+  const { olt_id, status, q } = req.query as any;
+  const where: string[] = []; const params: any[] = [];
+  if (olt_id) { params.push(olt_id); where.push(`o.olt_id=$${params.length}`); }
+  if (status) { params.push(status); where.push(`o.status=$${params.length}`); }
+  if (q) { params.push(`%${String(q).toLowerCase()}%`); where.push(`(lower(COALESCE(o.serial_number,'')) LIKE $${params.length} OR lower(COALESCE(o.name,'')) LIKE $${params.length} OR lower(COALESCE(o.pon_port,'')) LIKE $${params.length})`); }
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const r = await pool.query(`SELECT o.*, ol.name as olt_name, ol.vendor as olt_vendor, s.full_name as subscriber_name, s.client_code as subscriber_code
+    FROM onus o JOIN olts ol ON ol.id=o.olt_id LEFT JOIN subscribers s ON s.id=o.subscriber_id ${whereSql} ORDER BY o.updated_at DESC`);
+  const rows = r.rows.map((x:any)=>({ ...x, optical_status: opticalStatus(x.rx_power_dbm != null ? Number(x.rx_power_dbm) : null) }));
+  res.json({ data: rows });
+}));
+
+// Discover unconfigured ONUs (SNMP-capable adapter with fallback)
+router.post('/olts/:id/discover', asyncHandler(async (req, res) => {
+  const olt = (await pool.query('SELECT * FROM olts WHERE id=$1',[req.params.id])).rows[0];
+  if (!olt) return res.status(404).json({ message: 'OLT not found' });
+  const result = await oltDiscoverOnus(olt);
+  const discovered: any[] = [];
+  for (const n of (result.onus || [])) {
+    const rx = n.rx_power_dbm != null ? Number(n.rx_power_dbm) : null;
+    const tx = n.tx_power_dbm != null ? Number(n.tx_power_dbm) : null;
+    const mac = n.mac_address ? String(n.mac_address).toLowerCase() : null;
+    const dist = n.distance_m != null ? Math.round(Number(n.distance_m)) : null;
+    const lastDown = n.last_down_cause ? String(n.last_down_cause) : null;
+    const status = ['ONLINE','OFFLINE','DISCOVERED','AUTHORIZED','LOS','DYING_GASP'].includes(String(n.status||'').toUpperCase()) ? String(n.status).toUpperCase() : 'DISCOVERED';
+    const r = await pool.query(`INSERT INTO onus(olt_id,pon_port,onu_id,serial_number,name,status,rx_power_dbm,tx_power_dbm,mac_address,distance_m,last_down_cause,last_seen_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
+      ON CONFLICT (olt_id, pon_port, serial_number) DO UPDATE SET
+        name=COALESCE(NULLIF($5,''), onus.name),
+        onu_id=COALESCE($3, onus.onu_id),
+        rx_power_dbm=COALESCE($7,onus.rx_power_dbm),
+        tx_power_dbm=COALESCE($8,onus.tx_power_dbm),
+        mac_address=COALESCE($9,onus.mac_address),
+        distance_m=COALESCE($10,onus.distance_m),
+        last_down_cause=COALESCE($11,onus.last_down_cause),
+        last_seen_at=now(),
+        status=CASE WHEN onus.status='AUTHORIZED' THEN onus.status ELSE $6 END,
+        updated_at=now()
+      RETURNING *`,
+      [olt.id, n.pon_port || '0/1/1', n.onu_id || null, n.serial_number, n.name || `ONU-${n.serial_number}`, status, rx, tx, mac, dist, lastDown]);
+    discovered.push({ ...r.rows[0], optical_status: opticalStatus(r.rows[0].rx_power_dbm != null ? Number(r.rows[0].rx_power_dbm) : null) });
+  }
+  if (result.ok) await pool.query('UPDATE olts SET status=\'ONLINE\', last_seen_at=now(), updated_at=now() WHERE id=$1',[olt.id]);
+  res.json({ ok: !!result.ok, mode: result.mode, discovered: discovered.length, onus: discovered, note: result.note || result.error || (result.mode === 'snmp' ? 'Discovered via SNMP (best-effort OID mapping).' : 'SNMP discovery unavailable; simulated ONUs generated. Provide SNMP access/tools and vendor OID mapping for real discovery.') });
+}));
+
+// Authorize ONU (1-click)
+router.post('/onus/:id/authorize', asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  const onu = (await pool.query('SELECT * FROM onus WHERE id=$1',[req.params.id])).rows[0];
+  if (!onu) return res.status(404).json({ message: 'ONU not found' });
+  const subId = b.subscriber_id || onu.subscriber_id || null;
+  const name = b.name || onu.name || onu.serial_number;
+  const r = await pool.query(`UPDATE onus SET status='AUTHORIZED', name=$1, subscriber_id=$2, authorized_at=COALESCE(authorized_at,now()), last_seen_at=now(), updated_at=now() WHERE id=$3 RETURNING *`,
+    [name, subId, req.params.id]);
+  res.json({ ok: true, message: 'ONU authorized successfully (simulated OLT provisioning).', onu: { ...r.rows[0], optical_status: opticalStatus(r.rows[0].rx_power_dbm != null ? Number(r.rows[0].rx_power_dbm) : null) } });
+}));
+
+// Refresh telemetry (SNMP-capable adapter with fallback)
+router.post('/onus/refresh-telemetry', asyncHandler(async (req, res) => {
+  const { olt_id } = req.body || {};
+  const q = olt_id ? 'SELECT o.*, ol.host, ol.snmp_community, ol.vendor, ol.model FROM onus o JOIN olts ol ON ol.id=o.olt_id WHERE o.olt_id=$1' : 'SELECT o.*, ol.host, ol.snmp_community, ol.vendor, ol.model FROM onus o JOIN olts ol ON ol.id=o.olt_id';
+  const params = olt_id ? [olt_id] : [];
+  const onus = (await pool.query(q, params)).rows;
+  let mode: string = 'simulated';
+  for (const o of onus) {
+    const resTel = await oltRefreshTelemetry({ host: o.host, snmp_community: o.snmp_community, vendor: o.vendor, model: o.model }, [o]);
+    mode = resTel.mode || mode;
+    const t: any = (resTel.onus || [])[0] || { rx_power_dbm: -(17 + Math.random()*12), tx_power_dbm: +(0.5 + Math.random()*3.5), status: o.status };
+    const rx = t.rx_power_dbm == null ? null : (+Number(t.rx_power_dbm).toFixed(2));
+    const tx = t.tx_power_dbm == null ? null : (+Number(t.tx_power_dbm).toFixed(2));
+    const mac = t.mac_address ? String(t.mac_address).toLowerCase() : null;
+    const dist = t.distance_m == null ? null : Math.round(Number(t.distance_m));
+    const lastDown = t.last_down_cause ? String(t.last_down_cause) : null;
+    const st = (o.status === 'AUTHORIZED') ? 'AUTHORIZED' : (t.status || o.status || 'DISCOVERED');
+    await pool.query('UPDATE onus SET rx_power_dbm=COALESCE($1,rx_power_dbm), tx_power_dbm=COALESCE($2,tx_power_dbm), mac_address=COALESCE($5,mac_address), distance_m=COALESCE($6,distance_m), last_down_cause=COALESCE($7,last_down_cause), status=$4, last_seen_at=now(), updated_at=now() WHERE id=$3', [rx, tx, o.id, st, mac, dist, lastDown]);
+  }
+  const r = await pool.query(`SELECT o.*, ol.name as olt_name, ol.vendor as olt_vendor, s.full_name as subscriber_name, s.client_code as subscriber_code
+    FROM onus o JOIN olts ol ON ol.id=o.olt_id LEFT JOIN subscribers s ON s.id=o.subscriber_id ${olt_id ? 'WHERE o.olt_id=$1':''} ORDER BY o.updated_at DESC`, params);
+  const rows = r.rows.map((x:any)=>({ ...x, optical_status: opticalStatus(x.rx_power_dbm != null ? Number(x.rx_power_dbm) : null) }));
+  res.json({ ok: true, mode, updated: rows.length, data: rows, note: mode === 'snmp' ? 'Telemetry refreshed via SNMP (best-effort status; optical power may require vendor-specific OIDs).' : 'Real per-ONU optical telemetry requires SNMP tools/access and vendor/model ONU index mapping; simulated fallback used where unavailable.' });
+}));
+
+export default router;

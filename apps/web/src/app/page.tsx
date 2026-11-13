@@ -12,29 +12,30 @@ import { Radio, ShieldCheck, Zap } from 'lucide-react';
 
 export default function DashboardPage() {
   const { user, activeRole } = useAuth();
+  if (!user || !activeRole) return null;
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       {/* Executive Welcome Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-5 rounded-2xl bg-gradient-to-r from-card via-card to-primary/5 border border-border/80 shadow-sm">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <h1 className="text-xl sm:text-2xl font-black text-foreground tracking-tight">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-card via-card to-primary/5 border border-border/80 shadow-sm overflow-hidden">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <h1 className="text-lg sm:text-2xl font-black text-foreground tracking-tight break-words">
               Network Operations Center (NOC)
             </h1>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1 shrink-0">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
               Real-Time
             </span>
           </div>
-          <p className="text-xs text-muted-foreground font-medium">
+          <p className="text-xs text-muted-foreground font-medium break-words">
             Logged in as <span className="text-foreground font-semibold">{user.name}</span> • Role:{' '}
             <span className="text-primary font-semibold">{activeRole.replace('_', ' ')}</span>
           </p>
         </div>
 
         {/* Quick Phase 1 Verification Chip */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <div className="px-3 py-1.5 rounded-xl bg-primary/10 border border-primary/20 text-primary text-xs font-semibold flex items-center gap-1.5">
             <Zap className="w-3.5 h-3.5" />
             <span>Phase 1 Verified: UI & Hot-Reload Kernel</span>

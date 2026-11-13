@@ -1,837 +1,501 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Subscriber, ConnectionType, SubscriberStatus } from '@izandesk/shared-types';
-import {
-  Users,
-  UserPlus,
-  Search,
-  Filter,
-  CheckCircle2,
-  AlertTriangle,
-  Clock,
-  Radio,
-  Power,
-  RefreshCw,
-  Eye,
-  X,
-  FileSpreadsheet,
-  Download,
-  ShieldAlert,
-  Zap,
-  MapPin,
-  HardDrive,
-  Check,
-} from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
+import { useAuth } from '@/lib/auth-context';
+import { apiFetch, getApiBaseUrl } from '@/lib/api';
+import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, LocateFixed, ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react';
 
-const initialSubscribers: Subscriber[] = [
-  {
-    id: 'sub-01',
-    clientCode: 'IZN-MIR-00142',
-    fullName: 'Rohit Sharma',
-    username: 'rohit5656',
-    phone: '+8801711223344',
-    email: 'rohit@gmail.com',
-    connectionType: 'PPPOE',
-    packageId: 'pkg-50m',
-    packageName: '50 Mbps Gaming Pro',
-    monthlyBill: 1200,
-    currentDue: 0,
-    expiryDate: '2026-11-30',
-    status: 'ACTIVE',
-    zone: 'Mirpur',
-    area: 'Block C, Section 10',
-    distributionBox: 'TJ-MIR-04 (Port 7)',
-    onuOpticalPower: -19.4,
-    createdAt: '2026-01-15',
-  },
-  {
-    id: 'sub-02',
-    clientCode: 'IZN-DHN-00109',
-    fullName: 'Rahim Chowdhury',
-    username: 'rahim01',
-    phone: '+8801819887766',
-    email: 'rahim@yahoo.com',
-    connectionType: 'PPPOE',
-    packageId: 'pkg-30m',
-    packageName: '30 Mbps Home Ultra',
-    monthlyBill: 800,
-    currentDue: 800,
-    expiryDate: '2026-11-10',
-    status: 'SUSPENDED',
-    zone: 'Dhanmondi',
-    area: 'Road 27',
-    distributionBox: 'TJ-DHN-02 (Port 3)',
-    onuOpticalPower: -21.8,
-    createdAt: '2026-03-20',
-  },
-  {
-    id: 'sub-03',
-    clientCode: 'IZN-GUL-00088',
-    fullName: 'Apex Footwear Ltd (HQ)',
-    username: 'apex_cir_100m',
-    phone: '+8801912345678',
-    email: 'it@apexfootwear.com',
-    connectionType: 'LEASED_LINE_CIR',
-    packageId: 'pkg-cir-100m',
-    packageName: '100 Mbps Dedicated CIR',
-    monthlyBill: 25000,
-    currentDue: 0,
-    expiryDate: '2026-12-31',
-    status: 'ACTIVE',
-    zone: 'Gulshan',
-    area: 'Gulshan Avenue',
-    distributionBox: 'ODB-GUL-01 (Direct Core)',
-    onuOpticalPower: -17.2,
-    createdAt: '2025-08-10',
-  },
-  {
-    id: 'sub-04',
-    clientCode: 'IZN-UTT-00195',
-    fullName: 'Tanvir Ahmed',
-    username: 'tanvir_wifi',
-    phone: '+8801552233445',
-    email: 'tanvir@outlook.com',
-    connectionType: 'HOTSPOT',
-    packageId: 'pkg-hotspot-7d',
-    packageName: '7-Day Unlimited Voucher',
-    monthlyBill: 350,
-    currentDue: 0,
-    expiryDate: '2026-11-18',
-    status: 'ACTIVE',
-    zone: 'Uttara',
-    area: 'Sector 4',
-    distributionBox: 'TJ-UTT-09 (Port 1)',
-    onuOpticalPower: -20.1,
-    createdAt: '2026-11-11',
-  },
-  {
-    id: 'sub-05',
-    clientCode: 'IZN-MIR-00214',
-    fullName: 'Fatema Tuz Zohra',
-    username: 'fatema_mirpur',
-    phone: '+8801612445566',
-    email: 'fatema@gmail.com',
-    connectionType: 'PPPOE',
-    packageId: 'pkg-40m',
-    packageName: '40 Mbps Streamer',
-    monthlyBill: 1000,
-    currentDue: 1000,
-    expiryDate: '2026-11-05',
-    status: 'EXPIRED',
-    zone: 'Mirpur',
-    area: 'Section 2, Block D',
-    distributionBox: 'TJ-MIR-02 (Port 11)',
-    onuOpticalPower: -26.9,
-    createdAt: '2026-04-12',
-  },
+const LocationPicker = dynamic(() => import('./location-picker'), { ssr: false, loading: () => <div className="h-[320px] sm:h-[380px] rounded-xl border border-border bg-muted/20 flex items-center justify-center text-sm text-muted-foreground">Loading map picker...</div> });
+
+const emptyForm = {
+  full_name: '', subscriber_type: 'HOME', connection_type: 'PPPOE', username: '', password: '', phone: '', email: '', nid_number: '',
+  package_name: '', bandwidth_mbps: '', monthly_bill: '', status: 'PENDING', area_id: '', zone_id: '', distribution_box_id: '',
+  address: '', latitude: '', longitude: '', ip_address: '', mac_address: '', installation_date: '',
+  district: '', thana: '', upazila: '', post_office: '', village: '', area_name: '', ward_no: '', road_no: '', house_no: '',
+  provisioning_mode: 'RADIUS', router_id: ''
+};
+
+const steps = [
+  { id: 1, title: 'Basic Info', desc: 'Identity & contact' },
+  { id: 2, title: 'Connection & Package', desc: 'Service profile' },
+  { id: 3, title: 'Location & Topology', desc: 'Map pin & address' },
+  { id: 4, title: 'Review & Save', desc: 'Confirm details' },
 ];
 
 export default function SubscribersPage() {
-  const [subscribers, setSubscribers] = useState<Subscriber[]>(initialSubscribers);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [zoneFilter, setZoneFilter] = useState<string>('ALL');
-  const [connectionFilter, setConnectionFilter] = useState<string>('ALL');
+  const { token } = useAuth();
+  const [rows, setRows] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [q, setQ] = useState('');
+  const [status, setStatus] = useState('');
+  const [type, setType] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<any | null>(null);
+  const [form, setForm] = useState<any>(emptyForm);
+  const [detail, setDetail] = useState<any | null>(null);
+  const [areas, setAreas] = useState<any[]>([]);
+  const [zones, setZones] = useState<any[]>([]);
+  const [boxes, setBoxes] = useState<any[]>([]);
+  const [routers, setRouters] = useState<any[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [kycUploading, setKycUploading] = useState(false);
+  const [step, setStep] = useState(1);
+  const [geoLoading, setGeoLoading] = useState(false);
+  const [geoMsg, setGeoMsg] = useState<string | null>(null);
 
-  // Modals state
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [selectedSubscriber, setSelectedSubscriber] = useState<Subscriber | null>(null);
-  const [actionAlert, setActionAlert] = useState<string | null>(null);
+  const loadRefs = useCallback(async () => {
+    if (!token) return;
+    const [a, z, b, r] = await Promise.all([
+      apiFetch<{data:any[]}>('/api/topology/areas', {}, token),
+      apiFetch<{data:any[]}>('/api/topology/zones', {}, token),
+      apiFetch<{data:any[]}>('/api/topology/boxes', {}, token),
+      apiFetch<{data:any[]}>('/api/network/routers', {}, token),
+    ]);
+    setAreas(a.data || []); setZones(z.data || []); setBoxes(b.data || []); setRouters(r.data || []);
+  }, [token]);
 
-  // New Subscriber Form State
-  const [activeTab, setActiveTab] = useState<'kyc' | 'connection' | 'billing' | 'hardware'>('kyc');
-  const [newClient, setNewClient] = useState({
-    fullName: '',
-    phone: '',
-    email: '',
-    nid: '',
-    zone: 'Mirpur',
-    area: 'Section 11',
-    connectionType: 'PPPOE' as ConnectionType,
-    username: '',
-    password: '',
-    packageName: '50 Mbps Gaming Pro',
-    monthlyBill: 1200,
-    router: 'MikroTik CCR2004 — Core BDIX',
-    distributionBox: 'TJ-MIR-04 (Port 8)',
-    ontSerial: 'HWTC-' + Math.random().toString(36).substring(2, 8).toUpperCase(),
-    generateInvoice: true,
-  });
+  const load = useCallback(async () => {
+    if (!token) return;
+    setLoading(true); setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      if (status) params.set('status', status);
+      if (type) params.set('type', type);
+      params.set('limit', '100');
+      const res = await apiFetch<{data:any[], total:number}>(`/api/subscribers?${params.toString()}`, {}, token);
+      setRows(res.data || []); setTotal(res.total || 0);
+    } catch (e: any) { setError(e.message); }
+    finally { setLoading(false); }
+  }, [token, q, status, type]);
 
-  const showNotification = (msg: string) => {
-    setActionAlert(msg);
-    setTimeout(() => setActionAlert(null), 3500);
+  useEffect(() => { loadRefs(); }, [loadRefs]);
+  useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
+
+  const filteredZones = useMemo(() => form.area_id ? zones.filter(z => z.area_id === form.area_id) : zones, [zones, form.area_id]);
+  const filteredBoxes = useMemo(() => form.zone_id ? boxes.filter(b => b.zone_id === form.zone_id) : boxes, [boxes, form.zone_id]);
+  const directRouters = useMemo(() => routers.filter((r: any) => ['API','REST'].includes(String(r.integration_mode || 'API').toUpperCase()) && r.is_enabled !== false), [routers]);
+  const radiusRouters = useMemo(() => routers.filter((r: any) => String(r.integration_mode || '').toUpperCase() === 'RADIUS' && r.is_enabled !== false), [routers]);
+
+  const openCreate = () => { setEditing(null); setForm({ ...emptyForm }); setStep(1); setGeoMsg(null); setShowForm(true); };
+  const openEdit = (row: any) => {
+    setEditing(row);
+    setForm({ ...emptyForm, ...row, latitude: row.latitude ?? '', longitude: row.longitude ?? '', bandwidth_mbps: row.bandwidth_mbps ?? '', monthly_bill: row.monthly_bill ?? '', router_id: row.router_id ?? '', provisioning_mode: row.provisioning_mode ?? 'RADIUS' });
+    setStep(1); setGeoMsg(null); setShowForm(true);
   };
 
-  // Filter logic
-  const filteredSubscribers = subscribers.filter((sub) => {
-    const matchesSearch =
-      sub.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sub.clientCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sub.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sub.phone.includes(searchQuery);
+  const validateStep = () => {
+    if (step === 1 && !String(form.full_name || '').trim()) { setError('Full name is required'); return false; }
+    if (step === 2 && form.provisioning_mode === 'ROUTER' && !form.router_id) { setError('Select a specific router (API/REST) or choose RADIUS mode.'); return false; }
+    setError(null); return true;
+  };
 
-    const matchesStatus = statusFilter === 'ALL' || sub.status === statusFilter;
-    const matchesZone = zoneFilter === 'ALL' || sub.zone === zoneFilter;
-    const matchesConnection = connectionFilter === 'ALL' || sub.connectionType === connectionFilter;
+  const nextStep = () => { if (validateStep()) setStep(s => Math.min(4, s + 1)); };
+  const prevStep = () => setStep(s => Math.max(1, s - 1));
 
-    return matchesSearch && matchesStatus && matchesZone && matchesConnection;
-  });
+  const save = async () => {
+    if (!token) return;
+    if (!String(form.full_name || '').trim()) { setError('Full name is required'); setStep(1); return; }
+    setError(null);
+    try {
+      const payload = { ...form };
+      ['bandwidth_mbps','monthly_bill','latitude','longitude'].forEach(k => { if (payload[k] === '') payload[k] = null; });
+      ['area_id','zone_id','distribution_box_id','installation_date','router_id'].forEach(k => { if (payload[k] === '') payload[k] = null; });
+      if (payload.provisioning_mode === 'RADIUS') payload.router_id = null;
+      if (editing) await apiFetch(`/api/subscribers/${editing.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
+      else await apiFetch('/api/subscribers', { method: 'POST', body: JSON.stringify(payload) }, token);
+      setShowForm(false); await load();
+    } catch (e: any) { setError(e.message); }
+  };
 
-  const handleAddSubscriberSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newClient.fullName || !newClient.username || !newClient.phone) {
-      alert('Please fill out all required fields: Name, Phone, and PPPoE Username.');
-      return;
-    }
+  const remove = async (id: string) => {
+    if (!token || !confirm('Delete this subscriber?')) return;
+    await apiFetch(`/api/subscribers/${id}`, { method: 'DELETE' }, token);
+    if (detail?.id === id) setDetail(null);
+    await load();
+  };
 
-    const newSub: Subscriber = {
-      id: 'sub-' + Date.now(),
-      clientCode: `IZN-${newClient.zone.substring(0, 3).toUpperCase()}-${Math.floor(10000 + Math.random() * 90000)}`,
-      fullName: newClient.fullName,
-      username: newClient.username,
-      phone: newClient.phone,
-      email: newClient.email,
-      connectionType: newClient.connectionType,
-      packageId: 'pkg-custom',
-      packageName: newClient.packageName,
-      monthlyBill: Number(newClient.monthlyBill),
-      currentDue: newClient.generateInvoice ? Number(newClient.monthlyBill) : 0,
-      expiryDate: '2026-12-15',
-      status: 'ACTIVE',
-      zone: newClient.zone,
-      area: newClient.area,
-      distributionBox: newClient.distributionBox,
-      onuOpticalPower: -19.2,
-      createdAt: new Date().toISOString().split('T')[0],
+  const openDetail = async (id: string) => {
+    if (!token) return;
+    const d = await apiFetch<any>(`/api/subscribers/${id}`, {}, token);
+    setDetail(d);
+  };
+
+  const uploadKyc = async (file: File, docType: string) => {
+    if (!token || !detail) return;
+    setKycUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('doc_type', docType);
+      const res = await fetch(`${getApiBaseUrl()}/api/subscribers/${detail.id}/kyc`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || 'Upload failed');
+      await openDetail(detail.id);
+    } catch (e: any) { setError(e.message); }
+    finally { setKycUploading(false); }
+  };
+
+  const applyReverseGeocode = (addr: any, display?: string) => {
+    const pick = (...keys: string[]) => {
+      for (const k of keys) {
+        const v = addr?.[k];
+        if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+      }
+      return '';
     };
+    const district = pick('state_district', 'district', 'county', 'state');
+    const upazila = pick('upazila', 'subdistrict', 'county', 'state_district', 'municipality', 'city_district', 'town');
+    const thana = pick('thana', 'police', 'suburb', 'town', 'city_district', 'municipality', 'city', upazila);
+    const postOffice = pick('post_office', 'postcode', 'postal_code');
+    const village = pick('village', 'hamlet', 'isolated_dwelling', 'croft', 'locality');
+    const areaName = pick('neighbourhood', 'quarter', 'residential', 'suburb', 'city_district', 'commercial', 'industrial', 'locality');
+    const road = pick('road', 'street', 'pedestrian', 'footway', 'path', 'highway', 'residential', 'living_street', 'service');
+    const house = pick('house_number', 'house_name', 'building', 'amenity');
+    const ward = pick('ward', 'city_block', 'quarter', 'neighbourhood', 'suburb', 'municipality');
+    const fullAddress = display || [house, road, ward ? `Ward ${ward}` : '', village || areaName, thana || upazila, postOffice, district].filter(Boolean).join(', ');
 
-    setSubscribers([newSub, ...subscribers]);
-    setIsAddModalOpen(false);
-    showNotification(`Subscriber ${newSub.fullName} (${newSub.clientCode}) created & provisioned to MikroTik!`);
-  };
-
-  const handleKick = (sub: Subscriber) => {
-    showNotification(`RFC 3576 PoD Packet Sent: ${sub.username} session disconnected.`);
-  };
-
-  const handleRestore = (id: string) => {
-    setSubscribers((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, status: 'ACTIVE', currentDue: 0 } : s))
-    );
-    showNotification(`Account restored! Dynamic CoA pushed to MikroTik router.`);
-  };
-
-  const handleAutoGenerateCredentials = () => {
-    const randomUser = 'user_' + Math.random().toString(36).substring(2, 7);
-    const randomPass = Math.random().toString(36).substring(2, 10);
-    setNewClient((prev) => ({
-      ...prev,
-      username: randomUser,
-      password: randomPass,
+    setForm((f: any) => ({
+      ...f,
+      district: district || f.district || '',
+      thana: thana || f.thana || '',
+      upazila: upazila || f.upazila || '',
+      post_office: postOffice || f.post_office || '',
+      village: village || f.village || '',
+      area_name: areaName || f.area_name || '',
+      ward_no: ward || f.ward_no || '',
+      road_no: road || f.road_no || '',
+      house_no: house || f.house_no || '',
+      address: fullAddress || f.address || '',
     }));
   };
 
+  const reverseGeocode = async (lat: number, lng: number) => {
+    try {
+      setGeoLoading(true); setGeoMsg('Resolving address from map location...');
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&addressdetails=1&zoom=18`;
+      const res = await fetch(url, { headers: { 'Accept': 'application/json', 'Accept-Language': 'en' } });
+      if (!res.ok) throw new Error('Reverse geocoding failed');
+      const data = await res.json();
+      applyReverseGeocode(data?.address || {}, data?.display_name);
+      setGeoMsg('Address fields auto-filled from pinned location (satellite/map). Review and edit if needed.');
+    } catch {
+      setGeoMsg('Could not auto-fill address (reverse geocoding unavailable or limited data for this point). You can fill fields manually.');
+    } finally { setGeoLoading(false); }
+  };
+
+  const onPickLocation = (lat: number, lng: number) => {
+    setForm((f: any) => ({ ...f, latitude: Number(lat.toFixed(6)), longitude: Number(lng.toFixed(6)) }));
+    reverseGeocode(lat, lng);
+  };
+
+  const pickCurrentLocation = () => {
+    if (!navigator.geolocation) { setGeoMsg('Geolocation is not supported by this browser.'); return; }
+    setGeoLoading(true); setGeoMsg('Detecting current location...');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => onPickLocation(pos.coords.latitude, pos.coords.longitude),
+      () => { setGeoLoading(false); setGeoMsg('Unable to access current location. Please allow permission or pin on map.'); },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-card border border-border shadow-sm">
+    <div className="space-y-5">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <h1 className="text-xl sm:text-2xl font-black text-foreground tracking-tight">
-              Subscriber Management
-            </h1>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-              {subscribers.length} Registered
-            </span>
-          </div>
-          <p className="text-xs text-muted-foreground font-medium">
-            PPPoE Secrets, Static IPs, Hotspot Accounts & Optical Telemetry
-          </p>
+          <h1 className="text-2xl font-black tracking-tight">Subscribers (BSS Core)</h1>
+          <p className="text-sm text-muted-foreground">Wizard onboarding, PPPoE profiles, map-based location, auto address fill, KYC & topology — {total} total</p>
         </div>
-
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => setIsAddModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-xl bg-primary text-primary-foreground hover:bg-primary-hover transition-all shadow-md shadow-primary/20"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>Add New Subscriber</span>
-          </button>
+        <div className="flex gap-2">
+          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
+          <button onClick={openCreate} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Subscriber</button>
         </div>
       </div>
 
-      {actionAlert && (
-        <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold flex items-center justify-between animate-in fade-in">
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4" />
-            <span>{actionAlert}</span>
-          </div>
-          <button onClick={() => setActionAlert(null)}>
-            <X className="w-4 h-4" />
-          </button>
+      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="md:col-span-2 relative">
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"/>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name, client code, username, phone, email..." className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50"/>
         </div>
-      )}
-
-      {/* Quick Filter & Search Bar */}
-      <div className="p-4 rounded-2xl bg-card border border-border shadow-sm space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          {/* Search Input */}
-          <div className="relative md:col-span-2">
-            <Search className="w-4 h-4 text-muted-foreground absolute left-3.5 top-3" />
-            <input
-              type="text"
-              placeholder="Search by Code, Name, PPPoE User, Phone..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground placeholder:text-muted-foreground outline-none focus:border-primary transition-colors"
-            />
-          </div>
-
-          {/* Status Filter */}
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-          >
-            <option value="ALL">All Statuses</option>
-            <option value="ACTIVE">Active</option>
-            <option value="SUSPENDED">Suspended (Due)</option>
-            <option value="EXPIRED">Expired</option>
-          </select>
-
-          {/* Zone Filter */}
-          <select
-            value={zoneFilter}
-            onChange={(e) => setZoneFilter(e.target.value)}
-            className="px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-          >
-            <option value="ALL">All Zones</option>
-            <option value="Mirpur">Mirpur</option>
-            <option value="Dhanmondi">Dhanmondi</option>
-            <option value="Gulshan">Gulshan</option>
-            <option value="Uttara">Uttara</option>
-          </select>
-        </div>
+        <select value={status} onChange={e=>setStatus(e.target.value)} className="px-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground">
+          <option value="">All Statuses</option>
+          {['PENDING','ACTIVE','SUSPENDED','EXPIRED','TERMINATED'].map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
+        <select value={type} onChange={e=>setType(e.target.value)} className="px-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground">
+          <option value="">All Types</option>
+          {['HOME','CORPORATE','HOTSPOT'].map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
       </div>
 
-      {/* Subscribers Table */}
-      <div className="rounded-2xl bg-card border border-border shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] tracking-wider bg-muted/40">
-                <th className="py-3 px-4">Client ID / Code</th>
-                <th className="py-3 px-4">Subscriber Name</th>
-                <th className="py-3 px-4">Contact Phone</th>
-                <th className="py-3 px-4">Package & Type</th>
-                <th className="py-3 px-4">Distribution Box</th>
-                <th className="py-3 px-4">Monthly Bill</th>
-                <th className="py-3 px-4">Optical Rx</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/60">
-              {filteredSubscribers.length === 0 ? (
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        <div className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden">
+          <div className="overflow-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40 text-muted-foreground text-xs uppercase">
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-muted-foreground text-xs">
-                    No subscribers found matching your search and filter criteria.
-                  </td>
+                  <th className="text-left px-4 py-3">Client</th>
+                  <th className="text-left px-4 py-3">Connection</th>
+                  <th className="text-left px-4 py-3">Package</th>
+                  <th className="text-left px-4 py-3">Location/Topology</th>
+                  <th className="text-left px-4 py-3">Status</th>
+                  <th className="text-right px-4 py-3">Actions</th>
                 </tr>
-              ) : (
-                filteredSubscribers.map((sub) => (
-                  <tr key={sub.id} className="hover:bg-muted/40 transition-colors group">
-                    <td className="py-3 px-4 font-mono font-bold text-primary">
-                      {sub.clientCode}
+              </thead>
+              <tbody>
+                {loading ? <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Loading subscribers...</td></tr> :
+                 rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No subscribers found. Add one with the wizard.</td></tr> :
+                 rows.map(r => (
+                  <tr key={r.id} className="border-t border-border/70 hover:bg-muted/30 cursor-pointer" onClick={()=>openDetail(r.id)}>
+                    <td className="px-4 py-3">
+                      <div className="font-semibold text-foreground">{r.full_name}</div>
+                      <div className="text-xs text-primary font-mono">{r.client_code}</div>
+                      <div className="text-xs text-muted-foreground">{r.phone || r.email || '-'}</div>
                     </td>
-
-                    <td className="py-3 px-4">
-                      <div className="font-bold text-foreground">{sub.fullName}</div>
-                      <div className="text-[11px] font-mono text-muted-foreground">{sub.username}</div>
+                    <td className="px-4 py-3">
+                      <div className="text-xs font-medium">{r.connection_type}</div>
+                      <div className="text-xs text-muted-foreground">{r.username ? `PPPoE: ${r.username}` : (r.subscriber_type || 'HOME')}</div>
+                      <div className="text-[10px] mt-0.5">{r.provisioning_mode === 'ROUTER' ? <span className="text-cyan-400">Router: {r.router_name || 'selected'}</span> : <span className="text-violet-400">RADIUS pool</span>}</div>
                     </td>
-
-                    <td className="py-3 px-4 font-mono text-foreground">
-                      {sub.phone}
+                    <td className="px-4 py-3">
+                      <div className="text-xs">{r.package_name || '-'}</div>
+                      <div className="text-xs text-muted-foreground">{r.bandwidth_mbps ? `${r.bandwidth_mbps} Mbps` : ''} {r.monthly_bill ? `• ৳${r.monthly_bill}` : ''}</div>
                     </td>
-
-                    <td className="py-3 px-4">
-                      <div className="font-semibold text-foreground">{sub.packageName}</div>
-                      <div className="text-[10px] text-muted-foreground uppercase font-mono">{sub.connectionType}</div>
+                    <td className="px-4 py-3">
+                      <div className="text-xs">{[r.area_name, r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || `${r.area_name_db || r.area_name || '-'}`}</div>
+                      <div className="text-xs text-muted-foreground">{r.distribution_box_name || r.distribution_box_code || '-'} {r.latitude ? '• 📍' : ''}</div>
                     </td>
-
-                    <td className="py-3 px-4">
-                      <div className="text-foreground">{sub.zone}</div>
-                      <div className="text-[10px] text-muted-foreground">{sub.distributionBox || 'Direct'}</div>
-                    </td>
-
-                    <td className="py-3 px-4">
-                      <div className="font-bold text-foreground">BDT {sub.monthlyBill.toLocaleString()}</div>
-                      <div className={`text-[10px] ${sub.currentDue > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'}`}>
-                        {sub.currentDue > 0 ? `Due: BDT ${sub.currentDue}` : 'Paid'}
-                      </div>
-                    </td>
-
-                    <td className="py-3 px-4 font-mono text-[11px]">
-                      {sub.onuOpticalPower ? (
-                        <span className={sub.onuOpticalPower < -25 ? 'text-rose-400 font-bold' : 'text-emerald-400'}>
-                          {sub.onuOpticalPower} dBm
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">N/A</span>
-                      )}
-                    </td>
-
-                    <td className="py-3 px-4">
-                      <span
-                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                          sub.status === 'ACTIVE'
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                            : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                        }`}
-                      >
-                        {sub.status === 'ACTIVE' ? (
-                          <CheckCircle2 className="w-3 h-3" />
-                        ) : (
-                          <AlertTriangle className="w-3 h-3" />
-                        )}
-                        {sub.status}
-                      </span>
-                    </td>
-
-                    <td className="py-3 px-4 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          onClick={() => setSelectedSubscriber(sub)}
-                          className="p-1.5 rounded-lg bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
-                          title="View Details & Telemetry"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                        </button>
-                        {sub.status === 'ACTIVE' ? (
-                          <button
-                            onClick={() => handleKick(sub)}
-                            className="p-1.5 rounded-lg bg-muted text-muted-foreground hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
-                            title="Disconnect Session (PoD)"
-                          >
-                            <Power className="w-3.5 h-3.5" />
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleRestore(sub.id)}
-                            className="px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 text-[10px] font-bold transition-colors"
-                          >
-                            Restore
-                          </button>
-                        )}
-                      </div>
+                    <td className="px-4 py-3"><span className="text-[11px] px-2 py-1 rounded-full border border-border bg-muted/40">{r.status}</span></td>
+                    <td className="px-4 py-3 text-right" onClick={e=>e.stopPropagation()}>
+                      <button onClick={()=>openEdit(r)} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button>
+                      <button onClick={()=>remove(r.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400"><Trash2 className="w-4 h-4"/></button>
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-border bg-card p-4 space-y-4">
+          {!detail ? (
+            <div className="text-sm text-muted-foreground py-10 text-center">Select a subscriber to view details, location, and KYC documents.</div>
+          ) : (
+            <>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="font-bold text-foreground flex items-center gap-2"><User className="w-4 h-4 text-primary"/>{detail.full_name}</div>
+                  <div className="text-xs font-mono text-primary">{detail.client_code}</div>
+                </div>
+                <button onClick={()=>setDetail(null)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4"/></button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <Info label="Type" value={detail.subscriber_type} /><Info label="Connection" value={detail.connection_type} />
+                <Info label="Provisioning" value={detail.provisioning_mode === 'ROUTER' ? `Router (API/REST): ${detail.router_name || detail.router_id || '-'}` : 'RADIUS (all RADIUS-enabled routers)'} />
+                <Info label="PPPoE User" value={detail.username || '-'} /><Info label="Status" value={detail.status} />
+                <Info label="Phone" value={detail.phone || '-'} /><Info label="Package" value={detail.package_name || '-'} />
+                <Info label="District" value={detail.district || '-'} /><Info label="Thana/Upazila" value={detail.thana || detail.upazila || '-'} />
+                <Info label="Post Office" value={detail.post_office || '-'} /><Info label="Village/Area" value={detail.village || detail.area_name || '-'} />
+                <Info label="Ward/Road" value={[detail.ward_no, detail.road_no].filter(Boolean).join(' / ') || '-'} /><Info label="Geo" value={detail.latitude ? `${Number(detail.latitude).toFixed(5)}, ${Number(detail.longitude).toFixed(5)}` : '-'} />
+                <div className="col-span-2"><Info label="Address" value={detail.address || '-'} /></div>
+              </div>
+              <div className="pt-2 border-t border-border">
+                <div className="font-semibold text-sm flex items-center gap-2 mb-2"><FileText className="w-4 h-4 text-primary"/>KYC Documents</div>
+                <div className="space-y-2">
+                  {(detail.kyc_documents || []).length === 0 ? <div className="text-xs text-muted-foreground">No KYC documents uploaded.</div> :
+                    detail.kyc_documents.map((d: any) => (
+                      <a key={d.id} href={`${getApiBaseUrl()}/uploads/kyc/${d.file_path}`} target="_blank" rel="noreferrer" className="flex items-center justify-between p-2 rounded-lg border border-border hover:bg-muted/40 text-xs">
+                        <span><span className="font-medium">{d.doc_type}</span> — {d.file_name}</span><span className="text-muted-foreground">View</span>
+                      </a>
+                    ))}
+                </div>
+                <div className="mt-3 p-3 rounded-xl bg-muted/30 border border-border space-y-2">
+                  <div className="text-xs font-semibold flex items-center gap-2"><Upload className="w-3.5 h-3.5"/>Upload KYC</div>
+                  <div className="flex gap-2">
+                    <select id="kyc-type" className="px-2 py-1.5 rounded-lg bg-card border border-border text-xs text-foreground" defaultValue="NID">{['NID','PASSPORT','CONTRACT','PHOTO','OTHER'].map(t=><option key={t} value={t}>{t}</option>)}</select>
+                    <input type="file" className="text-xs flex-1" onChange={e=>{ const f=e.target.files?.[0]; const t=(document.getElementById('kyc-type') as HTMLSelectElement)?.value || 'OTHER'; if(f){ uploadKyc(f,t); e.currentTarget.value=''; } }} disabled={kycUploading} />
+                  </div>
+                  {kycUploading && <div className="text-xs text-muted-foreground">Uploading...</div>}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Add New Subscriber Wizard Modal */}
-      {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
-          <div className="w-full max-w-3xl bg-card border border-border rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-muted/40">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-primary/10 text-primary">
-                  <UserPlus className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-foreground">Add New Subscriber</h3>
-                  <p className="text-[11px] text-muted-foreground">Provision PPPoE / Static IP Account</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setIsAddModalOpen(false)}
-                className="p-1.5 rounded-xl hover:bg-muted text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Step Navigation Tabs */}
-            <div className="flex items-center border-b border-border bg-muted/20 px-6">
-              {[
-                { id: 'kyc', label: '1. KYC & Personal' },
-                { id: 'connection', label: '2. Connection & AAA' },
-                { id: 'billing', label: '3. Billing Setup' },
-                { id: 'hardware', label: '4. FTTH & ONT' },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id as any)}
-                  className={`py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
-                    activeTab === tab.id
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Modal Form Body */}
-            <form onSubmit={handleAddSubscriberSubmit} className="p-6 overflow-y-auto space-y-4 flex-1">
-              {activeTab === 'kyc' && (
-                <div className="space-y-4 animate-in fade-in">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        Full Customer Name *
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="e.g. Shakib Al Hasan"
-                        value={newClient.fullName}
-                        onChange={(e) => setNewClient({ ...newClient, fullName: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        Primary Mobile Phone *
-                      </label>
-                      <input
-                        type="tel"
-                        required
-                        placeholder="e.g. +8801700000000"
-                        value={newClient.phone}
-                        onChange={(e) => setNewClient({ ...newClient, phone: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        Email Address
-                      </label>
-                      <input
-                        type="email"
-                        placeholder="e.g. customer@gmail.com"
-                        value={newClient.email}
-                        onChange={(e) => setNewClient({ ...newClient, email: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        National ID / Passport Number
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. 19902692510000"
-                        value={newClient.nid}
-                        onChange={(e) => setNewClient({ ...newClient, nid: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">Zone</label>
-                      <select
-                        value={newClient.zone}
-                        onChange={(e) => setNewClient({ ...newClient, zone: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                      >
-                        <option value="Mirpur">Mirpur</option>
-                        <option value="Dhanmondi">Dhanmondi</option>
-                        <option value="Gulshan">Gulshan</option>
-                        <option value="Uttara">Uttara</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">Area / Street</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Road 4, House 12"
-                        value={newClient.area}
-                        onChange={(e) => setNewClient({ ...newClient, area: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'connection' && (
-                <div className="space-y-4 animate-in fade-in">
-                  <div className="flex items-center justify-between pb-2 border-b border-border">
-                    <span className="text-xs font-semibold text-foreground">AAA Credentials & Package</span>
-                    <button
-                      type="button"
-                      onClick={handleAutoGenerateCredentials}
-                      className="text-[11px] text-primary font-bold hover:underline flex items-center gap-1"
-                    >
-                      <RefreshCw className="w-3 h-3" /> Auto-Generate
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        Connection Protocol
-                      </label>
-                      <select
-                        value={newClient.connectionType}
-                        onChange={(e) => setNewClient({ ...newClient, connectionType: e.target.value as any })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                      >
-                        <option value="PPPOE">PPPoE (Recommended)</option>
-                        <option value="STATIC_IP">Static IP (IPoE)</option>
-                        <option value="HOTSPOT">Hotspot Voucher</option>
-                        <option value="LEASED_LINE_CIR">Dedicated CIR Leased Line</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        Assigned Core Router
-                      </label>
-                      <select
-                        value={newClient.router}
-                        onChange={(e) => setNewClient({ ...newClient, router: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                      >
-                        <option value="MikroTik CCR2004 — Core BDIX">MikroTik CCR2004 — Core BDIX</option>
-                        <option value="MikroTik CHR — Cloud Gateway">MikroTik CHR — Cloud Gateway</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        PPPoE Username *
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        placeholder="e.g. rohit5656"
-                        value={newClient.username}
-                        onChange={(e) => setNewClient({ ...newClient, username: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground font-mono outline-none focus:border-primary"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        PPPoE Password *
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Pass1234"
-                        value={newClient.password}
-                        onChange={(e) => setNewClient({ ...newClient, password: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground font-mono outline-none focus:border-primary"
-                      />
-                    </div>
-
-                    <div className="sm:col-span-2">
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        Bandwidth Speed Package
-                      </label>
-                      <select
-                        value={newClient.packageName}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          let price = 1000;
-                          if (val.includes('30')) price = 800;
-                          if (val.includes('50')) price = 1200;
-                          if (val.includes('100')) price = 25000;
-                          setNewClient({ ...newClient, packageName: val, monthlyBill: price });
-                        }}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                      >
-                        <option value="30 Mbps Home Ultra">30 Mbps Home Ultra — BDT 800/mo</option>
-                        <option value="50 Mbps Gaming Pro">50 Mbps Gaming Pro — BDT 1,200/mo</option>
-                        <option value="100 Mbps Dedicated CIR">100 Mbps Dedicated CIR — BDT 25,000/mo</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'billing' && (
-                <div className="space-y-4 animate-in fade-in">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        Monthly Bill Amount (BDT) *
-                      </label>
-                      <input
-                        type="number"
-                        required
-                        value={newClient.monthlyBill}
-                        onChange={(e) => setNewClient({ ...newClient, monthlyBill: Number(e.target.value) })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground font-bold outline-none focus:border-primary"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        Billing Model
-                      </label>
-                      <select className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary">
-                        <option value="PREPAID">Prepaid (Auto-suspend on due)</option>
-                        <option value="POSTPAID">Postpaid (Invoice on month end)</option>
-                      </select>
-                    </div>
-
-                    <div className="sm:col-span-2 p-3 rounded-xl bg-muted/40 border border-border flex items-center justify-between">
-                      <div>
-                        <div className="text-xs font-semibold text-foreground">Generate 1st Month Invoice Now</div>
-                        <div className="text-[11px] text-muted-foreground">Creates open invoice and sends payment link via SMS</div>
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={newClient.generateInvoice}
-                        onChange={(e) => setNewClient({ ...newClient, generateInvoice: e.target.checked })}
-                        className="w-4 h-4 rounded text-primary"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {activeTab === 'hardware' && (
-                <div className="space-y-4 animate-in fade-in">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        Distribution Box (TJ Box)
-                      </label>
-                      <select
-                        value={newClient.distributionBox}
-                        onChange={(e) => setNewClient({ ...newClient, distributionBox: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground outline-none focus:border-primary"
-                      >
-                        <option value="TJ-MIR-04 (Port 8)">TJ-MIR-04 (Mirpur Sec 10 — Port 8 Available)</option>
-                        <option value="TJ-DHN-02 (Port 4)">TJ-DHN-02 (Dhanmondi Rd 27 — Port 4 Available)</option>
-                        <option value="TJ-UTT-09 (Port 2)">TJ-UTT-09 (Uttara Sec 4 — Port 2 Available)</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-foreground mb-1">
-                        ONT / ONU Serial Number
-                      </label>
-                      <input
-                        type="text"
-                        value={newClient.ontSerial}
-                        onChange={(e) => setNewClient({ ...newClient, ontSerial: e.target.value })}
-                        className="w-full px-3 py-2 text-xs rounded-xl bg-muted/60 border border-border text-foreground font-mono outline-none focus:border-primary"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Modal Footer Controls */}
-              <div className="pt-4 border-t border-border flex items-center justify-between">
-                <button
-                  type="button"
-                  onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 text-xs font-semibold rounded-xl bg-muted hover:bg-muted/80 text-foreground"
-                >
-                  Cancel
-                </button>
-
-                <div className="flex items-center gap-2">
-                  {activeTab !== 'hardware' ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (activeTab === 'kyc') setActiveTab('connection');
-                        else if (activeTab === 'connection') setActiveTab('billing');
-                        else if (activeTab === 'billing') setActiveTab('hardware');
-                      }}
-                      className="px-4 py-2 text-xs font-bold rounded-xl bg-primary text-primary-foreground hover:bg-primary-hover"
-                    >
-                      Next Step
-                    </button>
-                  ) : (
-                    <button
-                      type="submit"
-                      className="px-5 py-2 text-xs font-bold rounded-xl bg-emerald-500 text-white hover:bg-emerald-600 shadow-md shadow-emerald-500/20"
-                    >
-                      Save & Provision Subscriber
-                    </button>
-                  )}
-                </div>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Subscriber Detail Drawer Modal */}
-      {selectedSubscriber && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
-          <div className="w-full max-w-xl bg-card border border-border rounded-2xl shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
+      {showForm && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-3 sm:p-4 overflow-auto">
+          <div className="w-full max-w-5xl bg-card border border-border rounded-2xl shadow-2xl my-4 sm:my-6">
+            <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-border">
               <div>
-                <h3 className="text-base font-bold text-foreground">{selectedSubscriber.fullName}</h3>
-                <span className="font-mono text-xs text-primary">{selectedSubscriber.clientCode}</span>
+                <h2 className="font-bold text-lg">{editing ? 'Edit Subscriber' : 'Add Subscriber'} — Wizard</h2>
+                <p className="text-xs text-muted-foreground">Step {step} of 4: {steps[step-1].title} — {steps[step-1].desc}</p>
               </div>
-              <button
-                onClick={() => setSelectedSubscriber(null)}
-                className="p-1 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <button onClick={()=>setShowForm(false)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="p-3 rounded-xl bg-muted/40 border border-border">
-                <span className="text-[10px] text-muted-foreground uppercase block font-semibold">PPPoE User</span>
-                <span className="font-mono font-bold text-foreground">{selectedSubscriber.username}</span>
-              </div>
-              <div className="p-3 rounded-xl bg-muted/40 border border-border">
-                <span className="text-[10px] text-muted-foreground uppercase block font-semibold">Optical Power</span>
-                <span className="font-mono font-bold text-emerald-400">{selectedSubscriber.onuOpticalPower} dBm (Normal)</span>
-              </div>
-              <div className="p-3 rounded-xl bg-muted/40 border border-border">
-                <span className="text-[10px] text-muted-foreground uppercase block font-semibold">Assigned Box</span>
-                <span className="font-semibold text-foreground">{selectedSubscriber.distributionBox}</span>
-              </div>
-              <div className="p-3 rounded-xl bg-muted/40 border border-border">
-                <span className="text-[10px] text-muted-foreground uppercase block font-semibold">Monthly Plan</span>
-                <span className="font-bold text-foreground">BDT {selectedSubscriber.monthlyBill}</span>
+            <div className="px-4 sm:px-5 pt-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {steps.map(s => (
+                  <button key={s.id} onClick={()=>{ if (s.id < step || validateStep()) setStep(s.id); }} className={`text-left p-2.5 rounded-xl border text-xs ${step===s.id?'border-primary bg-primary/10':'border-border bg-muted/20'} ${s.id < step ? 'opacity-100' : ''}`}>
+                    <div className="flex items-center gap-2 font-semibold text-foreground"><span className={`w-5 h-5 rounded-full inline-flex items-center justify-center text-[10px] ${step>=s.id?'bg-primary text-primary-foreground':'bg-muted text-muted-foreground'}`}>{step>s.id ? <CheckCircle2 className="w-3.5 h-3.5"/> : s.id}</span>{s.title}</div>
+                    <div className="text-muted-foreground mt-0.5 hidden sm:block">{s.desc}</div>
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                onClick={() => {
-                  handleKick(selectedSubscriber);
-                  setSelectedSubscriber(null);
-                }}
-                className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/20 hover:bg-rose-500/20"
-              >
-                PoD Session Kick
-              </button>
-              <button
-                onClick={() => setSelectedSubscriber(null)}
-                className="px-4 py-1.5 text-xs font-semibold rounded-xl bg-primary text-primary-foreground"
-              >
-                Close
-              </button>
+            <div className="p-4 sm:p-5">
+              {step === 1 && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <Input label="Full Name *" value={form.full_name} onChange={v=>setForm({...form, full_name:v})} />
+                  <Select label="Subscriber Type" value={form.subscriber_type} onChange={v=>setForm({...form, subscriber_type:v})} options={['HOME','CORPORATE','HOTSPOT']} />
+                  <Select label="Status" value={form.status} onChange={v=>setForm({...form, status:v})} options={['PENDING','ACTIVE','SUSPENDED','EXPIRED','TERMINATED']} />
+                  <Input label="Phone" value={form.phone||''} onChange={v=>setForm({...form, phone:v})} />
+                  <Input label="Email" value={form.email||''} onChange={v=>setForm({...form, email:v})} />
+                  <Input label="NID Number" value={form.nid_number||''} onChange={v=>setForm({...form, nid_number:v})} />
+                  <Input label="Installation Date" value={form.installation_date?String(form.installation_date).slice(0,10):''} onChange={v=>setForm({...form, installation_date:v})} type="date" />
+                </div>
+              )}
+
+              {step === 2 && (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-xl border border-border bg-muted/20 space-y-3">
+                    <div className="font-semibold text-sm">Network Provisioning (required)</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <Select label="Provision Via" value={form.provisioning_mode || 'RADIUS'} onChange={v=>setForm({...form, provisioning_mode:v, router_id: v==='RADIUS' ? '' : form.router_id})} options={[{v:'ROUTER',l:'Specific Router (API/REST) — direct per-router'}, {v:'RADIUS',l:'RADIUS (all RADIUS-enabled routers / NAS pool)'}]} />
+                      {form.provisioning_mode === 'ROUTER' ? (
+                        <Select label="Select Router (API/REST)" value={form.router_id||''} onChange={v=>setForm({...form, router_id:v})} options={[{v:'',l:'Select router by name...'}, ...directRouters.map((r:any)=>({v:r.id,l:`${r.name} (${String(r.integration_mode||'API').toUpperCase()} • ${r.host})`}))]} />
+                      ) : (
+                        <div className="text-xs text-muted-foreground p-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
+                          Subscriber will authenticate via centralized RADIUS across <b>all enabled RADIUS NAS routers</b> ({radiusRouters.length} available). Ensure RADIUS users are synced in <b>RADIUS & AAA</b>.
+                        </div>
+                      )}
+                    </div>
+                    {form.provisioning_mode === 'ROUTER' && !directRouters.length && <div className="text-xs text-amber-400">No API/REST routers available. Add one in Network & Routers or choose RADIUS mode.</div>}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <Select label="Connection Type" value={form.connection_type} onChange={v=>setForm({...form, connection_type:v})} options={['PPPOE','STATIC_IP','DHCP','HOTSPOT']} />
+                    <Input label="PPPoE Username" value={form.username||''} onChange={v=>setForm({...form, username:v})} />
+                    <Input label="PPPoE/Access Password" value={form.password||''} onChange={v=>setForm({...form, password:v})} type="password" placeholder={editing ? 'Leave blank to keep' : ''} />
+                    <Input label="Package Name" value={form.package_name||''} onChange={v=>setForm({...form, package_name:v})} />
+                    <Input label="Bandwidth (Mbps)" value={form.bandwidth_mbps??''} onChange={v=>setForm({...form, bandwidth_mbps:v})} />
+                    <Input label="Monthly Bill" value={form.monthly_bill??''} onChange={v=>setForm({...form, monthly_bill:v})} />
+                    <Input label="IP Address" value={form.ip_address||''} onChange={v=>setForm({...form, ip_address:v})} />
+                    <Input label="MAC Address" value={form.mac_address||''} onChange={v=>setForm({...form, mac_address:v})} />
+                  </div>
+                </div>
+              )}
+
+              {step === 3 && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="font-semibold text-sm flex items-center gap-2"><MapPin className="w-4 h-4 text-primary"/>Map Pin Picker</div>
+                        <button type="button" onClick={pickCurrentLocation} className="px-3 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold inline-flex items-center gap-1.5"><LocateFixed className="w-3.5 h-3.5"/>Pick My Current Location</button>
+                      </div>
+                      <LocationPicker lat={form.latitude === '' ? null : Number(form.latitude)} lng={form.longitude === '' ? null : Number(form.longitude)} onChange={onPickLocation} />
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="Latitude" value={form.latitude??''} onChange={v=>setForm({...form, latitude:v})} />
+                        <Input label="Longitude" value={form.longitude??''} onChange={v=>setForm({...form, longitude:v})} />
+                      </div>
+                      <div className="text-xs text-muted-foreground">Click on the map or drag the pin to set location. Address fields auto-fill via reverse geocoding (editable).</div>
+                      {geoMsg && <div className={`text-xs px-3 py-2 rounded-lg border ${geoLoading?'border-primary/30 bg-primary/10 text-primary':'border-border bg-muted/30 text-foreground/80'}`}>{geoMsg}</div>}
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="font-semibold text-sm">Auto-filled Address Details</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <Input label="District" value={form.district||''} onChange={v=>setForm({...form,district:v})} />
+                        <Input label="Thana" value={form.thana||''} onChange={v=>setForm({...form,thana:v})} />
+                        <Input label="Upazila" value={form.upazila||''} onChange={v=>setForm({...form,upazila:v})} />
+                        <Input label="Post Office" value={form.post_office||''} onChange={v=>setForm({...form,post_office:v})} />
+                        <Input label="Village" value={form.village||''} onChange={v=>setForm({...form,village:v})} />
+                        <Input label="Area/Neighborhood" value={form.area_name||''} onChange={v=>setForm({...form,area_name:v})} />
+                        <Input label="Ward No" value={form.ward_no||''} onChange={v=>setForm({...form,ward_no:v})} />
+                        <Input label="Road/Street No" value={form.road_no||''} onChange={v=>setForm({...form,road_no:v})} />
+                        <Input label="House No" value={form.house_no||''} onChange={v=>setForm({...form,house_no:v})} />
+                      </div>
+                      <Input label="Full Address" value={form.address||''} onChange={v=>setForm({...form,address:v})} />
+                      <div className="font-semibold text-sm pt-2">Network Topology Link</div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <Select label="Area (ISP)" value={form.area_id||''} onChange={v=>setForm({...form, area_id:v, zone_id:'', distribution_box_id:''})} options={[{v:'',l:'Select area'}, ...areas.map(a=>({v:a.id,l:a.name}))]} />
+                        <Select label="Zone" value={form.zone_id||''} onChange={v=>setForm({...form, zone_id:v, distribution_box_id:''})} options={[{v:'',l:'Select zone'}, ...filteredZones.map(z=>({v:z.id,l:z.name}))]} />
+                        <Select label="Distribution Box" value={form.distribution_box_id||''} onChange={v=>setForm({...form, distribution_box_id:v})} options={[{v:'',l:'Select box'}, ...filteredBoxes.map(b=>({v:b.id,l:`${b.name} (${b.code||b.box_type})`}))]} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {step === 4 && (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <ReviewCard title="Basic & Contact" items={[
+                      ['Name', form.full_name], ['Type', form.subscriber_type], ['Status', form.status], ['Phone', form.phone||'-'], ['Email', form.email||'-'], ['NID', form.nid_number||'-']
+                    ]} />
+                    <ReviewCard title="Connection & Package" items={[
+                      ['Provision Via', form.provisioning_mode === 'ROUTER' ? `Specific Router (API/REST)` : 'RADIUS (all RADIUS-enabled routers)'],
+                      ['Router', form.provisioning_mode === 'ROUTER' ? (routers.find((r:any)=>r.id===form.router_id)?.name || '-') : `RADIUS pool (${radiusRouters.length} NAS)`],
+                      ['Connection', form.connection_type], ['PPPoE Username', form.username||'-'], ['Package', form.package_name||'-'], ['Bandwidth', form.bandwidth_mbps ? `${form.bandwidth_mbps} Mbps` : '-'], ['Monthly Bill', form.monthly_bill || '-'], ['IP/MAC', `${form.ip_address||'-'} / ${form.mac_address||'-'}`]
+                    ]} />
+                    <ReviewCard title="Location & Address" items={[
+                      ['Latitude, Longitude', (form.latitude && form.longitude) ? `${form.latitude}, ${form.longitude}` : '-'], ['District', form.district||'-'], ['Thana/Upazila', form.thana || form.upazila || '-'], ['Post Office', form.post_office||'-'], ['Village/Area', form.village || form.area_name || '-'], ['Ward/Road/House', [form.ward_no, form.road_no, form.house_no].filter(Boolean).join(', ') || '-'], ['Full Address', form.address||'-']
+                    ]} />
+                    <ReviewCard title="Topology & Notes" items={[
+                      ['ISP Area', areas.find(a=>a.id===form.area_id)?.name || '-'], ['Zone', zones.find(z=>z.id===form.zone_id)?.name || '-'], ['Distribution Box', boxes.find(b=>b.id===form.distribution_box_id)?.name || '-'], ['Client Code', editing?.client_code || 'Auto-generated on save']
+                    ]} />
+                  </div>
+                  <div className="text-xs text-muted-foreground p-3 rounded-xl border border-border bg-muted/20">Review all details. Client code will be generated automatically for new subscribers. You can edit later and upload KYC documents from the subscriber details panel.</div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-4 sm:px-5 py-4 border-t border-border flex flex-col sm:flex-row justify-between gap-2">
+              <button onClick={()=>setShowForm(false)} className="px-4 py-2 rounded-xl border border-border">Cancel</button>
+              <div className="flex gap-2 justify-end">
+                <button onClick={prevStep} disabled={step===1} className="px-4 py-2 rounded-xl border border-border disabled:opacity-50 inline-flex items-center gap-1"><ChevronLeft className="w-4 h-4"/>Back</button>
+                {step < 4 ? (
+                  <button onClick={nextStep} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold inline-flex items-center gap-1">Next<ChevronRight className="w-4 h-4"/></button>
+                ) : (
+                  <button onClick={save} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">{editing ? 'Save Changes' : 'Create Subscriber'}</button>
+                )}
+              </div>
             </div>
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+function Info({ label, value }: { label: string; value: any }) {
+  return <div><div className="text-muted-foreground">{label}</div><div className="font-medium text-foreground break-words">{value}</div></div>;
+}
+function ReviewCard({ title, items }: { title: string; items: [string, any][] }) {
+  return <div className="p-4 rounded-xl border border-border bg-muted/20"><div className="font-semibold mb-2 text-sm">{title}</div><div className="space-y-1.5 text-xs">{items.map(([k,v]) => <div key={k} className="flex justify-between gap-3"><span className="text-muted-foreground">{k}</span><span className="text-foreground font-medium text-right break-words">{String(v ?? '-')}</span></div>)}</div></div>;
+}
+function Input({ label, value, onChange, type='text', placeholder='' }: { label: string; value: any; onChange: (v: string) => void; type?: string; placeholder?: string }) {
+  return (
+    <label className="block">
+      <div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>
+      <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50" />
+    </label>
+  );
+}
+function Select({ label, value, onChange, options }: { label: string; value: any; onChange: (v: string) => void; options: any[] }) {
+  const opts = options.map((o: any) => typeof o === 'string' ? {v:o,l:o} : o);
+  return (
+    <label className="block">
+      <div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>
+      <select value={value} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50">
+        {opts.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}
+      </select>
+    </label>
   );
 }

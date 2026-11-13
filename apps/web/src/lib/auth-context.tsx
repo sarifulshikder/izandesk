@@ -1,76 +1,49 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { UserRole, UserSession } from '@izandesk/shared-types';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { LoginResponse, UserRole, UserSession } from '@izandesk/shared-types';
+import { apiFetch } from './api';
 
 interface AuthContextType {
-  user: UserSession;
-  activeRole: UserRole;
-  switchRole: (role: UserRole) => void;
+  user: UserSession | null;
+  token: string | null;
+  loading: boolean;
+  error: string | null;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
   theme: 'dark' | 'light';
   toggleTheme: () => void;
   isCommandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
+  isMobileMenuOpen: boolean;
+  setMobileMenuOpen: (open: boolean) => void;
+  toggleMobileMenu: () => void;
+  // Phase 1 convenience: allow perspective preview while keeping authenticated identity
+  activeRole: UserRole | null;
+  switchRole: (role: UserRole) => void;
+  can: (permission: string) => boolean;
 }
 
-const mockUsers: Record<UserRole, UserSession> = {
-  SUPER_ADMIN: {
-    id: 'usr-admin-01',
-    name: 'Izan Rahman (CEO)',
-    email: 'admin@izandesk.com',
-    role: 'SUPER_ADMIN',
-    tenantId: 'tnt-primary-01',
-    permissions: ['ALL'],
-    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
-  },
-  NOC_ENGINEER: {
-    id: 'usr-noc-02',
-    name: 'Tariqul Islam (NOC Lead)',
-    email: 'noc@izandesk.com',
-    role: 'NOC_ENGINEER',
-    tenantId: 'tnt-primary-01',
-    permissions: ['ROUTERS_READ', 'ROUTERS_WRITE', 'OLT_READ', 'SUBSCRIBERS_KICK'],
-    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80',
-  },
-  BILLING_OPERATOR: {
-    id: 'usr-bill-03',
-    name: 'Sadia Akhter (Accounts)',
-    email: 'billing@izandesk.com',
-    role: 'BILLING_OPERATOR',
-    tenantId: 'tnt-primary-01',
-    permissions: ['INVOICES_READ', 'PAYMENTS_CREATE', 'BILLS_ADJUST'],
-    avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&auto=format&fit=crop&q=80',
-  },
-  TECHNICIAN: {
-    id: 'usr-tech-04',
-    name: 'Kamrul Hasan (Field Lead)',
-    email: 'tech@izandesk.com',
-    role: 'TECHNICIAN',
-    tenantId: 'tnt-primary-01',
-    permissions: ['TICKETS_ASSIGNED', 'OPTICAL_READ', 'CLIENTS_READ'],
-    avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80',
-  },
-  RESELLER: {
-    id: 'usr-reseller-05',
-    name: 'Shahriar Kabir (CyberNet Reseller)',
-    email: 'reseller@cybernet.bd',
-    role: 'RESELLER',
-    tenantId: 'tnt-primary-01',
-    resellerId: 'res-cybernet-01',
-    permissions: ['RESELLER_CLIENTS_ALL', 'WALLET_RECHARGE'],
-    avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&auto=format&fit=crop&q=80',
-  },
-};
+const TOKEN_KEY = 'izandesk_token';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [activeRole, setActiveRole] = useState<UserRole>('SUPER_ADMIN');
+  const [user, setUser] = useState<UserSession | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [activeRole, setActiveRole] = useState<UserRole | null>(null);
 
   useEffect(() => {
-    // Sync with html class for tailwind dark mode
+    const savedTheme = (typeof window !== 'undefined' && localStorage.getItem('izandesk_theme')) as 'dark' | 'light' | null;
+    if (savedTheme) setTheme(savedTheme);
+  }, []);
+
+  useEffect(() => {
     const root = document.documentElement;
     if (theme === 'dark') {
       root.classList.add('dark');
@@ -79,49 +52,107 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       root.classList.add('light');
       root.classList.remove('dark');
     }
+    if (typeof window !== 'undefined') localStorage.setItem('izandesk_theme', theme);
   }, [theme]);
 
-  // Global Cmd+K keyboard shortcut listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setCommandPaletteOpen((prev) => !prev);
+      }
+      if (e.key === 'Escape') {
+        setCommandPaletteOpen(false);
+        setMobileMenuOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const switchRole = (role: UserRole) => {
-    setActiveRole(role);
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const saved = typeof window !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null;
+        if (!saved) {
+          setLoading(false);
+          return;
+        }
+        setToken(saved);
+        const res = await apiFetch<{ user: UserSession }>('/api/auth/me', {}, saved);
+        setUser(res.user);
+        setActiveRole(res.user.role);
+      } catch {
+        if (typeof window !== 'undefined') localStorage.removeItem(TOKEN_KEY);
+        setToken(null);
+        setUser(null);
+        setActiveRole(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+    init();
+  }, []);
+
+  const login = async (email: string, password: string) => {
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await apiFetch<LoginResponse>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      });
+      setToken(res.token);
+      setUser(res.user);
+      setActiveRole(res.user.role);
+      if (typeof window !== 'undefined') localStorage.setItem(TOKEN_KEY, res.token);
+    } catch (e: any) {
+      setError(e?.message || 'Login failed');
+      throw e;
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const toggleTheme = () => {
-    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  const logout = () => {
+    setUser(null);
+    setToken(null);
+    setActiveRole(null);
+    if (typeof window !== 'undefined') localStorage.removeItem(TOKEN_KEY);
   };
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user: mockUsers[activeRole],
-        activeRole,
-        switchRole,
-        theme,
-        toggleTheme,
-        isCommandPaletteOpen,
-        setCommandPaletteOpen,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
+  const toggleTheme = () => setTheme((p) => (p === 'dark' ? 'light' : 'dark'));
+  const toggleMobileMenu = () => setMobileMenuOpen((p) => !p);
+
+  const can = (permission: string) => {
+    if (!user) return false;
+    return user.permissions.includes('ALL') || user.permissions.includes(permission);
+  };
+
+  const value = useMemo(() => ({
+    user,
+    token,
+    loading,
+    error,
+    login,
+    logout,
+    theme,
+    toggleTheme,
+    isCommandPaletteOpen,
+    setCommandPaletteOpen,
+    isMobileMenuOpen,
+    setMobileMenuOpen,
+    toggleMobileMenu,
+    activeRole,
+    switchRole: (role: UserRole) => setActiveRole(role),
+    can,
+  }), [user, token, loading, error, theme, isCommandPaletteOpen, isMobileMenuOpen, activeRole]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used within an AuthProvider');
+  return ctx;
 }

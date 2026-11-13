@@ -110,19 +110,19 @@ export function RecentSubscribersTable() {
 
   return (
     <div className="p-5 rounded-2xl bg-card border border-border/80 shadow-sm flex flex-col justify-between">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2.5">
-          <div className="p-2 rounded-xl bg-primary/10 border border-primary/20 text-primary">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="p-2 rounded-xl bg-primary/10 border border-primary/20 text-primary shrink-0">
             <Users className="w-4 h-4" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h3 className="text-sm font-bold text-foreground tracking-tight">Recent Subscribers & Sessions</h3>
             <p className="text-[11px] text-muted-foreground">Carrier-Grade AAA Online & Due States</p>
           </div>
         </div>
 
         {actionMessage && (
-          <span className="text-xs font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20 animate-in fade-in">
+          <span className="text-xs font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20 animate-in fade-in self-start sm:self-auto">
             {actionMessage}
           </span>
         )}
