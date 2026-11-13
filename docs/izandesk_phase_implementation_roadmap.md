@@ -139,18 +139,21 @@ flowchart LR
 ---
 
 ### Phase 5: Reseller Multi-Tier System, CRM & Omnichannel Messaging
+- **Status:** Implemented (foundation)
 - **Engineering Deliverables**:
-  1. Multi-Tier Reseller Portal with white-label branding and custom subdomain routing.
-  2. Reseller Prepaid Wallet: Balance recharge, wholesale buying margin calculations, and auto-deduction.
-  3. SLA-Driven Trouble Ticketing: Automated technician dispatch, mobile field view, and GPS navigation.
+  1. Multi-Tier Reseller management and portal data model with white-label branding fields (subdomain/custom domain, brand, colors/logo/title) and reseller-scoped views/APIs.
+  2. Reseller Prepaid Wallet: balance recharge, wholesale buying margin calculations, wallet transaction ledger, and subscriber renewal with auto-deduction/payment recording.
+  3. SLA-Driven Trouble Ticketing (CRM): ticket lifecycle, priority-based SLA due/breach tracking, technician assignment/dispatch, comments/activity, site/GPS navigation links, and mobile-friendly resolution workflow.
   4. Omnichannel Messaging Engine:
-     - Local Bangladesh SMS gateways & Twilio international SMS.
-     - WhatsApp Business API with dynamic invoice PDF delivery.
-     - Telegram Bot for NOC alerts and daily executive revenue summaries.
-- **Browser Verification Milestone**:
-  - Log in as Reseller, check wallet balance, and renew a subscriber using reseller credit.
-  - Submit a support ticket, assign to technician, and verify mobile resolution view.
-  - Dispatch a test SMS from the built-in Gateway Tester.
+     - Local Bangladesh SMS (GreenWeb) & Twilio international SMS channel/config/test-dispatch support.
+     - WhatsApp Business API channel/template hooks for invoice delivery (including invoice PDF links).
+     - Telegram Bot channel/template hooks for NOC alerts and daily executive revenue summaries.
+     - Message templates, delivery logs, and built-in Gateway Tester.
+- **Browser/Operational Verification Milestone**:
+  - Log in as Reseller, check wallet balance, and renew a subscriber using reseller credit. ✅ (API/UI flow implemented and verified)
+  - Submit a support ticket, assign to technician, and verify mobile resolution/GPS workflow. ✅ (implemented)
+  - Dispatch a test SMS from the built-in Gateway Tester. ✅ (implemented; simulated when live provider credentials are not configured)
+- **Notes:** Real WhatsApp/Telegram/Twilio/GreenWeb delivery and invoice-PDF generation/attachment depend on provider credentials/tokens and external API configuration. White-label subdomain/custom-domain serving requires DNS and reverse-proxy host mapping in deployment.
 
 ---
 

@@ -71,7 +71,12 @@ All complete architectural blueprints, database schemas, and feature catalogs ar
   - **Payments, webhooks & MFS ingest:** checkout/confirm/webhook flows with idempotent processing and signature/token verification when configured, plus MFS SMS ingestion (`/api/billing/payments/sms/ingest`) for plugin parsing/auto-match.
   - **Instant auto-reactivation:** confirmed/cleared payments restore access by updating dues/state and re-enabling/provisioning PPP/RADIUS/CoA (target < 2s).
   - *Notes:* End-to-end validation of live enforcement, NAS captive redirect, and real/signed gateway or MFS-forwarder flows depends on device/network configuration and provider credentials/webhook secrets/callback setup.
-- **Phase 5:** Reseller Multi-Tier System, CRM & Omnichannel Messaging
+- **Phase 5:** Reseller Multi-Tier System, CRM & Omnichannel Messaging *(Implemented foundation)*
+  - **Resellers & wallet:** multi-tier reseller records with parent-child support, white-label/branding fields (subdomain/custom domain, brand, colors/logo/title), prepaid wallet balance, recharge, buying margin/commission fields, and reseller-to-subscriber linkage (`/api/resellers`, `/resellers`).
+  - **Wallet auto-deduction & renewals:** reseller can renew subscribers using wallet credit with wholesale margin calculation, wallet debit transaction logging, and payment/renewal recording (`/api/resellers/:id/renew-subscriber`, `/api/resellers/:id/wallet`).
+  - **SLA-driven trouble ticketing (CRM):** ticket CRUD with priority-based SLA due times/breach indicators, technician assignment/dispatch, comments/activity, subscriber/site context, and GPS navigation links with mobile-friendly resolution workflow (`/api/tickets`, `/tickets`).
+  - **Omnichannel messaging engine:** channel/config/template/log models and APIs for Local BD SMS (GreenWeb), Twilio SMS, WhatsApp Business API (invoice delivery/PDF link support hooks), and Telegram Bot (NOC alerts/daily revenue summary hooks), plus built-in **Gateway Tester** for test dispatch (`/api/messaging`, `/messaging`).
+  - *Notes:* Live external delivery requires provider credentials/tokens and API-specific integration setup (Twilio/GreenWeb/Meta WhatsApp Cloud/Telegram). White-label subdomain/custom-domain routing requires DNS and reverse-proxy host mapping in deployment.
 - **Phase 6:** Customer Self-Care Portal & 1-Click Plug-and-Play Packaging
 
 ## ▶️ Local Run

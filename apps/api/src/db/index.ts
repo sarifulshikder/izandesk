@@ -726,6 +726,178 @@ export async function initDb() {
         ('paypal', false, 'SANDBOX', '{"supports":"smart_buttons"}'::jsonb)
       ON CONFLICT (gateway) DO NOTHING;
   `).catch(e => console.error('[DB] Phase 4 schema extension error', e.message));
+
+  // Phase 5: Resellers, Wallet, CRM/Tickets, Messaging
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS resellers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      code TEXT UNIQUE,
+      name TEXT NOT NULL,
+      company_name TEXT,
+      tier TEXT NOT NULL DEFAULT 'STANDARD',
+      parent_reseller_id UUID REFERENCES resellers(id) ON DELETE SET NULL,
+      email TEXT,
+      phone TEXT,
+      subdomain TEXT UNIQUE,
+      custom_domain TEXT,
+      brand_name TEXT,
+      logo_url TEXT,
+      primary_color TEXT,
+      secondary_color TEXT,
+      portal_title TEXT,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      wallet_balance NUMERIC(12,2) NOT NULL DEFAULT 0,
+      credit_limit NUMERIC(12,2) NOT NULL DEFAULT 0,
+      commission_percent NUMERIC(6,2) NOT NULL DEFAULT 0,
+      buying_margin_percent NUMERIC(6,2) NOT NULL DEFAULT 0,
+      address TEXT,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS reseller_wallet_transactions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      reseller_id UUID NOT NULL REFERENCES resellers(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      direction TEXT NOT NULL DEFAULT 'CREDIT',
+      amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      balance_after NUMERIC(12,2) NOT NULL DEFAULT 0,
+      reference_type TEXT,
+      reference_id TEXT,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      description TEXT,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS tickets (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      ticket_no TEXT UNIQUE,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      reseller_id UUID REFERENCES resellers(id) ON DELETE SET NULL,
+      subject TEXT NOT NULL,
+      description TEXT,
+      category TEXT NOT NULL DEFAULT 'SUPPORT',
+      priority TEXT NOT NULL DEFAULT 'MEDIUM',
+      status TEXT NOT NULL DEFAULT 'OPEN',
+      sla_policy TEXT,
+      sla_due_at TIMESTAMPTZ,
+      sla_breached BOOLEAN NOT NULL DEFAULT false,
+      assigned_technician_id TEXT,
+      assigned_technician_name TEXT,
+      assigned_technician_phone TEXT,
+      dispatch_status TEXT DEFAULT 'UNASSIGNED',
+      site_latitude DOUBLE PRECISION,
+      site_longitude DOUBLE PRECISION,
+      site_address TEXT,
+      gps_nav_url TEXT,
+      resolution_notes TEXT,
+      source TEXT DEFAULT 'PORTAL',
+      opened_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      closed_at TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS ticket_comments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      ticket_id UUID NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+      author_name TEXT,
+      author_role TEXT,
+      body TEXT NOT NULL,
+      is_internal BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS messaging_channels (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      channel_type TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT false,
+      is_default BOOLEAN NOT NULL DEFAULT false,
+      config JSONB DEFAULT '{}'::jsonb,
+      credentials JSONB DEFAULT '{}'::jsonb,
+      webhook_secret TEXT,
+      sender_id TEXT,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(channel_type, provider, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS message_templates (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      channel_type TEXT NOT NULL,
+      purpose TEXT,
+      subject TEXT,
+      body TEXT NOT NULL,
+      variables JSONB DEFAULT '[]'::jsonb,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(name, channel_type)
+    );
+
+    CREATE TABLE IF NOT EXISTS message_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      channel_type TEXT NOT NULL,
+      provider TEXT,
+      channel_id UUID REFERENCES messaging_channels(id) ON DELETE SET NULL,
+      direction TEXT NOT NULL DEFAULT 'OUTBOUND',
+      recipient TEXT,
+      subject TEXT,
+      body TEXT,
+      status TEXT NOT NULL DEFAULT 'QUEUED',
+      provider_message_id TEXT,
+      related_type TEXT,
+      related_id TEXT,
+      payload JSONB DEFAULT '{}'::jsonb,
+      error_message TEXT,
+      sent_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS reseller_id UUID REFERENCES resellers(id) ON DELETE SET NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_resellers_subdomain ON resellers(subdomain);
+    CREATE INDEX IF NOT EXISTS idx_resellers_parent ON resellers(parent_reseller_id);
+    CREATE INDEX IF NOT EXISTS idx_reseller_wallet_tx_reseller ON reseller_wallet_transactions(reseller_id);
+    CREATE INDEX IF NOT EXISTS idx_subscribers_reseller ON subscribers(reseller_id);
+    CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+    CREATE INDEX IF NOT EXISTS idx_tickets_assigned ON tickets(assigned_technician_id);
+    CREATE INDEX IF NOT EXISTS idx_tickets_reseller ON tickets(reseller_id);
+    CREATE INDEX IF NOT EXISTS idx_tickets_subscriber ON tickets(subscriber_id);
+    CREATE INDEX IF NOT EXISTS idx_message_logs_status ON message_logs(status);
+    CREATE INDEX IF NOT EXISTS idx_message_logs_channel ON message_logs(channel_type, provider);
+
+    INSERT INTO resellers(code, name, company_name, tier, subdomain, brand_name, portal_title, status, wallet_balance, commission_percent, buying_margin_percent, email, phone)
+      VALUES
+        ('RES-CYBERNET', 'CyberNet Reseller', 'CyberNet Broadband', 'GOLD', 'cybernet', 'CyberNet ISP', 'CyberNet Reseller Portal', 'ACTIVE', 50000, 10, 15, 'reseller@cybernet.bd', '+8801700000005'),
+        ('RES-DHAKA-NET', 'Dhaka Net Partner', 'Dhaka Net Services', 'SILVER', 'dhakanet', 'Dhaka Net', 'Dhaka Net Partner Portal', 'ACTIVE', 15000, 8, 12, 'partner@dhakanet.bd', '+8801700000099')
+      ON CONFLICT (code) DO NOTHING;
+
+    INSERT INTO messaging_channels(name, channel_type, provider, enabled, is_default, config)
+      VALUES
+        ('BD Local SMS (GreenWeb)', 'SMS', 'GREENWEB', false, true, '{"country":"BD","mode":"LOCAL"}'::jsonb),
+        ('Twilio SMS (International)', 'SMS', 'TWILIO', false, false, '{"mode":"INTERNATIONAL"}'::jsonb),
+        ('WhatsApp Business API', 'WHATSAPP', 'META_CLOUD', false, true, '{"supports":"invoice_pdf,templates"}'::jsonb),
+        ('Telegram Bot', 'TELEGRAM', 'TELEGRAM_BOT', false, true, '{"supports":"noc_alerts,daily_revenue_summary"}'::jsonb)
+      ON CONFLICT DO NOTHING;
+
+    INSERT INTO message_templates(name, channel_type, purpose, subject, body, variables)
+      VALUES
+        ('invoice_due_reminder_sms', 'SMS', 'INVOICE_REMINDER', NULL, 'Dear {{name}}, your invoice {{invoice_no}} amount {{amount}} is due on {{due_date}}. Please pay to avoid service interruption. - {{brand}}', '["name","invoice_no","amount","due_date","brand"]'::jsonb),
+        ('payment_received_sms', 'SMS', 'PAYMENT_RECEIVED', NULL, 'Payment received: {{amount}} for {{invoice_no}} ({{trx_id}}). Thank you. - {{brand}}', '["amount","invoice_no","trx_id","brand"]'::jsonb),
+        ('invoice_delivery_whatsapp', 'WHATSAPP', 'INVOICE_DELIVERY', 'Invoice {{invoice_no}}', 'Hello {{name}}, your invoice {{invoice_no}} ({{amount}}) is ready. Due date: {{due_date}}. Invoice PDF: {{pdf_url}}', '["name","invoice_no","amount","due_date","pdf_url"]'::jsonb),
+        ('noc_alert_telegram', 'TELEGRAM', 'NOC_ALERT', NULL, '🚨 NOC Alert: {{title}}\n{{details}}\nTime: {{time}}', '["title","details","time"]'::jsonb),
+        ('daily_revenue_summary_telegram', 'TELEGRAM', 'DAILY_REVENUE_SUMMARY', NULL, '📊 Daily Revenue Summary ({{date}})\nCollections: {{collections}}\nInvoices: {{invoices}}\nDue Outstanding: {{outstanding}}', '["date","collections","invoices","outstanding"]'::jsonb)
+      ON CONFLICT DO NOTHING;
+  `).catch(e => console.error('[DB] Phase 5 schema extension error', e.message));
 }
 
 export { pool };

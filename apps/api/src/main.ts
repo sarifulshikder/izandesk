@@ -18,6 +18,9 @@ import oltRouter from './routes/olt';
 import radiusRouter from './routes/radius';
 import wireguardRouter from './routes/wireguard';
 import billingRouter from './routes/billing';
+import resellersRouter from './routes/resellers';
+import ticketsRouter from './routes/tickets';
+import messagingRouter from './routes/messaging';
 import { startBillingScheduler } from './integrations/billing';
 
 const PORT = Number(process.env.API_PORT || 4000);
@@ -82,7 +85,7 @@ async function bootstrap() {
   setKernel(kernel);
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'izandesk-api', phase: 4, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length });
+    res.json({ ok: true, service: 'izandesk-api', phase: 5, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length });
   });
 
   app.post('/api/auth/login', (req, res) => {
@@ -179,6 +182,11 @@ async function bootstrap() {
   // Webhooks and MFS SMS ingest are public callbacks (validated in-route)
   app.use('/api/billing', (req, res, next) => ((req.path.startsWith('/webhooks/') || req.path === '/payments/sms/ingest') ? next() : authMiddleware(req, res, next)), billingRouter);
 
+  // Phase 5: Resellers, CRM/Tickets, Messaging
+  app.use('/api/resellers', authMiddleware, resellersRouter);
+  app.use('/api/tickets', authMiddleware, ticketsRouter);
+  app.use('/api/messaging', authMiddleware, messagingRouter);
+
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error(err);
     res.status(500).json({ message: err?.message || 'Internal server error' });
@@ -224,7 +232,7 @@ async function bootstrap() {
 
   server.listen(PORT, () => {
     console.log('====================================================');
-    console.log(`    IzanDesk ERP API — listening on :${PORT} (Phase 4)`);
+    console.log(`    IzanDesk ERP API — listening on :${PORT} (Phase 5)`);
     console.log('====================================================');
     console.log(`[Bootstrap] DB ready: ${dbReady}, Plugins loaded: ${kernel.listPlugins().length}`);
   });
