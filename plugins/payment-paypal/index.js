@@ -20,18 +20,18 @@ module.exports = {
     const currency = String(req.currency || 'USD').toUpperCase();
     const orderId = makeId('ORDER');
     const mode = (req.mode || 'SANDBOX').toUpperCase();
-    const approveBase = mode === 'LIVE' ? 'https://www.paypal.com' : 'https://www.sandbox.paypal.com';
-    const approvalUrl = `${approveBase}/checkoutnow?token=${encodeURIComponent(orderId)}&amount=${encodeURIComponent(amount)}&currency=${encodeURIComponent(currency)}`;
+    // Real PayPal requires Orders API/credentials. Avoid fake external redirect.
     return {
       ok: true,
       gateway: 'paypal',
       orderId,
-      approvalUrl,
-      paymentUrl: approvalUrl,
+      approvalUrl: null,
+      paymentUrl: null,
       clientIdHint: mode === 'LIVE' ? 'paypal_live_client_id' : 'paypal_sandbox_client_id',
       smartButtons: true,
+      simulated: true,
       supports: ['smart_buttons', 'cards_via_paypal'],
-      message: 'PayPal Smart Buttons order created (sandbox-ready).',
+      message: 'PayPal checkout created as SIMULATED (live PayPal Orders API/credentials not integrated in this environment). Configure credentials and enable live integration to redirect to PayPal.',
       raw: { paymentRef: req.paymentRef, invoiceId: req.invoiceId, amount, currency }
     };
   },

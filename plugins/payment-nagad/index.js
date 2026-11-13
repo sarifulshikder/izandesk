@@ -20,17 +20,18 @@ module.exports = {
     const paymentRef = req.paymentRef || req.invoiceId || makeId('INV');
     const orderId = makeId('NORDER');
     const mode = (req.mode || 'SANDBOX').toUpperCase();
-    const base = mode === 'LIVE' ? 'https://api.mynagad.com' : 'https://sandbox.mynagad.com';
-    const paymentUrl = `${base}:30000/remote-payment-gateway-1.0/api/dfs/check-out/initialize/${encodeURIComponent(orderId)}?amount=${encodeURIComponent(amount)}&merchantInvoice=${encodeURIComponent(paymentRef)}`;
+    // Real Nagad PGW requires merchant credentials and initialize/complete API flow.
+    // Return simulated checkout to avoid redirecting to non-functional fake endpoints.
     return {
       ok: true,
       gateway: 'nagad',
-      paymentUrl,
+      paymentUrl: null,
       orderId,
       paymentReferenceId: makeId('NREF'),
       mode,
+      simulated: true,
       supports: ['merchant_pgw'],
-      message: 'Nagad merchant checkout initialized (sandbox-ready).',
+      message: 'Nagad checkout created as SIMULATED (live Nagad merchant PGW API/credentials not integrated in this environment). Configure Nagad credentials and enable live integration to redirect to Nagad.',
       raw: { paymentRef, amount, currency: req.currency || 'BDT' }
     };
   },

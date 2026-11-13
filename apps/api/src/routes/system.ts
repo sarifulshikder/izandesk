@@ -6,7 +6,7 @@ import { pool } from '../db';
 import { asyncHandler } from './helpers';
 
 const router: Router = Router();
-function requireAdmin(req:any,res:any){ if (!['SUPER_ADMIN','NOC_ENGINEER'].includes(String(req.user?.role))) { res.status(403).json({ message: 'Forbidden' }); return false; } return true; }
+function requireAdmin(req:any,res:any){ if (!['SUPER_ADMIN','NOC_ENGINEER'].includes(String((req as any).user?.role))) { res.status(403).json({ message: 'Forbidden' }); return false; } return true; }
 
 function run(cmd: string, args: string[], timeout = 15000): Promise<{ ok:boolean; stdout:string; stderr:string; code:number|null }> {
   return new Promise((resolve) => {

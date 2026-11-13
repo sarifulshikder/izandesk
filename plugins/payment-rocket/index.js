@@ -20,16 +20,16 @@ module.exports = {
     const paymentRef = req.paymentRef || req.invoiceId || makeId('INV');
     const txnRef = makeId('RTXN');
     const mode = (req.mode || 'SANDBOX').toUpperCase();
-    const base = mode === 'LIVE' ? 'https://pgw.rocket.com.bd' : 'https://sandbox.rocket.com.bd';
-    const paymentUrl = `${base}/merchant/checkout?txnRef=${encodeURIComponent(txnRef)}&amount=${encodeURIComponent(amount)}&invoice=${encodeURIComponent(paymentRef)}`;
+    // Real Rocket integration requires merchant API/credentials. Avoid fake external redirect.
     return {
       ok: true,
       gateway: 'rocket',
-      paymentUrl,
+      paymentUrl: null,
       txnRef,
       mode,
+      simulated: true,
       supports: ['merchant_pgw'],
-      message: 'Rocket merchant checkout initialized (sandbox-ready).',
+      message: 'Rocket checkout created as SIMULATED (live Rocket merchant API/credentials not integrated in this environment). Configure credentials and enable live integration to redirect to Rocket.',
       raw: { paymentRef, amount, currency: req.currency || 'BDT' }
     };
   },

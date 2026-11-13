@@ -171,3 +171,26 @@ flowchart LR
 - **Browser Verification Milestone**:
   - Open customer self-care view on mobile browser, view bill, make payment, and view Wi-Fi settings.
   - Verify complete system health diagnostics.
+
+---
+
+### Phase 7: Finance, HRM, Reporting & Commercial Operations (Roadmap Extension)
+- **Status:** Implemented (foundation in codebase; Phase 7 DB schema, APIs, and UI modules added; advanced workflows/integrations remain environment- and priority-dependent)
+- **Comparison context (high level):**
+  - **ShohozBill demo (https://demo.shohozbill.com, login-gated):** public access shows unified admin/staff/reseller operations login and branded portal entry; authenticated module-level comparison was not possible without in-session UI access. Phase 7 targets important ISP operations commonly expected in ShohozBill-class platforms that are not yet first-class in IzanDesk.
+  - **Important capabilities already present in IzanDesk:** subscriber onboarding/CRM & lifecycle, PPPoE/package & bandwidth management, live sessions, MikroTik router/NAS, RADIUS/AAA & CoA, WireGuard overlay, OLT/ONU telemetry hooks, GIS/fiber mapping & topology, inventory/serial tracking, billing/invoicing/due policies/walled-garden, multi-gateway payments (bKash/Nagad/Rocket/Stripe/PayPal) with callback/webhook/sms-ingest hooks, reseller multi-tier & wallet, trouble tickets/SLA, omnichannel messaging, plugins/hot-reload kernel, customer self-care portal (PWA, invoices/payments/speedtest/Wi-Fi hooks), system health/diagnostics and backup engine, Docker Compose packaging.
+- **Engineering Deliverables**:
+  1. **Accounts & Finance (Double-entry-lite):** income/expense tracking, chart of accounts, vouchers/receipts, collections & dues aging reports, payment reconciliation, cash/bank/MFS ledgers, and exportable financial statements.
+  2. **HRM & Payroll:** employee/staff profiles & roles, attendance/leave, salary structures, payroll runs, commissions/incentives (technicians/collectors/resellers), and activity/audit trails.
+  3. **Procurement & Asset Management:** vendors/suppliers, purchase orders & bills, stock-in/out with cost tracking, asset register & depreciation basics, and tighter linkage to inventory/warehouse/serial assignment.
+  4. **Hotspot/Voucher & Retail Sales:** prepaid voucher/card generation, hotspot plans, sales/activation tracking, and reconciliation with payments/subscriber services where applicable.
+  5. **Advanced Reporting & Analytics:** configurable operational/financial reports (collection, churn/expiry, package/revenue, reseller performance, ticket SLA, usage/FUP), dashboards, scheduled/email delivery, CSV/PDF exports, and date/area/reseller filters.
+  6. **Field/Agent & Workflow Enhancements:** collector/technician mobile workflows, route/visit planning, proof-of-payment/collection capture, richer ticket/job dispatch, and notification/escalation rules.
+  7. **Compliance, Audit & Integrations:** comprehensive audit logs, role/permission hardening, document templates, API/webhook extensibility, and integrations (accounting/tax, SMS/payment providers, external BI) as needed.
+- **Browser/Operational Verification Milestone**:
+  - Record income/expense and reconcile collections; generate aging and monthly financial reports with exports.
+  - Run HR/payroll workflow for staff and verify attendance/commission calculations.
+  - Create vendor purchase, receive stock/assets, and validate inventory/cost updates.
+  - Generate/sell hotspot vouchers and verify activation/reconciliation (if enabled).
+  - Produce and export key operational reports (collections, expiry, reseller, SLA) and validate filters/schedules.
+- **Notes:** Scope should be phased by priority and validated against target ISP workflows. Some capabilities (e.g. hotspot, advanced accounting/tax, field collection) depend on network topology, regulatory needs, and third-party integrations.

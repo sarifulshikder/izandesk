@@ -25,6 +25,12 @@ import brandingRouter from './routes/branding';
 import portalRouter from './routes/portal';
 import systemRouter from './routes/system';
 import acsRouter from './routes/acs';
+import financeRouter from './routes/finance';
+import hrRouter from './routes/hr';
+import procurementRouter from './routes/procurement';
+import hotspotRouter from './routes/hotspot';
+import reportsRouter from './routes/reports';
+import auditRouter from './routes/audit';
 import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
 
@@ -90,7 +96,7 @@ async function bootstrap() {
   setKernel(kernel);
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'izandesk-api', phase: 5, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length });
+    res.json({ ok: true, service: 'izandesk-api', phase: 7, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length });
   });
   app.use('/api/branding', brandingRouter);
   app.use('/api/portal', portalRouter);
@@ -190,7 +196,7 @@ async function bootstrap() {
   // Phase 4: Billing, Invoicing, Payments, Suspension/Reactivation
   // Webhooks, MFS SMS ingest, and shareable invoice links are public (validated in-route/by token)
   app.use('/api/billing', (req, res, next) => {
-    const publicPath = req.path.startsWith('/webhooks/') || req.path === '/payments/sms/ingest' || /^\/invoices\/[^/]+\/(pdf|html|share)$/.test(req.path);
+    const publicPath = req.path.startsWith('/webhooks/') || req.path === '/payments/sms/ingest' || req.path === '/payments/bkash/callback' || /^\/invoices\/[^/]+\/(pdf|html|share)$/.test(req.path);
     return publicPath ? next() : authMiddleware(req, res, next);
   }, billingRouter);
 
@@ -198,6 +204,14 @@ async function bootstrap() {
   app.use('/api/resellers', authMiddleware, resellersRouter);
   app.use('/api/tickets', authMiddleware, ticketsRouter);
   app.use('/api/messaging', authMiddleware, messagingRouter);
+
+  // Phase 7: Finance, HRM, Procurement/Assets, Hotspot, Reports, Audit & Field workflows
+  app.use('/api/finance', authMiddleware, financeRouter);
+  app.use('/api/hr', authMiddleware, hrRouter);
+  app.use('/api/procurement', authMiddleware, procurementRouter);
+  app.use('/api/hotspot', authMiddleware, hotspotRouter);
+  app.use('/api/reports', authMiddleware, reportsRouter);
+  app.use('/api/audit', authMiddleware, auditRouter);
 
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error(err);

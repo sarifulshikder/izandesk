@@ -32,6 +32,13 @@ import {
   UserX,
   UserMinus,
   Clock3,
+  Landmark,
+  UsersRound,
+  ShoppingCart,
+  Ticket,
+  BarChart3,
+  ScrollText,
+  Wifi,
 } from 'lucide-react';
 
 interface NavGroup {
@@ -63,7 +70,7 @@ export function Sidebar() {
   const searchParams = useSearchParams();
   const { token, activeRole, user, isMobileMenuOpen, setMobileMenuOpen } = useAuth();
   const [resellers, setResellers] = useState<any[]>([]);
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Resellers: true, Network: true, Billing: true, Support: true, Plugins: true, System: false });
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Resellers: true, Network: true, Billing: true, Support: true, 'Finance & Ops': true, Plugins: true, System: false });
   const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true, 'All Resellers': true });
 
   const loadResellers = useCallback(async () => {
@@ -83,6 +90,7 @@ export function Sidebar() {
     if (pathname.startsWith('/resellers')) { setOpenGroups(s => ({ ...s, Resellers: true })); setOpenSub(s => ({ ...s, 'All Resellers': true })); }
     if (pathname.startsWith('/plugins')) setOpenGroups(s => ({ ...s, Plugins: true }));
     if (pathname.startsWith('/plugins/payment-gateways')) setOpenSub(s => ({ ...s, 'Payment Gateways': true }));
+    if (pathname.startsWith('/finance') || pathname.startsWith('/hr') || pathname.startsWith('/procurement') || pathname.startsWith('/hotspot') || pathname.startsWith('/reports') || pathname.startsWith('/audit')) setOpenGroups(s => ({ ...s, 'Finance & Ops': true }));
   }, [pathname]);
 
   if (!user || !activeRole) return null;
@@ -148,6 +156,17 @@ export function Sidebar() {
         { name: 'CRM & Tickets', href: '/tickets', icon: LifeBuoy },
         { name: 'Omnichannel SMS', href: '/messaging', icon: MessageSquare },
         { name: 'Customer Portal', href: '/portal', icon: Users, badge: 'PWA' },
+      ],
+    },
+    {
+      label: 'Finance & Ops',
+      items: [
+        { name: 'Reports & Analytics', href: '/reports', icon: BarChart3, badge: 'P7' },
+        { name: 'Finance & Accounts', href: '/finance', icon: Landmark },
+        { name: 'HR & Payroll', href: '/hr', icon: UsersRound },
+        { name: 'Procurement & Assets', href: '/procurement', icon: ShoppingCart },
+        { name: 'Hotspot Vouchers', href: '/hotspot', icon: Wifi },
+        { name: 'Audit & Field Ops', href: '/audit', icon: ScrollText },
       ],
     },
     {

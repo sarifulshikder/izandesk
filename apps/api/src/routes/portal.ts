@@ -185,7 +185,7 @@ router.post('/payments/checkout', portalAuth, asyncHandler(async (req, res) => {
   const payment_ref = `PORTAL-${Date.now()}-${Math.random().toString(36).slice(2,8).toUpperCase()}`;
   let checkout: any = { ok: false };
   if (plugin && typeof plugin.createCheckoutSession === 'function') {
-    try { checkout = await plugin.createCheckoutSession({ invoiceId: invoice?.id, paymentRef: payment_ref, amount, currency: b.currency || 'BDT', subscriber, invoice, returnUrl: b.return_url, cancelUrl: b.cancel_url, webhookUrl: b.webhook_url, metadata: b.metadata || {}, mode: (cfg?.mode || 'SANDBOX') }); } catch(e:any){ checkout = { ok:false, message:e.message }; }
+    try { checkout = await plugin.createCheckoutSession({ invoiceId: invoice?.id, paymentRef: payment_ref, amount, currency: b.currency || 'BDT', subscriber, invoice, returnUrl: b.return_url, cancelUrl: b.cancel_url, webhookUrl: b.webhook_url, metadata: b.metadata || {}, mode: (cfg?.mode || 'SANDBOX'), config: cfg?.config || {}, credentials: cfg?.credentials || {}, webhookSecret: cfg?.webhook_secret || null }); } catch(e:any){ checkout = { ok:false, message:e.message }; }
   } else {
     checkout = { ok: true, gateway, paymentUrl: `https://sandbox-payments.izandesk.local/${gateway}/checkout?payment_ref=${encodeURIComponent(payment_ref)}&amount=${amount}`, simulated: true };
   }

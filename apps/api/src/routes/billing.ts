@@ -7,11 +7,12 @@ import { mikrotikProvisionWalledGardenRedirect } from '../integrations/mikrotik'
 import crypto from 'crypto';
 import { dispatchMessage, trySendTemplateToSubscriber } from '../integrations/messaging';
 import { renderInvoiceHtml, renderSimpleInvoicePdf } from '../integrations/pdf';
+import { auditLog, reqActor } from '../integrations/audit';
 
 const router: Router = Router();
 
 function requireBillingRole(req: any, res: any) {
-  const role = req.user?.role;
+  const role = (req as any).user?.role;
   if (!role) { res.status(401).json({ message: 'Unauthorized' }); return false; }
   if (!['SUPER_ADMIN','BILLING_OPERATOR','RESELLER'].includes(role)) { res.status(403).json({ message: 'Insufficient permissions for billing operations' }); return false; }
   return true;
@@ -209,6 +210,145 @@ async function getGatewayConfig(gateway: string) {
   return r.rows[0] || null;
 }
 
+function pickVal(obj: any, ...keys: string[]) {
+  for (const k of keys) { const v = obj?.[k]; if (v !== undefined && v !== null && String(v).trim() !== '') return v; }
+  return undefined;
+}
+
+async function bkashCreds(mode?: string) {
+  const m = String(mode || 'SANDBOX').toUpperCase();
+  const cfg = await getGatewayConfig('bkash');
+  const effMode = String(cfg?.mode || m || 'SANDBOX').toUpperCase();
+  const creds = { ...(cfg?.credentials || {}), ...(cfg?.config || {}) };
+  const envPrefix = effMode === 'LIVE' ? 'BKASH_LIVE_' : 'BKASH_SANDBOX_';
+  const appKey = pickVal(creds, 'app_key','appKey','bkash_app_key','bkashAppKey') || process.env[envPrefix+'APP_KEY'] || process.env.BKASH_APP_KEY;
+  const appSecret = pickVal(creds, 'app_secret','appSecret','bkash_app_secret','bkashAppSecret') || process.env[envPrefix+'APP_SECRET'] || process.env.BKASH_APP_SECRET;
+  const username = pickVal(creds, 'username','user','bkash_username','bkashUsername') || process.env[envPrefix+'USERNAME'] || process.env.BKASH_USERNAME;
+  const password = pickVal(creds, 'password','pass','bkash_password','bkashPassword') || process.env[envPrefix+'PASSWORD'] || process.env.BKASH_PASSWORD;
+  const baseOverride = pickVal(creds, 'base_url','baseUrl','bkash_base_url','bkashBaseUrl') || process.env[envPrefix+'BASE_URL'] || process.env.BKASH_BASE_URL;
+  const base = String(baseOverride || (effMode === 'LIVE'
+    ? 'https://tokenized.pay.bka.sh/v1.2.0-beta/tokenized/checkout'
+    : 'https://tokenized.sandbox.bka.sh/v1.2.0-beta/tokenized/checkout')).replace(/\/$/, '');
+  return { ok: !!(appKey && appSecret && username && password), mode: effMode, appKey, appSecret, username, password, base, cfg };
+}
+
+async function bkashJson(url: string, opts: any = {}) {
+  const res = await fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) } });
+  const text = await res.text();
+  let data: any; try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
+  if (!res.ok) throw new Error(data?.statusMessage || data?.message || data?.errorMessage || `bKash HTTP ${res.status}`);
+  return data;
+}
+
+async function executeBkashPayment(paymentID: string, paymentRow?: any) {
+  const c = await bkashCreds(paymentRow?.gateway_response?.mode);
+  if (!c.ok) throw new Error('bKash credentials not configured (app_key/app_secret/username/password)');
+  const grant = await bkashJson(`${c.base}/token/grant`, { method: 'POST', headers: { username: c.username, password: c.password }, body: JSON.stringify({ app_key: c.appKey, app_secret: c.appSecret }) });
+  const idToken = grant?.id_token || grant?.idToken;
+  if (!idToken) throw new Error(grant?.statusMessage || 'Failed to obtain bKash grant token');
+  const exec = await bkashJson(`${c.base}/execute`, { method: 'POST', headers: { authorization: idToken, 'x-app-key': c.appKey }, body: JSON.stringify({ paymentID }) });
+  return { exec, grant: { statusCode: grant?.statusCode, statusMessage: grant?.statusMessage } };
+}
+
+
+// bKash callback (public redirect from bKash after checkout)
+router.get('/payments/bkash/callback', asyncHandler(async (req, res) => {
+  const paymentID = String(req.query.paymentID || req.query.paymentId || req.query.payment_id || '').trim();
+  const status = String(req.query.status || '').toLowerCase();
+  const portalBase = process.env.PORTAL_URL || process.env.PUBLIC_BASE_URL || 'https://izandesk.duckdns.org';
+  const back = `${portalBase.replace(/\/$/, '')}/portal`;
+
+  if (!paymentID) return res.redirect(`${back}?bkash=error&message=${encodeURIComponent('Missing paymentID')}`);
+  if (status && status !== 'success') {
+    // update matching pending payment as failed/cancelled for visibility
+    try {
+      await pool.query(`UPDATE payments SET status=$2, gateway_response = COALESCE(gateway_response,'{}'::jsonb) || $3::jsonb, updated_at=now()
+        WHERE gateway='bkash' AND status='PENDING' AND (gateway_response->>'paymentID'=$1 OR gateway_response->'raw'->'create'->>'paymentID'=$1)`,
+        [paymentID, status === 'cancel' ? 'CANCELLED' : 'FAILED', JSON.stringify({ callback: { paymentID, status, at: new Date().toISOString(), query: req.query } })]);
+    } catch {}
+    return res.redirect(`${back}?bkash=${encodeURIComponent(status)}&paymentID=${encodeURIComponent(paymentID)}`);
+  }
+
+  try {
+    const prr = await pool.query(`SELECT * FROM payments WHERE gateway='bkash' AND (gateway_response->>'paymentID'=$1 OR gateway_response->'raw'->'create'->>'paymentID'=$1) ORDER BY created_at DESC LIMIT 1`, [paymentID]);
+    const pr = prr.rows[0];
+    if (!pr) return res.redirect(`${back}?bkash=error&paymentID=${encodeURIComponent(paymentID)}&message=${encodeURIComponent('Payment record not found')}`);
+    if (String(pr.status || '').toUpperCase() === 'COMPLETED') {
+      return res.redirect(`${back}?bkash=success&payment_ref=${encodeURIComponent(pr.payment_ref)}&message=${encodeURIComponent('Payment already completed')}`);
+    }
+
+    const { exec } = await executeBkashPayment(paymentID, pr);
+    const trxId = exec.trxID || exec.trxId || exec.transactionId || null;
+    const execStatus = String(exec.transactionStatus || exec.status || '').toUpperCase();
+    const ok = ['COMPLETED','SUCCESS'].includes(execStatus) || exec.statusCode === '0000';
+    if (!ok) {
+      await pool.query(`UPDATE payments SET gateway_response = COALESCE(gateway_response,'{}'::jsonb) || $2::jsonb, updated_at=now() WHERE id=$1`,
+        [pr.id, JSON.stringify({ bkash_execute: exec, callback: { paymentID, status, at: new Date().toISOString() } })]);
+      return res.redirect(`${back}?bkash=failed&payment_ref=${encodeURIComponent(pr.payment_ref)}&message=${encodeURIComponent(exec.statusMessage || exec.message || 'bKash execute not completed')}`);
+    }
+
+    const amount = Number(exec.amount || pr.amount || 0);
+    const result = await recordPaymentAndReactivate({
+      gateway: 'bkash',
+      amount,
+      invoice_id: pr.invoice_id || undefined,
+      subscriber_id: pr.subscriber_id,
+      trx_id: trxId || undefined,
+      method: pr.method || 'portal',
+      payer_number: exec.customerMsisdn || exec.payerAccount || undefined,
+      raw: { bkash_execute: exec, callback_query: req.query },
+      payment_ref: pr.payment_ref,
+      currency: exec.currency || pr.currency || 'BDT',
+      status: 'COMPLETED'
+    });
+
+    await pool.query(`UPDATE payments SET gateway_response = COALESCE(gateway_response,'{}'::jsonb) || $2::jsonb, updated_at=now() WHERE id=$1`,
+      [pr.id, JSON.stringify({ bkash_execute: exec, callback: { paymentID, status, at: new Date().toISOString() } })]);
+
+    const msg = result.duplicate ? 'Payment already recorded' : 'Payment completed successfully';
+    return res.redirect(`${back}?bkash=success&payment_ref=${encodeURIComponent(pr.payment_ref)}&trx=${encodeURIComponent(trxId || '')}&message=${encodeURIComponent(msg)}`);
+  } catch (e: any) {
+    return res.redirect(`${back}?bkash=error&paymentID=${encodeURIComponent(paymentID)}&message=${encodeURIComponent(e.message || 'bKash execute failed')}`);
+  }
+}));
+
+// Manual/admin bKash execute (for pending checkout payments)
+router.post('/payments/bkash/execute', asyncHandler(async (req, res) => {
+  if (!requireBillingRole(req, res)) return;
+  const b = req.body || {};
+  const paymentRef = String(b.payment_ref || b.paymentRef || '').trim();
+  const paymentIDInput = String(b.paymentID || b.paymentId || b.payment_id || '').trim();
+  let pr: any = null;
+  if (paymentRef) pr = (await pool.query('SELECT * FROM payments WHERE payment_ref=$1', [paymentRef])).rows[0];
+  if (!pr && paymentIDInput) pr = (await pool.query(`SELECT * FROM payments WHERE gateway='bkash' AND (gateway_response->>'paymentID'=$1 OR gateway_response->'raw'->'create'->>'paymentID'=$1) ORDER BY created_at DESC LIMIT 1`, [paymentIDInput])).rows[0];
+  if (!pr) return res.status(404).json({ ok: false, message: 'Payment not found' });
+  if (String(pr.gateway).toLowerCase() !== 'bkash') return res.status(400).json({ ok: false, message: 'Payment is not a bKash payment' });
+  if (String(pr.status || '').toUpperCase() === 'COMPLETED') return res.json({ ok: true, duplicate: true, payment: pr, message: 'Payment already completed' });
+  const paymentID = paymentIDInput || pr.gateway_response?.paymentID || pr.gateway_response?.raw?.create?.paymentID;
+  if (!paymentID) return res.status(400).json({ ok: false, message: 'No bKash paymentID found for this payment' });
+
+  try {
+    const { exec } = await executeBkashPayment(paymentID, pr);
+    const trxId = exec.trxID || exec.trxId || exec.transactionId || null;
+    const execStatus = String(exec.transactionStatus || exec.status || '').toUpperCase();
+    const ok = ['COMPLETED','SUCCESS'].includes(execStatus) || exec.statusCode === '0000';
+    if (!ok) {
+      await pool.query(`UPDATE payments SET gateway_response = COALESCE(gateway_response,'{}'::jsonb) || $2::jsonb, updated_at=now() WHERE id=$1`, [pr.id, JSON.stringify({ bkash_execute: exec })]);
+      return res.status(400).json({ ok: false, executed: false, paymentID, exec, message: exec.statusMessage || exec.message || 'bKash execute not completed' });
+    }
+    const amount = Number(exec.amount || pr.amount || 0);
+    const result = await recordPaymentAndReactivate({
+      gateway: 'bkash', amount, invoice_id: pr.invoice_id || undefined, subscriber_id: pr.subscriber_id,
+      trx_id: trxId || undefined, method: pr.method || 'portal', payer_number: exec.customerMsisdn || exec.payerAccount || undefined,
+      raw: { bkash_execute: exec, manual: true }, payment_ref: pr.payment_ref, currency: exec.currency || pr.currency || 'BDT', status: 'COMPLETED'
+    });
+    await pool.query(`UPDATE payments SET gateway_response = COALESCE(gateway_response,'{}'::jsonb) || $2::jsonb, updated_at=now() WHERE id=$1`, [pr.id, JSON.stringify({ bkash_execute: exec })]);
+    return res.json({ ok: true, executed: true, paymentID, trxId, exec, result });
+  } catch (e: any) {
+    return res.status(400).json({ ok: false, message: e.message || 'bKash execute failed' });
+  }
+}));
+
 router.get('/payments', asyncHandler(async (req, res) => {
   const where: string[] = []; const params: any[] = [];
   if (req.query.subscriber_id) { params.push(req.query.subscriber_id); where.push(`p.subscriber_id=$${params.length}`); }
@@ -240,7 +380,8 @@ router.post('/payments/checkout', asyncHandler(async (req, res) => {
       checkout = await plugin.createCheckoutSession({
         invoiceId: invoice?.id, paymentRef: payment_ref, amount, currency: b.currency || invoice?.currency || 'BDT',
         subscriber, invoice, returnUrl: b.return_url, cancelUrl: b.cancel_url, webhookUrl: b.webhook_url,
-        metadata: b.metadata || {}, mode: (cfg?.mode || 'SANDBOX')
+        metadata: b.metadata || {}, mode: (cfg?.mode || 'SANDBOX'),
+        config: cfg?.config || {}, credentials: cfg?.credentials || {}, webhookSecret: cfg?.webhook_secret || null
       });
     } catch (e:any) { checkout = { ok: false, gateway, message: e.message }; }
   } else {

@@ -1,0 +1,124 @@
+'use client';
+
+import React, { useCallback, useEffect, useState } from 'react';
+import { useAuth } from '@/lib/auth-context';
+import { apiFetch } from '@/lib/api';
+import { RefreshCw, Plus, UsersRound } from 'lucide-react';
+
+function money(v:any){ const n=Number(v||0); return `৳${n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`; }
+
+export default function HrPage() {
+  const { token, user } = useAuth();
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [attendance, setAttendance] = useState<any[]>([]);
+  const [leaves, setLeaves] = useState<any[]>([]);
+  const [runs, setRuns] = useState<any[]>([]);
+  const [selectedRun, setSelectedRun] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string|null>(null);
+  const [msg, setMsg] = useState<string|null>(null);
+  const isAdmin = String(user?.role) === 'SUPER_ADMIN';
+  const canManage = ['SUPER_ADMIN','BILLING_OPERATOR','TECHNICIAN'].includes(String(user?.role));
+
+  const [emp, setEmp] = useState<any>({ full_name:'', designation:'', department:'', phone:'', email:'', base_salary:'', commission_percent:'', status:'ACTIVE' });
+  const [att, setAtt] = useState<any>({ employee_id:'', att_date: new Date().toISOString().slice(0,10), status:'PRESENT', notes:'' });
+  const [leave, setLeave] = useState<any>({ employee_id:'', leave_type:'CASUAL', from_date: new Date().toISOString().slice(0,10), to_date: new Date().toISOString().slice(0,10), reason:'' });
+  const [period, setPeriod] = useState<string>(new Date().toISOString().slice(0,7));
+
+  const load = useCallback(async () => {
+    if (!token) return; setLoading(true); setErr(null);
+    try {
+      const [e,a,l,r] = await Promise.all([
+        apiFetch<any>('/api/hr/employees', {}, token),
+        apiFetch<any>('/api/hr/attendance', {}, token),
+        apiFetch<any>('/api/hr/leaves', {}, token).catch(()=>({data:[]})),
+        apiFetch<any>('/api/hr/payroll/runs', {}, token),
+      ]);
+      setEmployees(e.data||[]); setAttendance(a.data||[]); setLeaves(l.data||[]); setRuns(r.data||[]);
+    } catch(e:any){ setErr(e.message); } finally { setLoading(false); }
+  }, [token]);
+  useEffect(()=>{ load(); }, [load]);
+
+  const addEmployee = async () => { if(!token) return; setErr(null); try { await apiFetch('/api/hr/employees', { method:'POST', body: JSON.stringify({ ...emp, base_salary:Number(emp.base_salary||0), commission_percent:Number(emp.commission_percent||0) }) }, token); setMsg('Employee added'); setEmp({ full_name:'', designation:'', department:'', phone:'', email:'', base_salary:'', commission_percent:'', status:'ACTIVE' }); await load(); } catch(e:any){ setErr(e.message);} };
+  const markAttendance = async () => { if(!token) return; setErr(null); try { await apiFetch('/api/hr/attendance', { method:'POST', body: JSON.stringify(att) }, token); setMsg('Attendance saved'); await load(); } catch(e:any){ setErr(e.message);} };
+  const requestLeave = async () => { if(!token) return; setErr(null); try { await apiFetch('/api/hr/leaves', { method:'POST', body: JSON.stringify(leave) }, token); setMsg('Leave request submitted'); await load(); } catch(e:any){ setErr(e.message);} };
+  const updateLeave = async (id:string,status:string) => { if(!token) return; try { await apiFetch(`/api/hr/leaves/${id}`, { method:'PUT', body: JSON.stringify({status}) }, token); await load(); } catch(e:any){ setErr(e.message);} };
+  const createRun = async () => { if(!token) return; setErr(null); try { const r=await apiFetch<any>('/api/hr/payroll/runs', { method:'POST', body: JSON.stringify({ period_month: period }) }, token); setSelectedRun(r.data); setMsg(`Payroll draft created for ${period} (commissions auto-calculated from completed field collections)`); await load(); } catch(e:any){ setErr(e.message);} };
+  const viewRun = async (id:string) => { if(!token) return; try { const r=await apiFetch<any>(`/api/hr/payroll/runs/${id}`, {}, token); setSelectedRun(r.data); } catch(e:any){ setErr(e.message);} };
+  const viewPayslips = async (id:string) => { if(!token) return; try { const r=await apiFetch<any>(`/api/hr/payroll/runs/${id}/payslips`, {}, token); setSelectedRun({ ...r.data.run, items: r.data.payslips?.map((p:any)=>({ employee_id:p.employee.id, full_name:p.employee.name, employee_code:p.employee.code, designation:p.employee.designation, department:p.employee.department, base_salary:p.earnings.base_salary, commission:p.earnings.commission, bonus:p.earnings.bonus, deductions:p.deductions.total, net_pay:p.net_pay, components:p.components }))||[], payslips:true }); } catch(e:any){ setErr(e.message);} };
+  const postRun = async (id:string) => { if(!token) return; try { await apiFetch(`/api/hr/payroll/runs/${id}/post`, { method:'POST' }, token); setMsg('Payroll posted (salary expense recorded)'); await viewRun(id); await load(); } catch(e:any){ setErr(e.message);} };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div><h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><UsersRound className="w-6 h-6 text-primary"/>HR & Payroll</h1><p className="text-sm text-muted-foreground">Employees, attendance, leave, commissions and payroll (Phase 7).</p></div>
+        <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
+      </div>
+      {err && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>}
+      {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{msg}</div>}
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        <div className="xl:col-span-2 space-y-5">
+          <Panel title="Employees">
+            <table className="w-full text-xs"><thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border"><th className="text-left py-2 px-2">Code</th><th className="text-left py-2 px-2">Name</th><th className="text-left py-2 px-2">Designation</th><th className="text-left py-2 px-2">Dept</th><th className="text-left py-2 px-2">Salary</th><th className="text-left py-2 px-2">Comm%</th><th className="text-left py-2 px-2">Status</th></tr></thead>
+              <tbody>{employees.map(e=>(<tr key={e.id} className="border-b border-border/50"><td className="py-2 px-2 font-mono">{e.employee_code}</td><td className="py-2 px-2 font-medium">{e.full_name}<div className="text-muted-foreground">{e.phone||e.email||''}</div></td><td className="py-2 px-2">{e.designation||'-'}</td><td className="py-2 px-2">{e.department||'-'}</td><td className="py-2 px-2">{money(e.base_salary)}</td><td className="py-2 px-2">{Number(e.commission_percent||0)}%</td><td className="py-2 px-2">{e.status}</td></tr>))}{!employees.length && <tr><td colSpan={7} className="py-6 text-center text-muted-foreground">No employees.</td></tr>}</tbody>
+            </table>
+          </Panel>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <Panel title="Attendance (recent)">
+              <table className="w-full text-xs"><thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border"><th className="text-left py-2 px-2">Date</th><th className="text-left py-2 px-2">Employee</th><th className="text-left py-2 px-2">Status</th></tr></thead>
+                <tbody>{attendance.slice(0,50).map(a=>(<tr key={a.id} className="border-b border-border/50"><td className="py-2 px-2">{String(a.att_date).slice(0,10)}</td><td className="py-2 px-2">{a.full_name}</td><td className="py-2 px-2">{a.status}</td></tr>))}{!attendance.length && <tr><td colSpan={3} className="py-6 text-center text-muted-foreground">No attendance records.</td></tr>}</tbody>
+              </table>
+            </Panel>
+            <Panel title="Leave Requests">
+              <table className="w-full text-xs"><thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border"><th className="text-left py-2 px-2">Employee</th><th className="text-left py-2 px-2">Period</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Action</th></tr></thead>
+                <tbody>{leaves.map(l=>(<tr key={l.id} className="border-b border-border/50"><td className="py-2 px-2">{l.full_name}<div className="text-muted-foreground">{l.leave_type}</div></td><td className="py-2 px-2">{String(l.from_date).slice(0,10)}→{String(l.to_date).slice(0,10)}</td><td className="py-2 px-2">{l.status}</td><td className="py-2 px-2 space-x-1">{isAdmin && l.status==='PENDING' && <><button onClick={()=>updateLeave(l.id,'APPROVED')} className="px-2 py-0.5 rounded bg-emerald-600 text-white">Approve</button><button onClick={()=>updateLeave(l.id,'REJECTED')} className="px-2 py-0.5 rounded border border-border">Reject</button></>}</td></tr>))}{!leaves.length && <tr><td colSpan={4} className="py-6 text-center text-muted-foreground">No leave requests.</td></tr>}</tbody>
+              </table>
+            </Panel>
+          </div>
+
+          <div className="rounded-2xl border border-border bg-card p-4">
+            <h2 className="font-bold mb-3">Payroll Runs</h2>
+            <div className="overflow-auto max-h-[260px]">
+              <table className="w-full text-xs"><thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border"><th className="text-left py-2 px-2">Period</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Total</th><th className="text-left py-2 px-2">Actions</th></tr></thead>
+                <tbody>{runs.map(r=>(<tr key={r.id} className="border-b border-border/50"><td className="py-2 px-2 font-medium">{r.period_month}</td><td className="py-2 px-2">{r.status}</td><td className="py-2 px-2 font-semibold">{money(r.total_amount)}</td><td className="py-2 px-2 space-x-2"><button onClick={()=>viewRun(r.id)} className="px-2 py-1 rounded border border-border">View</button><button onClick={()=>viewPayslips(r.id)} className="px-2 py-1 rounded border border-border">Payslips</button>{isAdmin && r.status!=='POSTED' && <button onClick={()=>postRun(r.id)} className="px-2 py-1 rounded bg-primary text-primary-foreground">Post</button>}</td></tr>))}{!runs.length && <tr><td colSpan={4} className="py-6 text-center text-muted-foreground">No payroll runs.</td></tr>}</tbody>
+              </table>
+            </div>
+            {selectedRun && (
+              <div className="mt-4 p-3 rounded-xl border border-border bg-muted/20">
+                <div className="font-semibold mb-2">Run {selectedRun.period_month} • {selectedRun.status} • {money(selectedRun.total_amount)} {selectedRun.payslips?'• Payslips':''}</div>
+                <div className="overflow-auto max-h-56"><table className="w-full text-xs"><thead className="text-muted-foreground"><tr className="border-b border-border"><th className="text-left py-1 px-2">Employee</th><th className="text-left py-1 px-2">Base</th><th className="text-left py-1 px-2">Comm</th><th className="text-left py-1 px-2">Bonus</th><th className="text-left py-1 px-2">Deduct</th><th className="text-left py-1 px-2">Net</th></tr></thead><tbody>{(selectedRun.items||[]).map((i:any)=>(<tr key={i.id||i.employee_id} className="border-b border-border/50"><td className="py-1 px-2">{i.full_name}</td><td className="py-1 px-2">{money(i.base_salary)}</td><td className="py-1 px-2">{money(i.commission)}</td><td className="py-1 px-2">{money(i.bonus)}</td><td className="py-1 px-2">{money(i.deductions)}</td><td className="py-1 px-2 font-semibold">{money(i.net_pay)}</td></tr>))}</tbody></table></div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-5">
+          <FormCard title="Add Employee" onSubmit={addEmployee} disabled={!isAdmin || !emp.full_name} btn="Add Employee">
+            <input placeholder="Full name" className="w-full p-2.5 rounded-xl border border-border bg-card" value={emp.full_name} onChange={e=>setEmp({...emp,full_name:e.target.value})} />
+            <input placeholder="Designation" className="w-full p-2.5 rounded-xl border border-border bg-card" value={emp.designation} onChange={e=>setEmp({...emp,designation:e.target.value})} />
+            <input placeholder="Department" className="w-full p-2.5 rounded-xl border border-border bg-card" value={emp.department} onChange={e=>setEmp({...emp,department:e.target.value})} />
+            <div className="grid grid-cols-2 gap-2"><input placeholder="Phone" className="p-2.5 rounded-xl border border-border bg-card" value={emp.phone} onChange={e=>setEmp({...emp,phone:e.target.value})} /><input placeholder="Email" className="p-2.5 rounded-xl border border-border bg-card" value={emp.email} onChange={e=>setEmp({...emp,email:e.target.value})} /></div>
+            <div className="grid grid-cols-2 gap-2"><input type="number" placeholder="Base salary" className="p-2.5 rounded-xl border border-border bg-card" value={emp.base_salary} onChange={e=>setEmp({...emp,base_salary:e.target.value})} /><input type="number" placeholder="Commission %" className="p-2.5 rounded-xl border border-border bg-card" value={emp.commission_percent} onChange={e=>setEmp({...emp,commission_percent:e.target.value})} /></div>
+          </FormCard>
+          <FormCard title="Mark Attendance" onSubmit={markAttendance} disabled={!isAdmin || !att.employee_id} btn="Save Attendance">
+            <select className="w-full p-2.5 rounded-xl border border-border bg-card" value={att.employee_id} onChange={e=>setAtt({...att,employee_id:e.target.value})}><option value="">Select employee</option>{employees.map(e=><option key={e.id} value={e.id}>{e.full_name} ({e.employee_code})</option>)}</select>
+            <input type="date" className="w-full p-2.5 rounded-xl border border-border bg-card" value={att.att_date} onChange={e=>setAtt({...att,att_date:e.target.value})} />
+            <select className="w-full p-2.5 rounded-xl border border-border bg-card" value={att.status} onChange={e=>setAtt({...att,status:e.target.value})}>{['PRESENT','ABSENT','LEAVE','HALF_DAY'].map(x=><option key={x} value={x}>{x}</option>)}</select>
+          </FormCard>
+          <FormCard title="Leave Request" onSubmit={requestLeave} disabled={!canManage || !leave.employee_id} btn="Submit Leave">
+            <select className="w-full p-2.5 rounded-xl border border-border bg-card" value={leave.employee_id} onChange={e=>setLeave({...leave,employee_id:e.target.value})}><option value="">Employee</option>{employees.map(e=><option key={e.id} value={e.id}>{e.full_name}</option>)}</select>
+            <select className="w-full p-2.5 rounded-xl border border-border bg-card" value={leave.leave_type} onChange={e=>setLeave({...leave,leave_type:e.target.value})}>{['CASUAL','SICK','ANNUAL','UNPAID'].map(x=><option key={x} value={x}>{x}</option>)}</select>
+            <div className="grid grid-cols-2 gap-2"><input type="date" className="p-2.5 rounded-xl border border-border bg-card" value={leave.from_date} onChange={e=>setLeave({...leave,from_date:e.target.value})} /><input type="date" className="p-2.5 rounded-xl border border-border bg-card" value={leave.to_date} onChange={e=>setLeave({...leave,to_date:e.target.value})} /></div>
+            <input placeholder="Reason" className="w-full p-2.5 rounded-xl border border-border bg-card" value={leave.reason} onChange={e=>setLeave({...leave,reason:e.target.value})} />
+          </FormCard>
+          <div className="rounded-2xl border border-border bg-card p-4 space-y-3"><h2 className="font-bold">Create Payroll Run</h2><input type="month" className="w-full p-2.5 rounded-xl border border-border bg-card" value={period} onChange={e=>setPeriod(e.target.value)} /><button onClick={createRun} disabled={!isAdmin || !period} className="w-full px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold disabled:opacity-50">Generate Draft Run</button><div className="text-xs text-muted-foreground">Draft uses base salary + commission% of completed field collections for the period. Posting records salary expense.</div></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Panel({title,children}:any){ return <div className="rounded-2xl border border-border bg-card p-4"><h2 className="font-bold mb-3">{title}</h2><div className="overflow-auto max-h-[320px]">{children}</div></div>; }
+function FormCard({title,onSubmit,disabled,btn,children}:any){ return <div className="rounded-2xl border border-border bg-card p-4 space-y-3"><h2 className="font-bold flex items-center gap-2"><Plus className="w-4 h-4 text-primary"/>{title}</h2><div className="space-y-2 text-sm">{children}</div><button onClick={onSubmit} disabled={disabled} className="w-full px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold disabled:opacity-50">{btn||'Save'}</button></div>; }

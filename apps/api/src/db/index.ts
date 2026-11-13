@@ -941,6 +941,312 @@ export async function initDb() {
         ('daily_revenue_summary_telegram', 'TELEGRAM', 'DAILY_REVENUE_SUMMARY', NULL, '📊 Daily Revenue Summary ({{date}})\nCollections: {{collections}}\nInvoices: {{invoices}}\nDue Outstanding: {{outstanding}}', '["date","collections","invoices","outstanding"]'::jsonb)
       ON CONFLICT DO NOTHING;
   `).catch(e => console.error('[DB] Phase 5 schema extension error', e.message));
+
+  // Phase 7: Finance, HRM, Procurement/Assets, Hotspot, Reporting & Audit foundations
+  await pool.query(`
+    -- Accounts & Finance
+    CREATE TABLE IF NOT EXISTS finance_accounts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      code TEXT UNIQUE,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'ASSET', -- ASSET, LIABILITY, EQUITY, INCOME, EXPENSE
+      parent_id UUID REFERENCES finance_accounts(id) ON DELETE SET NULL,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      meta JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS finance_transactions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      txn_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      txn_type TEXT NOT NULL, -- INCOME, EXPENSE, TRANSFER, COLLECTION, PAYMENT, ADJUSTMENT
+      account_id UUID REFERENCES finance_accounts(id) ON DELETE SET NULL,
+      counter_account_id UUID REFERENCES finance_accounts(id) ON DELETE SET NULL,
+      method TEXT, -- CASH, BANK, BKASH, NAGAD, ROCKET, CARD, OTHER
+      amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'BDT',
+      reference_type TEXT, -- INVOICE, PAYMENT, PURCHASE, PAYROLL, VOUCHER, MANUAL
+      reference_id TEXT,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      reseller_id UUID REFERENCES resellers(id) ON DELETE SET NULL,
+      vendor_id UUID,
+      employee_id UUID,
+      description TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS finance_vouchers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      voucher_no TEXT UNIQUE,
+      voucher_type TEXT NOT NULL, -- RECEIPT, PAYMENT, JOURNAL
+      date DATE NOT NULL DEFAULT CURRENT_DATE,
+      party_type TEXT,
+      party_id TEXT,
+      amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      method TEXT,
+      narration TEXT,
+      status TEXT NOT NULL DEFAULT 'POSTED',
+      lines JSONB DEFAULT '[]'::jsonb,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- HRM & Payroll
+    CREATE TABLE IF NOT EXISTS hr_employees (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      employee_code TEXT UNIQUE,
+      full_name TEXT NOT NULL,
+      designation TEXT,
+      department TEXT,
+      role TEXT,
+      phone TEXT,
+      email TEXT,
+      nid_number TEXT,
+      address TEXT,
+      joining_date DATE,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      base_salary NUMERIC(14,2) NOT NULL DEFAULT 0,
+      commission_percent NUMERIC(8,2) NOT NULL DEFAULT 0,
+      meta JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS hr_attendance (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      employee_id UUID NOT NULL REFERENCES hr_employees(id) ON DELETE CASCADE,
+      att_date DATE NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PRESENT', -- PRESENT, ABSENT, LEAVE, HALF_DAY
+      check_in TIMESTAMPTZ,
+      check_out TIMESTAMPTZ,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE(employee_id, att_date)
+    );
+
+    CREATE TABLE IF NOT EXISTS hr_payroll_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      period_month TEXT NOT NULL, -- YYYY-MM
+      status TEXT NOT NULL DEFAULT 'DRAFT', -- DRAFT, POSTED, PAID
+      total_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      posted_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS hr_payroll_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      payroll_run_id UUID NOT NULL REFERENCES hr_payroll_runs(id) ON DELETE CASCADE,
+      employee_id UUID NOT NULL REFERENCES hr_employees(id) ON DELETE CASCADE,
+      base_salary NUMERIC(14,2) NOT NULL DEFAULT 0,
+      commission NUMERIC(14,2) NOT NULL DEFAULT 0,
+      bonus NUMERIC(14,2) NOT NULL DEFAULT 0,
+      deductions NUMERIC(14,2) NOT NULL DEFAULT 0,
+      net_pay NUMERIC(14,2) NOT NULL DEFAULT 0,
+      notes TEXT
+    );
+
+    -- Procurement & Assets
+    CREATE TABLE IF NOT EXISTS vendors (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      company_name TEXT,
+      phone TEXT,
+      email TEXT,
+      address TEXT,
+      category TEXT,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS purchases (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      purchase_no TEXT UNIQUE,
+      vendor_id UUID REFERENCES vendors(id) ON DELETE SET NULL,
+      warehouse_id UUID REFERENCES inventory_warehouses(id) ON DELETE SET NULL,
+      purchase_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      status TEXT NOT NULL DEFAULT 'DRAFT', -- DRAFT, RECEIVED, BILLED, PAID, CANCELLED
+      subtotal NUMERIC(14,2) NOT NULL DEFAULT 0,
+      tax NUMERIC(14,2) NOT NULL DEFAULT 0,
+      total NUMERIC(14,2) NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS purchase_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      purchase_id UUID NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
+      item_name TEXT NOT NULL,
+      category TEXT,
+      sku TEXT,
+      qty NUMERIC(12,2) NOT NULL DEFAULT 1,
+      unit_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
+      total_cost NUMERIC(14,2) NOT NULL DEFAULT 0,
+      inventory_item_id UUID REFERENCES inventory_items(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS assets (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      asset_tag TEXT UNIQUE,
+      name TEXT NOT NULL,
+      category TEXT,
+      vendor_id UUID REFERENCES vendors(id) ON DELETE SET NULL,
+      purchase_id UUID REFERENCES purchases(id) ON DELETE SET NULL,
+      purchase_date DATE,
+      cost NUMERIC(14,2) NOT NULL DEFAULT 0,
+      current_value NUMERIC(14,2) NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'ACTIVE', -- ACTIVE, MAINTENANCE, RETIRED, DISPOSED
+      location TEXT,
+      assigned_to_employee_id UUID REFERENCES hr_employees(id) ON DELETE SET NULL,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Hotspot / Vouchers
+    CREATE TABLE IF NOT EXISTS hotspot_vouchers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      batch_no TEXT,
+      code TEXT NOT NULL UNIQUE,
+      plan_name TEXT,
+      package_name TEXT,
+      price NUMERIC(12,2) NOT NULL DEFAULT 0,
+      duration_hours INT,
+      data_limit_mb INT,
+      status TEXT NOT NULL DEFAULT 'AVAILABLE', -- AVAILABLE, SOLD, ACTIVE, USED, EXPIRED, CANCELLED
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      reseller_id UUID REFERENCES resellers(id) ON DELETE SET NULL,
+      sold_at TIMESTAMPTZ,
+      activated_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Field / Agent workflows
+    CREATE TABLE IF NOT EXISTS field_activities (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      activity_type TEXT NOT NULL, -- COLLECTION, VISIT, INSTALLATION, SUPPORT, TICKET
+      employee_id UUID REFERENCES hr_employees(id) ON DELETE SET NULL,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      ticket_id UUID REFERENCES tickets(id) ON DELETE SET NULL,
+      reseller_id UUID REFERENCES resellers(id) ON DELETE SET NULL,
+      scheduled_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      status TEXT NOT NULL DEFAULT 'PLANNED', -- PLANNED, IN_PROGRESS, DONE, CANCELLED
+      amount NUMERIC(14,2),
+      proof_ref TEXT,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Audit logs
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      actor_id TEXT,
+      actor_name TEXT,
+      actor_role TEXT,
+      action TEXT NOT NULL,
+      entity_type TEXT,
+      entity_id TEXT,
+      details JSONB DEFAULT '{}'::jsonb,
+      ip_address TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_fin_txn_date ON finance_transactions(txn_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_fin_txn_type ON finance_transactions(txn_type);
+    CREATE INDEX IF NOT EXISTS idx_fin_txn_account ON finance_transactions(account_id);
+    CREATE INDEX IF NOT EXISTS idx_hr_att_date ON hr_attendance(att_date);
+    CREATE INDEX IF NOT EXISTS idx_hr_att_emp ON hr_attendance(employee_id);
+    CREATE INDEX IF NOT EXISTS idx_purchases_vendor ON purchases(vendor_id);
+    CREATE INDEX IF NOT EXISTS idx_assets_status ON assets(status);
+    CREATE INDEX IF NOT EXISTS idx_vouchers_status ON hotspot_vouchers(status);
+    CREATE INDEX IF NOT EXISTS idx_vouchers_code ON hotspot_vouchers(code);
+    CREATE INDEX IF NOT EXISTS idx_field_activities_status ON field_activities(status);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
+
+    INSERT INTO finance_accounts(code,name,type) VALUES
+      ('1000','Cash','ASSET'),
+      ('1010','Bank','ASSET'),
+      ('1020','bKash/MFS','ASSET'),
+      ('4000','Service Revenue','INCOME'),
+      ('4010','Installation/Other Income','INCOME'),
+      ('5000','Operating Expense','EXPENSE'),
+      ('5010','Salary Expense','EXPENSE'),
+      ('5020','Network/Utility Expense','EXPENSE')
+    ON CONFLICT (code) DO NOTHING;
+  `).catch(e => console.error('[DB] Phase 7 schema extension error', e.message));
+
+  // Phase 7+ completeness extensions
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS hr_leaves (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      employee_id UUID NOT NULL REFERENCES hr_employees(id) ON DELETE CASCADE,
+      leave_type TEXT NOT NULL DEFAULT 'CASUAL',
+      from_date DATE NOT NULL,
+      to_date DATE NOT NULL,
+      days NUMERIC(6,2) NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED, CANCELLED
+      reason TEXT,
+      approved_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS finance_journal_entries (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      entry_no TEXT UNIQUE,
+      entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      description TEXT,
+      source_type TEXT,
+      source_id TEXT,
+      posted BOOLEAN NOT NULL DEFAULT true,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS finance_journal_lines (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      entry_id UUID NOT NULL REFERENCES finance_journal_entries(id) ON DELETE CASCADE,
+      account_id UUID REFERENCES finance_accounts(id) ON DELETE SET NULL,
+      debit NUMERIC(14,2) NOT NULL DEFAULT 0,
+      credit NUMERIC(14,2) NOT NULL DEFAULT 0,
+      memo TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS report_schedules (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      report_key TEXT NOT NULL,
+      format TEXT NOT NULL DEFAULT 'CSV',
+      schedule_cron TEXT,
+      recipients JSONB DEFAULT '[]'::jsonb,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      last_run_at TIMESTAMPTZ,
+      last_status TEXT,
+      config JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    ALTER TABLE assets ADD COLUMN IF NOT EXISTS depreciation_rate NUMERIC(8,4) DEFAULT 0;
+    ALTER TABLE assets ADD COLUMN IF NOT EXISTS accumulated_depreciation NUMERIC(14,2) DEFAULT 0;
+    ALTER TABLE assets ADD COLUMN IF NOT EXISTS last_depreciated_at TIMESTAMPTZ;
+    ALTER TABLE hotspot_vouchers ADD COLUMN IF NOT EXISTS radius_synced BOOLEAN DEFAULT false;
+    ALTER TABLE hotspot_vouchers ADD COLUMN IF NOT EXISTS used_bytes BIGINT DEFAULT 0;
+    ALTER TABLE hotspot_vouchers ADD COLUMN IF NOT EXISTS mac_address TEXT;
+    ALTER TABLE hr_payroll_items ADD COLUMN IF NOT EXISTS components JSONB DEFAULT '{}'::jsonb;
+
+    CREATE INDEX IF NOT EXISTS idx_hr_leaves_emp ON hr_leaves(employee_id, from_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_journal_lines_entry ON finance_journal_lines(entry_id);
+    CREATE INDEX IF NOT EXISTS idx_journal_lines_account ON finance_journal_lines(account_id);
+  `).catch(e => console.error('[DB] Phase 7+ schema extension error', e.message));
 }
 
 export { pool };
+
+

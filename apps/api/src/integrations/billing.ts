@@ -2,6 +2,7 @@ import { pool } from '../db';
 import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikDisconnectPppUser } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
+import { auditLog } from './audit';
 
 type AnyObj = Record<string, any>;
 
@@ -377,31 +378,71 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
   const payment = payRes.rows[0];
 
   let updatedInvoice = invoice;
-  if (invoice && status === 'COMPLETED') {
-    // idempotent invoice update: do not exceed total
-    const total = Number(invoice.total_amount || invoice.amount || 0);
-    const paidBefore = Number(invoice.paid_amount || 0);
-    const paid = +Math.min(total, paidBefore + amount).toFixed(2);
+  const applyToInvoice = async (inv: any, applyAmount: number) => {
+    const total = Number(inv.total_amount || inv.amount || 0);
+    const paidBefore = Number(inv.paid_amount || 0);
+    const paid = +Math.min(total, paidBefore + applyAmount).toFixed(2);
     const dueAmt = +Math.max(0, total - paid).toFixed(2);
-    const invStatus = dueAmt <= 0 ? 'PAID' : (paid > 0 ? 'PARTIAL' : invoice.status);
-    updatedInvoice = (await pool.query(`UPDATE invoices SET paid_amount=$2, due_amount=$3, status=$4, paid_at=CASE WHEN $4='PAID' THEN COALESCE(paid_at, now()) ELSE paid_at END, updated_at=now() WHERE id=$1 RETURNING *`,
-      [invoice.id, paid, dueAmt, invStatus])).rows[0];
+    const invStatus = dueAmt <= 0 ? 'PAID' : (paid > 0 ? 'PARTIAL' : inv.status);
+    return (await pool.query(`UPDATE invoices SET paid_amount=$2, due_amount=$3, status=$4, paid_at=CASE WHEN $4='PAID' THEN COALESCE(paid_at, now()) ELSE paid_at END, updated_at=now() WHERE id=$1 RETURNING *`,
+      [inv.id, paid, dueAmt, invStatus])).rows[0];
+  };
+
+  if (invoice && status === 'COMPLETED') {
+    updatedInvoice = await applyToInvoice(invoice, amount);
+  } else if (!invoice && subscriberId && status === 'COMPLETED') {
+    // Advance/unallocated payment: apply to open invoices (oldest first)
+    let remaining = amount;
+    const openInvs = (await pool.query(`SELECT * FROM invoices WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE') AND GREATEST(due_amount,0) > 0 ORDER BY COALESCE(due_date, issue_date, created_at) ASC, created_at ASC`, [subscriberId])).rows;
+    for (const inv of openInvs) {
+      if (remaining <= 0) break;
+      const dueAmt = Number(inv.due_amount || 0);
+      const take = Math.min(remaining, dueAmt);
+      const upd = await applyToInvoice(inv, take);
+      if (!updatedInvoice) updatedInvoice = upd;
+      remaining = +(remaining - take).toFixed(2);
+    }
+    // Any remaining amount is kept as overpayment (recorded as payment; invoices fully settled). No negative-due/credit ledger yet.
   }
 
   let reactivation: any = null;
   if (subscriberId) {
-    if (invoice) await recalcSubscriberDue(subscriberId);
-    else await pool.query(`UPDATE subscribers SET balance = GREATEST(COALESCE(balance,0)-$2,0), updated_at=now() WHERE id=$1`, [subscriberId, amount]).catch(()=>{});
+    await recalcSubscriberDue(subscriberId).catch(()=>{});
     if (status === 'COMPLETED') {
       await pool.query(`INSERT INTO wallet_transactions(subscriber_id, type, amount, reference_id, reference_type, description, metadata)
         VALUES($1,'CREDIT',$2,$3,$4,$5,$6::jsonb)`,
-        [subscriberId, amount, payment.payment_ref, 'PAYMENT', `Payment via ${input.gateway}`, JSON.stringify({ invoice_id: invoice?.id || null, trx_id: trx })]).catch(()=>{});
+        [subscriberId, amount, payment.payment_ref, 'PAYMENT', `${invoice ? 'Invoice payment' : 'Advance payment'} via ${input.gateway}`, JSON.stringify({ invoice_id: invoice?.id || updatedInvoice?.id || null, trx_id: trx, advance: !invoice })]).catch(()=>{});
     }
     const due = await recalcSubscriberDue(subscriberId);
     const sub = (await pool.query('SELECT status, suspension_stage, walled_garden FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
     if (status === 'COMPLETED' && due <= 0 && sub && (sub.status === 'SUSPENDED' || sub.status === 'EXPIRED' || String(sub.suspension_stage || 'NONE') !== 'NONE' || sub.walled_garden)) {
       reactivation = await reactivateSubscriber(subscriberId, `Payment confirmed (${input.gateway}${trx ? ' '+trx : ''})`);
     }
+  }
+
+  // Best-effort finance posting & audit for completed payments
+  if (status === 'COMPLETED') {
+    try {
+      const ref = payment.payment_ref || payment_ref;
+      const exists = await pool.query(`SELECT 1 FROM finance_transactions WHERE reference_id=$1 LIMIT 1`, [ref]).catch(()=>({rows:[]}));
+      if (!exists.rows?.length) {
+        const method = String(input.gateway||input.method||'CASH').toUpperCase();
+        const accCode = method.includes('BANK')?'1010':(method.match(/BKASH|NAGAD|ROCKET|MFS/)?'1020':'1000');
+        const cashAccR = await pool.query('SELECT id FROM finance_accounts WHERE code=$1 LIMIT 1',[accCode]).catch(()=>({rows:[]}));
+        const revAccR = await pool.query("SELECT id FROM finance_accounts WHERE code='4000' LIMIT 1").catch(()=>({rows:[]}));
+        await pool.query(`INSERT INTO finance_transactions(txn_date,txn_type,method,amount,currency,reference_type,reference_id,subscriber_id,description,created_by)
+          VALUES(COALESCE($1::date,CURRENT_DATE),'COLLECTION',$2,$3,$4,'PAYMENT',$5,$6,$7,'system')`,
+          [payment.verified_at||payment.created_at, input.gateway||input.method||'CASH', amount, input.currency||'BDT', ref, subscriberId, `Payment ${ref} (${input.gateway||''}${trx?` ${trx}`:''})`]).catch(()=>{});
+        const cashAcc=cashAccR.rows[0]?.id, revAcc=revAccR.rows[0]?.id;
+        if(cashAcc && revAcc){
+          const je=await pool.query(`INSERT INTO finance_journal_entries(entry_no,entry_date,description,source_type,source_id,posted,created_by) VALUES($1,COALESCE($2::date,CURRENT_DATE),$3,'PAYMENT',$4,true,'system') RETURNING id`,
+            [`JE-PAY-${Date.now()}-${Math.random().toString(36).slice(2,5).toUpperCase()}`, payment.verified_at||payment.created_at, `Payment ${ref}`, String(ref)]).catch(()=>({rows:[]}));
+          const jid=je.rows[0]?.id;
+          if(jid){ await pool.query(`INSERT INTO finance_journal_lines(entry_id,account_id,debit,credit,memo) VALUES($1,$2,$3,0,'cash/mfs'),($1,$4,0,$3,'revenue')`, [jid,cashAcc,amount,revAcc]).catch(()=>{}); }
+        }
+      }
+      await auditLog({ action:'PAYMENT_COMPLETED', entity_type:'payment', entity_id: payment.id||ref, details:{ gateway: input.gateway, amount, trx_id: trx, subscriber_id: subscriberId, invoice_id: updatedInvoice?.id || invoice?.id || null, duplicate:false } }).catch(()=>{});
+    } catch {}
   }
 
   // Best-effort receipt notification

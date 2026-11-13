@@ -20,6 +20,8 @@ module.exports = {
     const currency = String(req.currency || 'usd').toLowerCase();
     const paymentIntentId = makeId('pi');
     const clientSecret = `${paymentIntentId}_secret_${crypto.randomBytes(12).toString('hex')}`;
+    // Real Stripe requires server-side PaymentIntent/Checkout Session creation with secret key and client-side Elements/Checkout.
+    // Return simulated checkout unless fully integrated.
     return {
       ok: true,
       gateway: 'stripe',
@@ -30,8 +32,9 @@ module.exports = {
       currency,
       publishableKeyHint: req.mode === 'LIVE' ? 'pk_live_configured' : 'pk_test_sandbox',
       supports: ['cards', 'apple_pay', 'google_pay', 'elements'],
-      paymentUrl: req.returnUrl ? `${req.returnUrl}?payment_intent=${paymentIntentId}&client_secret=${clientSecret}` : null,
-      message: 'Stripe PaymentIntent/Elements session created (sandbox-ready).',
+      paymentUrl: null,
+      simulated: true,
+      message: 'Stripe checkout created as SIMULATED (live Stripe API/keys and client Elements/Checkout integration required). Configure Stripe keys and integration to collect payment.',
       raw: { paymentRef: req.paymentRef, invoiceId: req.invoiceId }
     };
   },
