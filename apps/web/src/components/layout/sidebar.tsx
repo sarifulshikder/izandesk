@@ -76,8 +76,8 @@ const sidebarGroups: NavGroup[] = [
     label: 'Resellers',
     items: [
       { name: 'All Resellers', href: '/resellers', icon: Briefcase, badge: 'All' },
-      { name: 'Wallet & Recharge', href: '/resellers?tab=wallet', icon: Wallet },
-      { name: 'Renew Subscriber', href: '/resellers?tab=renew', icon: CreditCard },
+      { name: 'Wallet & Recharge', href: '/resellers/wallet', icon: Wallet },
+      { name: 'Renew Subscriber', href: '/resellers/renew', icon: CreditCard },
     ],
   },
   {
@@ -145,7 +145,6 @@ function isItemActive(pathname: string, searchParams: URLSearchParams | null, hr
     return true;
   }
   if (href === '/resellers' && pathname === '/resellers') {
-    if (searchParams?.get('tab')) return false;
     return true;
   }
   return pathname === href || (href !== '/' && pathname.startsWith(href + '/'));
