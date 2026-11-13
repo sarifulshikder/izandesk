@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import {
   LayoutDashboard,
@@ -27,6 +27,8 @@ import {
   Wallet,
   Smartphone,
   Globe,
+  Activity,
+  UserPlus,
 } from 'lucide-react';
 
 interface NavLeaf {
@@ -52,9 +54,16 @@ const sidebarGroups: NavGroup[] = [
     label: 'Core',
     items: [
       { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-      { name: 'Subscribers', href: '/subscribers', icon: Users, badge: '3,842' },
       { name: 'Fiber GIS Map', href: '/gis', icon: MapPin, badge: 'Live GIS' },
       { name: 'Inventory & Serials', href: '/inventory', icon: Boxes, badge: 'Stock' },
+    ],
+  },
+  {
+    label: 'Subscribers',
+    items: [
+      { name: 'All Subscribers', href: '/subscribers', icon: Users, badge: '3,842' },
+      { name: 'Add Subscriber', href: '/subscribers?new=1', icon: UserPlus },
+      { name: 'Live Subscribers', href: '/subscribers/live', icon: Activity },
     ],
   },
   {
@@ -112,22 +121,34 @@ const sidebarGroups: NavGroup[] = [
   },
 ];
 
-function isItemActive(pathname: string, href?: string) {
+function isItemActive(pathname: string, searchParams: URLSearchParams | null, href?: string) {
   if (!href) return false;
   if (href.includes('?')) {
-    const [p] = href.split('?');
-    return pathname === p || pathname.startsWith(p + '/');
+    const [p, q] = href.split('?');
+    if (pathname !== p) return false;
+    const want = new URLSearchParams(q);
+    for (const [k, v] of want.entries()) {
+      if (searchParams?.get(k) !== v) return false;
+    }
+    return true;
+  }
+  // special: /subscribers should be active for list but not when ?new=1 (handled above)
+  if (href === '/subscribers' && pathname === '/subscribers') {
+    if (searchParams?.get('new') === '1' || searchParams?.get('action') === 'new' || searchParams?.get('add') === '1') return false;
+    return true;
   }
   return pathname === href || (href !== '/' && pathname.startsWith(href + '/'));
 }
 
 export function Sidebar() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { activeRole, user, isMobileMenuOpen, setMobileMenuOpen } = useAuth();
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Network: true, Billing: true, Support: false, Plugins: true, System: false });
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Network: true, Billing: true, Support: false, Plugins: true, System: false });
   const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true });
 
   useEffect(() => {
+    if (pathname.startsWith('/subscribers')) setOpenGroups(s => ({ ...s, Subscribers: true }));
     if (pathname.startsWith('/plugins')) setOpenGroups(s => ({ ...s, Plugins: true }));
     if (pathname.startsWith('/plugins/payment-gateways')) setOpenSub(s => ({ ...s, 'Payment Gateways': true }));
   }, [pathname]);
@@ -193,7 +214,7 @@ export function Sidebar() {
                           {isOpen && (
                             <div className="ml-4 pl-3 border-l border-border/70 space-y-0.5 mt-0.5">
                               {item.children.map((c: any) => {
-                                const active = isItemActive(pathname, c.href);
+                                const active = isItemActive(pathname, searchParams, c.href);
                                 return (
                                   <Link key={c.href} href={c.href} onClick={() => setMobileMenuOpen(false)} className={`block px-3 py-2 rounded-lg text-xs ${active ? 'bg-primary text-primary-foreground font-semibold' : 'text-muted-foreground hover:text-foreground hover:bg-muted/80'}`}>
                                     {c.name}
@@ -205,7 +226,7 @@ export function Sidebar() {
                         </div>
                       );
                     }
-                    const active = isItemActive(pathname, item.href);
+                    const active = isItemActive(pathname, searchParams, item.href);
                     const Icon = item.icon;
                     return (
                       <Link key={item.name} href={item.href!} onClick={() => setMobileMenuOpen(false)} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium ${active ? 'bg-primary text-primary-foreground font-semibold' : 'text-foreground/80 hover:bg-muted/80'}`}>

@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, LocateFixed, ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react';
@@ -25,6 +26,7 @@ const steps = [
 
 export default function SubscribersPage() {
   const { token } = useAuth();
+  const searchParams = useSearchParams();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState('');
@@ -80,6 +82,11 @@ export default function SubscribersPage() {
   const radiusRouters = useMemo(() => routers.filter((r: any) => String(r.integration_mode || '').toUpperCase() === 'RADIUS' && r.is_enabled !== false), [routers]);
 
   const openCreate = () => { setEditing(null); setForm({ ...emptyForm }); setStep(1); setGeoMsg(null); setShowForm(true); };
+  useEffect(() => {
+    const wantsNew = searchParams?.get('new') === '1' || searchParams?.get('action') === 'new' || searchParams?.get('add') === '1';
+    if (wantsNew) openCreate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
   const openEdit = (row: any) => {
     setEditing(row);
     setForm({ ...emptyForm, ...row, latitude: row.latitude ?? '', longitude: row.longitude ?? '', bandwidth_mbps: row.bandwidth_mbps ?? '', monthly_bill: row.monthly_bill ?? '', router_id: row.router_id ?? '', provisioning_mode: row.provisioning_mode ?? 'RADIUS' });
