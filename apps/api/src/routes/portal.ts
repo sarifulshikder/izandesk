@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import express = require('express');
-import jwt from 'jsonwebtoken';
+import jwt = require('jsonwebtoken');
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { getInvoiceWithItems } from '../integrations/billing';
