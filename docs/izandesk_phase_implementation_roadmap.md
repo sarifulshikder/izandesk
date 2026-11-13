@@ -133,6 +133,8 @@ flowchart LR
   - Evaluate due policies / trigger suspension-walled-garden and verify restricted provisioning state, RADIUS/CoA enforcement and logs.
   - Complete sandbox checkout+confirm or post a gateway webhook; verify idempotent payment recording and instant reactivation when dues are cleared.
   - Ingest a bKash/personal MFS SMS payload (authenticated or `MFS_SMS_INGEST_TOKEN`) and verify parse/match/recording behavior.
+  - Configure and manage payment gateways from the UI (`/plugins`, `/plugins/payment-gateways/*`) and verify runtime config/enablement.
+- **Notes:** Core Phase 4 capabilities are implemented in code/UI. Live end-to-end validation (real overdue/payment enforcement, NAS captive redirect for walled-garden traffic, signed/provider webhooks and credentials, MFS forwarder/token, and <2s reactivation on active sessions) depends on NAS/device configuration and external gateway/SMS integration setup.
 
 ---
 
