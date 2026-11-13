@@ -90,6 +90,18 @@ router.post('/fup/evaluate', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+router.get('/fup/logs', asyncHandler(async (req, res) => {
+  if (!requireBillingRole(req, res)) return;
+  const subId = req.query.subscriber_id ? String(req.query.subscriber_id) : null;
+  const params: any[] = [];
+  let where = '';
+  if (subId) { params.push(subId); where = 'WHERE l.subscriber_id=$1'; }
+  const r = await pool.query(`SELECT l.*, s.client_code, s.full_name, s.username, s.package_name
+    FROM fup_enforcement_logs l LEFT JOIN subscribers s ON s.id=l.subscriber_id
+    ${where} ORDER BY l.created_at DESC LIMIT 200`, params);
+  res.json({ ok: true, data: r.rows });
+}));
+
 router.post('/subscribers/:id/suspend', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
   const b = req.body || {};

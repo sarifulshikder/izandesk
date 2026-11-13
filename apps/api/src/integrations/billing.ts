@@ -504,15 +504,23 @@ export async function runFupEnforcementSweep() {
       await pool.query('UPDATE subscribers SET fup_exceeded=$2, fup_applied_at=CASE WHEN $2 THEN now() ELSE NULL END, updated_at=now() WHERE id=$1', [sub.id, shouldFup]);
       const effective: any = { ...sub, profile_name: sub.profile_name || sub.package_name || 'default' };
       const rl = shouldFup ? fupRateString(fupMbps as number) : null;
-      try { await syncSubscriberToRadiusDb(effective, { fupRateLimit: rl, fupExceeded: shouldFup }); } catch {}
+      let radiusSyncOk = true, coaOk: any = null;
+      try { await syncSubscriberToRadiusDb(effective, { fupRateLimit: rl, fupExceeded: shouldFup }); } catch { radiusSyncOk = false; }
       try {
         const nas = await resolveNasForSubscriber(sub);
         if (nas?.radius_secret && nas?.host && sub.username) {
           const coa = await sendCoaPacket({ host: nas.host, port: Number(nas.coa_port || 3799), secret: String(nas.radius_secret), username: sub.username, action: 'COA', attributes: rl ? { 'Mikrotik-Rate-Limit': rl } : {} });
+          coaOk = coa?.ok ?? null;
           if (!coa.ok) {
-            await sendCoaPacket({ host: nas.host, port: Number(nas.coa_port || 3799), secret: String(nas.radius_secret), username: sub.username, action: 'DISCONNECT' }).catch(()=>{});
+            const dc = await sendCoaPacket({ host: nas.host, port: Number(nas.coa_port || 3799), secret: String(nas.radius_secret), username: sub.username, action: 'DISCONNECT' }).catch(()=>null);
+            coaOk = dc?.ok ?? coaOk;
           }
         }
+      } catch {}
+      try {
+        await pool.query(`INSERT INTO fup_enforcement_logs(subscriber_id, action, over_cap, used_bytes, cap_gb, fup_speed_mbps, details)
+          VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+          [sub.id, shouldFup ? 'APPLIED' : 'CLEARED', over, used, capGb, fupMbps, JSON.stringify({ previous: was, rate_limit: rl, billing_restricted: billingRestricted, radius_sync_ok: radiusSyncOk, coa_ok: coaOk, period: 'current_month' })]);
       } catch {}
       if (shouldFup) applied++; else cleared++;
     } catch { errors++; }

@@ -733,6 +733,21 @@ export async function initDb() {
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS fup_exceeded BOOLEAN NOT NULL DEFAULT false`).catch(()=>{});
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS fup_applied_at TIMESTAMPTZ`).catch(()=>{});
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fup_enforcement_logs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      action TEXT NOT NULL,
+      over_cap BOOLEAN,
+      used_bytes BIGINT,
+      cap_gb NUMERIC(12,2),
+      fup_speed_mbps INTEGER,
+      details JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fup_logs_sub ON fup_enforcement_logs(subscriber_id, created_at DESC)`).catch(()=>{});
+
   // Portal self-care preferences
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS auto_pay_enabled BOOLEAN NOT NULL DEFAULT false`).catch(()=>{});
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS preferred_gateway TEXT`).catch(()=>{});
