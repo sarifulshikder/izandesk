@@ -37,11 +37,13 @@ export default function CustomerPortalPage() {
         pfetch('/api/portal/me', {}, tkn),
         pfetch('/api/portal/invoices', {}, tkn),
         pfetch('/api/portal/payments', {}, tkn),
-        fetch(`${getApiBaseUrl()}/api/billing/gateways`).then(r=>r.json()).catch(()=>({data:[]})),
+        fetch(`${getApiBaseUrl()}/api/billing/gateways`).then(r=>r.ok?r.json():({data:[]})).catch(()=>({data:[]})),
         fetch(`${getApiBaseUrl()}/api/acs/status`).then(r=>r.json()).catch(()=>({configured:false})),
       ]);
       setMe(m); setInvoices(inv.data||[]); setPayments(pay.data||[]);
-      const g = (gw.data||gw||[]).filter((x:any)=>x.enabled!==false); setGateways(g.length?g:[{gateway:'bkash',mode:'SANDBOX'},{gateway:'nagad',mode:'SANDBOX'},{gateway:'stripe',mode:'SANDBOX'}]);
+      const gwList = Array.isArray(gw?.data) ? gw.data : Array.isArray(gw) ? gw : [];
+      const g = gwList.filter((x:any)=>x && x.enabled!==false);
+      setGateways(g.length?g:[{gateway:'bkash',mode:'SANDBOX'},{gateway:'nagad',mode:'SANDBOX'},{gateway:'stripe',mode:'SANDBOX'}]);
       setAcs(acsStatus);
     } catch (e:any) { setErr(e.message); if (String(e.message).includes('session')) { localStorage.removeItem('portal_token'); setToken(null); } }
   };
