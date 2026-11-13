@@ -305,7 +305,7 @@ export default function SubscribersPage() {
                       <div className="text-xs">{[r.area_name, r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || `${r.area_name_db || r.area_name || '-'}`}</div>
                       <div className="text-xs text-muted-foreground">{r.distribution_box_name || r.distribution_box_code || '-'} {r.latitude ? '• 📍' : ''}</div>
                     </td>
-                    <td className="px-4 py-3"><span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${statusBadge(r.status)}`}>{r.status}</span></td>
+                    <td className="px-4 py-3"><div className="flex flex-col gap-1 items-start"><span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${statusBadge(r.status)}`}>{r.status}</span>{r.fup_exceeded && <span className="text-[10px] px-2 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold">FUP Throttled</span>}</div></td>
                     <td className="px-4 py-3 text-right" onClick={e=>e.stopPropagation()}>
                       <button onClick={()=>openEdit(r)} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button>
                       <button onClick={()=>remove(r.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400"><Trash2 className="w-4 h-4"/></button>
@@ -327,7 +327,7 @@ export default function SubscribersPage() {
                   <div className="font-bold text-foreground flex items-center gap-2"><User className="w-4 h-4 text-primary"/><span className="truncate">{detail.full_name}</span></div>
                   <div className="text-xs font-mono text-primary mt-0.5">{detail.client_code}</div>
                   <div className="flex flex-wrap items-center gap-2 mt-2">
-                    <span className={`text-[11px] px-2 py-0.5 rounded-full border font-semibold ${statusBadge(detail.status)}`}>{detail.status}</span>
+                    <span className={`text-[11px] px-2 py-0.5 rounded-full border font-semibold ${statusBadge(detail.status)}`}>{detail.status}</span>{detail.fup_exceeded && <span className="text-[11px] px-2 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold">FUP Throttled</span>}
                     <span className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/30">{detail.connection_type || '-'}</span>
                     <span className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/30">{detail.provisioning_mode === 'ROUTER' ? 'ROUTER' : 'RADIUS'}</span>
                   </div>
