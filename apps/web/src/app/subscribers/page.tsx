@@ -14,7 +14,7 @@ const emptyForm = {
   package_name: '', bandwidth_mbps: '', monthly_bill: '', status: 'PENDING', area_id: '', zone_id: '', distribution_box_id: '',
   address: '', latitude: '', longitude: '', ip_address: '', mac_address: '', installation_date: '',
   district: '', thana: '', upazila: '', post_office: '', village: '', area_name: '', ward_no: '', road_no: '', house_no: '',
-  provisioning_mode: 'RADIUS', router_id: ''
+  provisioning_mode: 'RADIUS', router_id: '', reseller_id: ''
 };
 
 const steps = [
@@ -46,6 +46,7 @@ export default function SubscribersPage() {
   const [zones, setZones] = useState<any[]>([]);
   const [boxes, setBoxes] = useState<any[]>([]);
   const [routers, setRouters] = useState<any[]>([]);
+  const [resellers, setResellers] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [kycUploading, setKycUploading] = useState(false);
   const [step, setStep] = useState(1);
@@ -54,13 +55,14 @@ export default function SubscribersPage() {
 
   const loadRefs = useCallback(async () => {
     if (!token) return;
-    const [a, z, b, r] = await Promise.all([
+    const [a, z, b, r, rs] = await Promise.all([
       apiFetch<{data:any[]}>('/api/topology/areas', {}, token),
       apiFetch<{data:any[]}>('/api/topology/zones', {}, token),
       apiFetch<{data:any[]}>('/api/topology/boxes', {}, token),
       apiFetch<{data:any[]}>('/api/network/routers', {}, token),
+      apiFetch<{data:any[]}>('/api/resellers', {}, token).catch(()=>({data:[]})),
     ]);
-    setAreas(a.data || []); setZones(z.data || []); setBoxes(b.data || []); setRouters(r.data || []);
+    setAreas(a.data || []); setZones(z.data || []); setBoxes(b.data || []); setRouters(r.data || []); setResellers(rs.data || []);
   }, [token]);
 
   const load = useCallback(async () => {
@@ -86,7 +88,7 @@ export default function SubscribersPage() {
   const directRouters = useMemo(() => routers.filter((r: any) => ['API','REST'].includes(String(r.integration_mode || 'API').toUpperCase()) && r.is_enabled !== false), [routers]);
   const radiusRouters = useMemo(() => routers.filter((r: any) => String(r.integration_mode || '').toUpperCase() === 'RADIUS' && r.is_enabled !== false), [routers]);
 
-  const openCreate = () => { setEditing(null); setForm({ ...emptyForm }); setStep(1); setGeoMsg(null); setShowForm(true); };
+  const openCreate = () => { setEditing(null); setForm({ ...emptyForm, reseller_id: '' }); setStep(1); setGeoMsg(null); setShowForm(true); };
   useEffect(() => {
     const wantsNew = searchParams?.get('new') === '1' || searchParams?.get('action') === 'new' || searchParams?.get('add') === '1';
     if (wantsNew) openCreate();
@@ -94,7 +96,7 @@ export default function SubscribersPage() {
   }, [searchParams]);
   const openEdit = (row: any) => {
     setEditing(row);
-    setForm({ ...emptyForm, ...row, latitude: row.latitude ?? '', longitude: row.longitude ?? '', bandwidth_mbps: row.bandwidth_mbps ?? '', monthly_bill: row.monthly_bill ?? '', router_id: row.router_id ?? '', provisioning_mode: row.provisioning_mode ?? 'RADIUS' });
+    setForm({ ...emptyForm, ...row, latitude: row.latitude ?? '', longitude: row.longitude ?? '', bandwidth_mbps: row.bandwidth_mbps ?? '', monthly_bill: row.monthly_bill ?? '', router_id: row.router_id ?? '', provisioning_mode: row.provisioning_mode ?? 'RADIUS', reseller_id: row.reseller_id ?? '' });
     setStep(1); setGeoMsg(null); setShowForm(true);
   };
 
@@ -114,7 +116,7 @@ export default function SubscribersPage() {
     try {
       const payload = { ...form };
       ['bandwidth_mbps','monthly_bill','latitude','longitude'].forEach(k => { if (payload[k] === '') payload[k] = null; });
-      ['area_id','zone_id','distribution_box_id','installation_date','router_id'].forEach(k => { if (payload[k] === '') payload[k] = null; });
+      ['area_id','zone_id','distribution_box_id','installation_date','router_id','reseller_id'].forEach(k => { if (payload[k] === '') payload[k] = null; });
       if (payload.provisioning_mode === 'RADIUS') payload.router_id = null;
       if (editing) await apiFetch(`/api/subscribers/${editing.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
       else await apiFetch('/api/subscribers', { method: 'POST', body: JSON.stringify(payload) }, token);
@@ -337,6 +339,7 @@ export default function SubscribersPage() {
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <Info label="Type" value={detail.subscriber_type} /><Info label="Connection" value={detail.connection_type} />
+                <Info label="Ownership" value={detail.reseller_name ? `Reseller: ${detail.reseller_name}` : 'Own Subscriber (ISP)'} />
                 <Info label="Provisioning" value={detail.provisioning_mode === 'ROUTER' ? `Router (API/REST): ${detail.router_name || detail.router_id || '-'}` : 'RADIUS (all RADIUS-enabled routers)'} />
                 <Info label="PPPoE User" value={detail.username || '-'} /><Info label="Phone" value={detail.phone || '-'} />
                 <Info label="Package" value={detail.package_name || '-'} />
@@ -402,6 +405,7 @@ export default function SubscribersPage() {
                   <Input label="Full Name *" value={form.full_name} onChange={v=>setForm({...form, full_name:v})} />
                   <Select label="Subscriber Type" value={form.subscriber_type} onChange={v=>setForm({...form, subscriber_type:v})} options={['HOME','CORPORATE','HOTSPOT']} />
                   <Select label="Status" value={form.status} onChange={v=>setForm({...form, status:v})} options={['PENDING','ACTIVE','SUSPENDED','EXPIRED','TERMINATED']} />
+                  <Select label="Subscriber Ownership" value={form.reseller_id||''} onChange={v=>setForm({...form, reseller_id:v})} options={[{v:'',l:'Own Subscriber (ISP)'}, ...resellers.map((r:any)=>({v:r.id,l:`Reseller: ${r.name}${r.company_name ? ' ('+r.company_name+')' : ''}`}))]} />
                   <Input label="Phone" value={form.phone||''} onChange={v=>setForm({...form, phone:v})} />
                   <Input label="Email" value={form.email||''} onChange={v=>setForm({...form, email:v})} />
                   <Input label="NID Number" value={form.nid_number||''} onChange={v=>setForm({...form, nid_number:v})} />
@@ -485,7 +489,7 @@ export default function SubscribersPage() {
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <ReviewCard title="Basic & Contact" items={[
-                      ['Name', form.full_name], ['Type', form.subscriber_type], ['Status', form.status], ['Phone', form.phone||'-'], ['Email', form.email||'-'], ['NID', form.nid_number||'-']
+                      ['Name', form.full_name], ['Type', form.subscriber_type], ['Status', form.status], ['Ownership', form.reseller_id ? (resellers.find((r:any)=>r.id===form.reseller_id)?.name || 'Reseller') : 'Own Subscriber (ISP)'], ['Phone', form.phone||'-'], ['Email', form.email||'-'], ['NID', form.nid_number||'-']
                     ]} />
                     <ReviewCard title="Connection & Package" items={[
                       ['Provision Via', form.provisioning_mode === 'ROUTER' ? `Specific Router (API/REST)` : 'RADIUS (all RADIUS-enabled routers)'],

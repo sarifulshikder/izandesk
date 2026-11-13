@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { apiFetch } from '@/lib/api';
 import {
   LayoutDashboard,
   Users,
@@ -26,7 +27,6 @@ import {
   Plug,
   Wallet,
   Smartphone,
-  Globe,
   Activity,
   UserPlus,
   UserX,
@@ -34,100 +34,10 @@ import {
   Clock3,
 } from 'lucide-react';
 
-interface NavLeaf {
-  name: string;
-  href: string;
-  icon?: React.ComponentType<{ className?: string }>;
-  badge?: string;
-}
 interface NavGroup {
   label: string;
-  items: (NavLeaf | NavGroupItem)[];
+  items: any[];
 }
-interface NavGroupItem {
-  name: string;
-  href?: string;
-  icon?: React.ComponentType<{ className?: string }>;
-  children?: { name: string; href: string }[];
-  badge?: string;
-}
-
-const sidebarGroups: NavGroup[] = [
-  {
-    label: 'Core',
-    items: [
-      { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-      { name: 'Fiber GIS Map', href: '/gis', icon: MapPin, badge: 'Live GIS' },
-      { name: 'Inventory & Serials', href: '/inventory', icon: Boxes, badge: 'Stock' },
-    ],
-  },
-  {
-    label: 'Subscribers',
-    items: [
-      { name: 'All Subscribers', href: '/subscribers', icon: Users, badge: 'All' },
-      { name: 'Add Subscriber', href: '/subscribers?new=1', icon: UserPlus },
-      { name: 'Live Sessions', href: '/subscribers/live', icon: Activity },
-      { name: 'Expired Subscribers', href: '/subscribers?status=EXPIRED', icon: Clock3 },
-      { name: 'Suspended Subscribers', href: '/subscribers?status=SUSPENDED', icon: UserX },
-      { name: 'Pending / Inactive', href: '/subscribers?status=PENDING', icon: UserMinus },
-    ],
-  },
-  {
-    label: 'Resellers',
-    items: [
-      { name: 'All Resellers', href: '/resellers', icon: Briefcase, badge: 'All' },
-      { name: 'Wallet & Recharge', href: '/resellers/wallet', icon: Wallet },
-      { name: 'Renew Subscriber', href: '/resellers/renew', icon: CreditCard },
-    ],
-  },
-  {
-    label: 'Network',
-    items: [
-      { name: 'Bandwidth & QoS', href: '/bandwidth', icon: Radio },
-      { name: 'Network & Routers', href: '/routers', icon: Network, badge: 'NAS' },
-      { name: 'WireGuard Overlay', href: '/wireguard', icon: Shield, badge: 'WG' },
-      { name: 'RADIUS & AAA', href: '/radius', icon: ShieldCheck },
-      { name: 'FTTH & OLTs', href: '/olts', icon: Package },
-    ],
-  },
-  {
-    label: 'Billing',
-    items: [
-      { name: 'Billing & Invoices', href: '/billing', icon: CreditCard },
-    ],
-  },
-  {
-    label: 'Support',
-    items: [
-      { name: 'CRM & Tickets', href: '/tickets', icon: LifeBuoy },
-      { name: 'Omnichannel SMS', href: '/messaging', icon: MessageSquare },
-    ],
-  },
-  {
-    label: 'Plugins',
-    items: [
-      { name: 'Plugin Manager', href: '/plugins', icon: Puzzle },
-      {
-        name: 'Payment Gateways',
-        icon: Wallet,
-        children: [
-          { name: 'bKash', href: '/plugins/payment-gateways/bkash' },
-          { name: 'Nagad', href: '/plugins/payment-gateways/nagad' },
-          { name: 'Rocket', href: '/plugins/payment-gateways/rocket' },
-          { name: 'Stripe', href: '/plugins/payment-gateways/stripe' },
-          { name: 'PayPal', href: '/plugins/payment-gateways/paypal' },
-        ],
-      },
-      { name: 'SMS Gateways', href: '/plugins?category=SMS_GATEWAY', icon: Smartphone },
-    ],
-  },
-  {
-    label: 'System',
-    items: [
-      { name: 'Settings & Security', href: '/settings', icon: Settings },
-    ],
-  },
-];
 
 function isItemActive(pathname: string, searchParams: URLSearchParams | null, href?: string) {
   if (!href) return false;
@@ -144,22 +54,33 @@ function isItemActive(pathname: string, searchParams: URLSearchParams | null, hr
     if (searchParams?.get('new') === '1' || searchParams?.get('action') === 'new' || searchParams?.get('add') === '1') return false;
     return true;
   }
-  if (href === '/resellers' && pathname === '/resellers') {
-    return true;
-  }
+  if (href === '/resellers' && pathname === '/resellers') return true;
   return pathname === href || (href !== '/' && pathname.startsWith(href + '/'));
 }
 
 export function Sidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { activeRole, user, isMobileMenuOpen, setMobileMenuOpen } = useAuth();
+  const { token, activeRole, user, isMobileMenuOpen, setMobileMenuOpen } = useAuth();
+  const [resellers, setResellers] = useState<any[]>([]);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Resellers: true, Network: true, Billing: true, Support: true, Plugins: true, System: false });
-  const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true });
+  const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true, 'All Resellers': true });
+
+  const loadResellers = useCallback(async () => {
+    if (!token) return;
+    try {
+      const r = await apiFetch<any>('/api/resellers', {}, token);
+      setResellers(r.data || []);
+    } catch {
+      setResellers([]);
+    }
+  }, [token]);
+
+  useEffect(() => { loadResellers(); }, [loadResellers, pathname]);
 
   useEffect(() => {
     if (pathname.startsWith('/subscribers')) setOpenGroups(s => ({ ...s, Subscribers: true }));
-    if (pathname.startsWith('/resellers')) setOpenGroups(s => ({ ...s, Resellers: true }));
+    if (pathname.startsWith('/resellers')) { setOpenGroups(s => ({ ...s, Resellers: true })); setOpenSub(s => ({ ...s, 'All Resellers': true })); }
     if (pathname.startsWith('/plugins')) setOpenGroups(s => ({ ...s, Plugins: true }));
     if (pathname.startsWith('/plugins/payment-gateways')) setOpenSub(s => ({ ...s, 'Payment Gateways': true }));
   }, [pathname]);
@@ -168,6 +89,91 @@ export function Sidebar() {
 
   const toggleGroup = (label: string) => setOpenGroups(s => ({ ...s, [label]: !s[label] }));
   const toggleSub = (label: string) => setOpenSub(s => ({ ...s, [label]: !s[label] }));
+
+  const sidebarGroups: NavGroup[] = [
+    {
+      label: 'Core',
+      items: [
+        { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+        { name: 'Fiber GIS Map', href: '/gis', icon: MapPin, badge: 'Live GIS' },
+        { name: 'Inventory & Serials', href: '/inventory', icon: Boxes, badge: 'Stock' },
+      ],
+    },
+    {
+      label: 'Subscribers',
+      items: [
+        { name: 'All Subscribers', href: '/subscribers', icon: Users, badge: 'All' },
+        { name: 'Add Subscriber', href: '/subscribers?new=1', icon: UserPlus },
+        { name: 'Live Sessions', href: '/subscribers/live', icon: Activity },
+        { name: 'Expired Subscribers', href: '/subscribers?status=EXPIRED', icon: Clock3 },
+        { name: 'Suspended Subscribers', href: '/subscribers?status=SUSPENDED', icon: UserX },
+        { name: 'Pending / Inactive', href: '/subscribers?status=PENDING', icon: UserMinus },
+      ],
+    },
+    {
+      label: 'Resellers',
+      items: [
+        {
+          name: 'All Resellers',
+          icon: Briefcase,
+          children: [
+            { name: 'Overview', href: '/resellers' },
+            ...resellers.map((r: any) => ({ name: r.name, href: `/resellers/${r.id}` })),
+          ],
+        },
+        { name: 'Add Reseller', href: '/resellers/add', icon: UserPlus },
+        { name: 'Wallet & Recharge', href: '/resellers/wallet', icon: Wallet },
+        { name: 'Renew Subscriber', href: '/resellers/renew', icon: CreditCard },
+      ],
+    },
+    {
+      label: 'Network',
+      items: [
+        { name: 'Bandwidth & QoS', href: '/bandwidth', icon: Radio },
+        { name: 'Network & Routers', href: '/routers', icon: Network, badge: 'NAS' },
+        { name: 'WireGuard Overlay', href: '/wireguard', icon: Shield, badge: 'WG' },
+        { name: 'RADIUS & AAA', href: '/radius', icon: ShieldCheck },
+        { name: 'FTTH & OLTs', href: '/olts', icon: Package },
+      ],
+    },
+    {
+      label: 'Billing',
+      items: [
+        { name: 'Billing & Invoices', href: '/billing', icon: CreditCard },
+      ],
+    },
+    {
+      label: 'Support',
+      items: [
+        { name: 'CRM & Tickets', href: '/tickets', icon: LifeBuoy },
+        { name: 'Omnichannel SMS', href: '/messaging', icon: MessageSquare },
+      ],
+    },
+    {
+      label: 'Plugins',
+      items: [
+        { name: 'Plugin Manager', href: '/plugins', icon: Puzzle },
+        {
+          name: 'Payment Gateways',
+          icon: Wallet,
+          children: [
+            { name: 'bKash', href: '/plugins/payment-gateways/bkash' },
+            { name: 'Nagad', href: '/plugins/payment-gateways/nagad' },
+            { name: 'Rocket', href: '/plugins/payment-gateways/rocket' },
+            { name: 'Stripe', href: '/plugins/payment-gateways/stripe' },
+            { name: 'PayPal', href: '/plugins/payment-gateways/paypal' },
+          ],
+        },
+        { name: 'SMS Gateways', href: '/plugins?category=SMS_GATEWAY', icon: Smartphone },
+      ],
+    },
+    {
+      label: 'System',
+      items: [
+        { name: 'Settings & Security', href: '/settings', icon: Settings },
+      ],
+    },
+  ];
 
   return (
     <>
@@ -226,12 +232,12 @@ export function Sidebar() {
                             {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                           </button>
                           {isOpen && (
-                            <div className="ml-4 mt-0.5 pl-3 border-l border-primary/20 space-y-0.5">
+                            <div className="ml-4 mt-0.5 pl-3 border-l border-primary/20 space-y-0.5 max-h-64 overflow-auto">
                               {item.children.map((c: any) => {
                                 const active = isItemActive(pathname, searchParams, c.href);
                                 return (
-                                  <Link key={c.href} href={c.href} onClick={() => setMobileMenuOpen(false)} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-colors ${active ? 'bg-primary text-primary-foreground font-semibold shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-muted/70'}`}>
-                                    <span>{c.name}</span>
+                                  <Link key={`${item.name}-${c.href}-${c.name}`} href={c.href} onClick={() => setMobileMenuOpen(false)} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-colors ${active ? 'bg-primary text-primary-foreground font-semibold shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-muted/70'}`}>
+                                    <span className="truncate">{c.name}</span>
                                   </Link>
                                 );
                               })}

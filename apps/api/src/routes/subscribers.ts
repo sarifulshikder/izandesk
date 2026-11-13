@@ -110,12 +110,14 @@ router.get('/', asyncHandler(async (req, res) => {
   params.push(limit, offset);
   const rowsRes = await pool.query(`
     SELECT s.*, a.name as area_name, z.name as zone_name, d.name as distribution_box_name, d.code as distribution_box_code,
-           nr.name as router_name, nr.integration_mode as router_integration_mode
+           nr.name as router_name, nr.integration_mode as router_integration_mode,
+           rs.name as reseller_name, rs.code as reseller_code
     FROM subscribers s
     LEFT JOIN areas a ON a.id=s.area_id
     LEFT JOIN zones z ON z.id=s.zone_id
     LEFT JOIN distribution_boxes d ON d.id=s.distribution_box_id
     LEFT JOIN network_routers nr ON nr.id=s.router_id
+    LEFT JOIN resellers rs ON rs.id=s.reseller_id
     ${whereSql}
     ORDER BY s.created_at DESC
     LIMIT $${params.length - 1} OFFSET $${params.length}
@@ -126,12 +128,14 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const r = await pool.query(`
     SELECT s.*, a.name as area_name, z.name as zone_name, d.name as distribution_box_name, d.code as distribution_box_code,
-           nr.name as router_name, nr.integration_mode as router_integration_mode
+           nr.name as router_name, nr.integration_mode as router_integration_mode,
+           rs.name as reseller_name, rs.code as reseller_code
     FROM subscribers s
     LEFT JOIN areas a ON a.id=s.area_id
     LEFT JOIN zones z ON z.id=s.zone_id
     LEFT JOIN distribution_boxes d ON d.id=s.distribution_box_id
     LEFT JOIN network_routers nr ON nr.id=s.router_id
+    LEFT JOIN resellers rs ON rs.id=s.reseller_id
     WHERE s.id=$1`, [req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Subscriber not found' });
   const kyc = await pool.query('SELECT * FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [req.params.id]);
@@ -145,24 +149,25 @@ router.post('/', asyncHandler(async (req, res) => {
   try { prov = await normalizeProvisioning(b); } catch (e: any) { return res.status(400).json({ message: e.message }); }
   const clientCode = b.client_code || await generateClientCode(b.area_id);
   const { la, lo } = toPointSql(b.latitude, b.longitude);
+  const resellerId = b.reseller_id || null;
   const r = await pool.query(`
     INSERT INTO subscribers (
       client_code, full_name, subscriber_type, connection_type, username, password, phone, email, nid_number,
       package_name, bandwidth_mbps, monthly_bill, status, area_id, zone_id, distribution_box_id, address,
       latitude, longitude, location, ip_address, mac_address, installation_date,
       district, thana, upazila, post_office, village, area_name, ward_no, road_no, house_no,
-      provisioning_mode, router_id
+      provisioning_mode, router_id, reseller_id
     ) VALUES (
       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
       CASE WHEN $18::float IS NOT NULL AND $19::float IS NOT NULL THEN ST_SetSRID(ST_MakePoint($19,$18),4326)::geography ELSE NULL END,
-      $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33
+      $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34
     ) RETURNING *`,
     [clientCode, b.full_name, b.subscriber_type || 'HOME', b.connection_type || 'PPPOE', b.username || null, b.password || null,
      b.phone || null, b.email || null, b.nid_number || null, b.package_name || null, b.bandwidth_mbps || null,
      b.monthly_bill || 0, b.status || 'PENDING', b.area_id || null, b.zone_id || null, b.distribution_box_id || null,
      b.address || null, la, lo, b.ip_address || null, b.mac_address || null, b.installation_date || null,
      b.district || null, b.thana || null, b.upazila || null, b.post_office || null, b.village || null, b.area_name || null, b.ward_no || null, b.road_no || null, b.house_no || null,
-     prov.provisioning_mode, prov.router_id]
+     prov.provisioning_mode, prov.router_id, resellerId]
   );
   const created = r.rows[0];
   const provision_result = await provisionPppSecret(created);
@@ -177,6 +182,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   let prov;
   try { prov = await normalizeProvisioning(b, cur); } catch (e: any) { return res.status(400).json({ message: e.message }); }
   const { la, lo } = toPointSql(b.latitude ?? cur.latitude, b.longitude ?? cur.longitude);
+  const resellerId = b.reseller_id === '' ? null : (b.reseller_id ?? cur.reseller_id ?? null);
   const r = await pool.query(`
     UPDATE subscribers SET
       full_name=$1, subscriber_type=$2, connection_type=$3, username=$4, password=COALESCE(NULLIF($5,''), password), phone=$6, email=$7, nid_number=$8,
@@ -185,15 +191,15 @@ router.put('/:id', asyncHandler(async (req, res) => {
       location=CASE WHEN $17::float IS NOT NULL AND $18::float IS NOT NULL THEN ST_SetSRID(ST_MakePoint($18,$17),4326)::geography ELSE NULL END,
       ip_address=$19, mac_address=$20, installation_date=$21,
       district=$22, thana=$23, upazila=$24, post_office=$25, village=$26, area_name=$27, ward_no=$28, road_no=$29, house_no=$30,
-      provisioning_mode=$31, router_id=$32,
+      provisioning_mode=$31, router_id=$32, reseller_id=$33,
       updated_at=now()
-    WHERE id=$33 RETURNING *`,
+    WHERE id=$34 RETURNING *`,
     [b.full_name ?? cur.full_name, b.subscriber_type ?? cur.subscriber_type, b.connection_type ?? cur.connection_type, b.username ?? cur.username, b.password ?? '',
      b.phone ?? cur.phone, b.email ?? cur.email, b.nid_number ?? cur.nid_number, b.package_name ?? cur.package_name, b.bandwidth_mbps ?? cur.bandwidth_mbps,
      b.monthly_bill ?? cur.monthly_bill, b.status ?? cur.status, b.area_id ?? cur.area_id, b.zone_id ?? cur.zone_id, b.distribution_box_id ?? cur.distribution_box_id,
      b.address ?? cur.address, la, lo, b.ip_address ?? cur.ip_address, b.mac_address ?? cur.mac_address, b.installation_date ?? cur.installation_date,
      b.district ?? cur.district, b.thana ?? cur.thana, b.upazila ?? cur.upazila, b.post_office ?? cur.post_office, b.village ?? cur.village, b.area_name ?? cur.area_name, b.ward_no ?? cur.ward_no, b.road_no ?? cur.road_no, b.house_no ?? cur.house_no,
-     prov.provisioning_mode, prov.router_id,
+     prov.provisioning_mode, prov.router_id, resellerId,
      req.params.id]
   );
   const updated = r.rows[0];

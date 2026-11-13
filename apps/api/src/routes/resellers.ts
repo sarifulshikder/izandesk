@@ -85,7 +85,25 @@ router.get('/:id', asyncHandler(async (req, res) => {
       (SELECT COALESCE(SUM(amount),0)::numeric(12,2) FROM reseller_wallet_transactions t WHERE t.reseller_id=r.id AND t.direction='DEBIT') as total_debits
     FROM resellers r LEFT JOIN resellers p ON p.id=r.parent_reseller_id WHERE r.id=$1`, [req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Reseller not found' });
-  res.json({ data: r.rows[0] });
+  const id = req.params.id;
+  const statsRes = await pool.query(`
+    SELECT
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE upper(status)='ACTIVE')::int AS active,
+      COUNT(*) FILTER (WHERE upper(status)='SUSPENDED')::int AS suspended,
+      COUNT(*) FILTER (WHERE upper(status)='EXPIRED')::int AS expired,
+      COUNT(*) FILTER (WHERE upper(status)='PENDING')::int AS pending,
+      COUNT(*) FILTER (WHERE upper(status)='TERMINATED')::int AS terminated
+    FROM subscribers WHERE reseller_id=$1`, [id]);
+  const sessionRes = await pool.query(`
+    SELECT
+      COUNT(*) FILTER (WHERE upper(ss.status)='ONLINE')::int AS online,
+      COUNT(*) FILTER (WHERE upper(ss.status)='OFFLINE')::int AS offline
+    FROM subscriber_sessions ss
+    JOIN subscribers s ON s.id = ss.subscriber_id
+    WHERE s.reseller_id=$1`, [id]).catch(()=>({ rows: [{ online: 0, offline: 0 }] } as any));
+  const stats = { ...(statsRes.rows[0] || {}), ...(sessionRes.rows[0] || { online: 0, offline: 0 }) };
+  res.json({ data: { ...r.rows[0], stats } });
 }));
 
 router.get('/:id/wallet', asyncHandler(async (req, res) => {
