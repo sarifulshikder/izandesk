@@ -61,10 +61,10 @@ export default function LiveSubscribersPage() {
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="p-4 rounded-2xl border border-border bg-card"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>Online Sessions</span><Wifi className="w-4 h-4"/></div><div className="mt-2 text-xl font-black">{summary.online || 0}</div></div>
+        <div className="p-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5"><div className="flex items-center justify-between text-xs text-emerald-300/80"><span>Online Sessions</span><Wifi className="w-4 h-4"/></div><div className="mt-2 text-xl font-black text-emerald-400">{summary.online || 0}</div></div>
         <div className="p-4 rounded-2xl border border-border bg-card"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>Total Tracked</span><Activity className="w-4 h-4"/></div><div className="mt-2 text-xl font-black">{summary.total || sessions.length || 0}</div></div>
-        <div className="p-4 rounded-2xl border border-border bg-card"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>Aggregate RX</span><ArrowDown className="w-4 h-4"/></div><div className="mt-2 text-xl font-black text-cyan-400">{fmtBps(Number(summary.aggRxBps || 0))}</div></div>
-        <div className="p-4 rounded-2xl border border-border bg-card"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>Aggregate TX</span><ArrowUp className="w-4 h-4"/></div><div className="mt-2 text-xl font-black text-indigo-400">{fmtBps(Number(summary.aggTxBps || 0))}</div></div>
+        <div className="p-4 rounded-2xl border border-cyan-500/20 bg-cyan-500/5"><div className="flex items-center justify-between text-xs text-cyan-300/80"><span>Aggregate RX</span><ArrowDown className="w-4 h-4"/></div><div className="mt-2 text-xl font-black text-cyan-400">{fmtBps(Number(summary.aggRxBps || 0))}</div></div>
+        <div className="p-4 rounded-2xl border border-indigo-500/20 bg-indigo-500/5"><div className="flex items-center justify-between text-xs text-indigo-300/80"><span>Aggregate TX</span><ArrowUp className="w-4 h-4"/></div><div className="mt-2 text-xl font-black text-indigo-400">{fmtBps(Number(summary.aggTxBps || 0))}</div></div>
       </div>
 
       <div className="flex flex-col md:flex-row gap-3">

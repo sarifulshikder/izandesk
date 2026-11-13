@@ -317,25 +317,38 @@ export default function SubscribersPage() {
 
         <div className="rounded-2xl border border-border bg-card p-4 space-y-4">
           {!detail ? (
-            <div className="text-sm text-muted-foreground py-10 text-center">Select a subscriber to view details, location, and KYC documents.</div>
+            <div className="text-sm text-muted-foreground py-16 text-center border border-dashed border-border rounded-xl">Select a subscriber to view profile, provisioning, location and KYC documents.</div>
           ) : (
             <>
               <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="font-bold text-foreground flex items-center gap-2"><User className="w-4 h-4 text-primary"/>{detail.full_name}</div>
-                  <div className="text-xs font-mono text-primary">{detail.client_code}</div>
+                <div className="min-w-0">
+                  <div className="font-bold text-foreground flex items-center gap-2"><User className="w-4 h-4 text-primary"/><span className="truncate">{detail.full_name}</span></div>
+                  <div className="text-xs font-mono text-primary mt-0.5">{detail.client_code}</div>
+                  <div className="flex flex-wrap items-center gap-2 mt-2">
+                    <span className={`text-[11px] px-2 py-0.5 rounded-full border font-semibold ${statusBadge(detail.status)}`}>{detail.status}</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/30">{detail.connection_type || '-'}</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/30">{detail.provisioning_mode === 'ROUTER' ? 'ROUTER' : 'RADIUS'}</span>
+                  </div>
                 </div>
-                <button onClick={()=>setDetail(null)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4"/></button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={()=>openEdit(detail)} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border" title="Edit"><Pencil className="w-4 h-4"/></button>
+                  <button onClick={()=>setDetail(null)} className="p-1.5 rounded-lg hover:bg-muted" title="Close"><X className="w-4 h-4"/></button>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <Info label="Type" value={detail.subscriber_type} /><Info label="Connection" value={detail.connection_type} />
                 <Info label="Provisioning" value={detail.provisioning_mode === 'ROUTER' ? `Router (API/REST): ${detail.router_name || detail.router_id || '-'}` : 'RADIUS (all RADIUS-enabled routers)'} />
-                <Info label="PPPoE User" value={detail.username || '-'} /><Info label="Status" value={detail.status} />
-                <Info label="Phone" value={detail.phone || '-'} /><Info label="Package" value={detail.package_name || '-'} />
+                <Info label="PPPoE User" value={detail.username || '-'} /><Info label="Phone" value={detail.phone || '-'} />
+                <Info label="Package" value={detail.package_name || '-'} />
+                <Info label="Monthly Bill" value={detail.monthly_bill ? `৳${detail.monthly_bill}` : '-'} /><Info label="Current Due" value={detail.current_due != null ? `৳${detail.current_due}` : '-'} />
                 <Info label="District" value={detail.district || '-'} /><Info label="Thana/Upazila" value={detail.thana || detail.upazila || '-'} />
                 <Info label="Post Office" value={detail.post_office || '-'} /><Info label="Village/Area" value={detail.village || detail.area_name || '-'} />
                 <Info label="Ward/Road" value={[detail.ward_no, detail.road_no].filter(Boolean).join(' / ') || '-'} /><Info label="Geo" value={detail.latitude ? `${Number(detail.latitude).toFixed(5)}, ${Number(detail.longitude).toFixed(5)}` : '-'} />
                 <div className="col-span-2"><Info label="Address" value={detail.address || '-'} /></div>
+              </div>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <a href={`/subscribers/live`} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50">Live Sessions</a>
+                <a href={`/billing`} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50">Billing</a>
               </div>
               <div className="pt-2 border-t border-border">
                 <div className="font-semibold text-sm flex items-center gap-2 mb-2"><FileText className="w-4 h-4 text-primary"/>KYC Documents</div>
