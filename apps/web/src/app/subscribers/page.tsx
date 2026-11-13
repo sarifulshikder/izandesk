@@ -53,6 +53,7 @@ export default function SubscribersPage() {
   const [geoLoading, setGeoLoading] = useState(false);
   const [geoMsg, setGeoMsg] = useState<string | null>(null);
   const [fupBusy, setFupBusy] = useState(false);
+  const [fupLogs, setFupLogs] = useState<any[]>([]);
 
   const loadRefs = useCallback(async () => {
     if (!token) return;
@@ -136,6 +137,10 @@ export default function SubscribersPage() {
     if (!token) return;
     const d = await apiFetch<any>(`/api/subscribers/${id}`, {}, token);
     setDetail(d);
+    try {
+      const fl = await apiFetch<any>(`/api/billing/fup/logs?subscriber_id=${id}`, {}, token);
+      setFupLogs(fl?.data || []);
+    } catch { setFupLogs([]); }
   };
 
   const uploadKyc = async (file: File, docType: string) => {
@@ -394,6 +399,18 @@ export default function SubscribersPage() {
                   <button disabled={fupBusy} onClick={toggleFupExempt} className={`text-[11px] px-2.5 py-1.5 rounded-lg border disabled:opacity-50 ${detail.fup_exempt ? 'border-violet-500/30 text-violet-300 hover:bg-violet-500/10' : 'border-border hover:bg-muted/50'}`}>{detail.fup_exempt ? 'Remove Exemption' : 'Mark Exempt'}</button>
                 </div>
                 <div className="text-[11px] text-muted-foreground mt-2">Best-effort: RADIUS/CoA and direct PPPoE profile throttling (ROUTER mode) with session refresh. Billing restrictions take precedence.</div>
+                <div className="mt-3">
+                  <div className="text-xs font-semibold mb-1">Recent FUP actions</div>
+                  <div className="space-y-1.5 max-h-[140px] overflow-auto">
+                    {fupLogs.slice(0,6).map((l:any)=>(
+                      <div key={l.id} className="text-[11px] p-2 rounded-lg border border-border bg-muted/20 flex items-center justify-between gap-2">
+                        <div><span className={`font-semibold ${l.action==='APPLIED'?'text-amber-400':'text-emerald-400'}`}>{l.action}</span> • {Number(l.used_bytes||0)>1e9?(Number(l.used_bytes)/1e9).toFixed(2)+' GB':Number(l.used_bytes||0)>1e6?(Number(l.used_bytes)/1e6).toFixed(2)+' MB':`${Number(l.used_bytes||0)} B`} / {l.cap_gb!=null?Number(l.cap_gb)+' GB':'-'} {l.fup_speed_mbps?`• FUP ${l.fup_speed_mbps} Mbps`:''}</div>
+                        <div className="text-muted-foreground whitespace-nowrap">{l.created_at ? new Date(l.created_at).toLocaleString() : ''}</div>
+                      </div>
+                    ))}
+                    {!fupLogs.length && <div className="text-[11px] text-muted-foreground">No FUP enforcement history for this subscriber.</div>}
+                  </div>
+                </div>
               </div>
               <div className="pt-2 border-t border-border">
                 <div className="font-semibold text-sm flex items-center gap-2 mb-2"><FileText className="w-4 h-4 text-primary"/>KYC Documents</div>
