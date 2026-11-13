@@ -3,6 +3,7 @@ import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses, ingestMfsSmsEvent } from '../integrations/billing';
 import { getKernel } from '../kernel/kernel-instance';
+import { mikrotikProvisionWalledGardenRedirect } from '../integrations/mikrotik';
 import crypto from 'crypto';
 
 const router: Router = Router();
@@ -292,6 +293,30 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
 router.get('/suspension/logs', asyncHandler(async (_req, res) => {
   const r = await pool.query(`SELECT l.*, s.full_name, s.client_code, s.username FROM billing_suspension_logs l LEFT JOIN subscribers s ON s.id=l.subscriber_id ORDER BY l.created_at DESC LIMIT 200`);
   res.json({ ok: true, data: r.rows });
+}));
+
+router.post('/walled-garden/provision-router', asyncHandler(async (req, res) => {
+  if (!requireBillingRole(req, res)) return;
+  const b = req.body || {};
+  const routerId = b.router_id || b.routerId;
+  if (!routerId) return res.status(400).json({ message: 'router_id is required' });
+  const r = await pool.query('SELECT * FROM network_routers WHERE id=$1', [routerId]);
+  const router = r.rows[0];
+  if (!router) return res.status(404).json({ message: 'Router not found' });
+  if (!['API','REST'].includes(String(router.integration_mode || '').toUpperCase())) {
+    return res.status(400).json({ ok: false, message: 'Selected router/NAS is not directly manageable via API/REST. Configure walled-garden address-list and redirect/firewall/NAT/DNS rules on the NAS for address-list "izn-walled-garden" to your portal URL.', router: { id: router.id, name: router.name, host: router.host, integration_mode: router.integration_mode } });
+  }
+  const policy = (await pool.query('SELECT * FROM billing_policies ORDER BY is_default DESC, created_at ASC LIMIT 1')).rows[0] || {};
+  const portalUrl = b.portal_url || policy?.config?.portal_url || process.env.WALLED_GARDEN_PORTAL_URL || `${req.protocol}://${req.get('host')}/walled-garden`;
+  const result = await mikrotikProvisionWalledGardenRedirect(router, {
+    addressList: b.address_list || policy?.config?.walled_garden_address_list || 'izn-walled-garden',
+    portalUrl,
+    portalHost: b.portal_host,
+    portalPort: b.portal_port ? Number(b.portal_port) : undefined,
+  });
+  await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES(NULL,'WALLED_GARDEN_ROUTER_PROVISION',NULL,$1,$2::jsonb,$3)`,
+    ['Provisioned walled-garden redirect/profile rules on router', JSON.stringify({ router_id: router.id, router: router.name, result }), (req as any).user?.email || 'user']);
+  res.json({ ok: true, router: { id: router.id, name: router.name, host: router.host, integration_mode: router.integration_mode }, portalUrl, result });
 }));
 
 export default router;

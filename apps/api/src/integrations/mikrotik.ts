@@ -360,6 +360,104 @@ export async function mikrotikEnsureWalledGarden(r: RouterRow, opts: { profileNa
   } finally { try { api.close(); } catch {} }
 }
 
+export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: { addressList?: string; portalUrl?: string; portalHost?: string; portalPort?: number; dnsAllow?: string[] } = {}) {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  const list = String(opts.addressList || 'izn-walled-garden').trim() || 'izn-walled-garden';
+  const commentTag = 'IzanDesk-WalledGarden';
+  const portalUrl = String(opts.portalUrl || process.env.WALLED_GARDEN_PORTAL_URL || 'https://izandesk.duckdns.org/walled-garden').trim();
+  let portalHost = String(opts.portalHost || '').trim();
+  let portalPort = Number(opts.portalPort || 80) || 80;
+  try { const u = new URL(portalUrl); portalHost = portalHost || u.hostname; portalPort = opts.portalPort || Number(u.port || (u.protocol === 'https:' ? 443 : 80)); } catch {}
+  if (!portalHost) portalHost = 'izandesk.duckdns.org';
+  const dnsAllow = Array.isArray(opts.dnsAllow) ? opts.dnsAllow.filter(Boolean) : [portalHost];
+
+  const results: any = { ok: true, mode, addressList: list, portalUrl, portalHost, portalPort, steps: {} };
+
+  const ensureRest = async (o:any) => {
+    // 1) allow DNS for walled-garden users
+    try {
+      const fwf: any[] = await restFetch(o, `/ip/firewall/filter?comment=${encodeURIComponent(commentTag + ':dns')}`).catch(()=>[]) as any;
+      if (!Array.isArray(fwf) || !fwf.length) {
+        await restSend(o, 'PUT', '/ip/firewall/filter', { chain: 'forward', 'src-address-list': list, protocol: 'udp', 'dst-port': '53', action: 'accept', comment: commentTag + ':dns', place: '0' } as any).catch(()=>restSend(o,'PUT','/ip/firewall/filter',{ chain:'forward','src-address-list':list,protocol:'udp','dst-port':'53',action:'accept',comment: commentTag + ':dns' }));
+      }
+      results.steps.dns = { ok: true };
+    } catch (e:any) { results.steps.dns = { ok:false, error:e.message }; }
+    // 2) allow access to portal host (best-effort via address-list resolve not automatic; allow dst-port 80/443)
+    try {
+      const nat1: any[] = await restFetch(o, `/ip/firewall/nat?comment=${encodeURIComponent(commentTag + ':allow-portal')}`).catch(()=>[]) as any;
+      if (!Array.isArray(nat1) || !nat1.length) {
+        await restSend(o, 'PUT', '/ip/firewall/nat', { chain: 'dstnat', 'src-address-list': list, protocol: 'tcp', 'dst-port': '80,443', 'dst-address': portalHost, action: 'accept', comment: commentTag + ':allow-portal' }).catch(()=>{});
+      }
+      results.steps.allowPortal = { ok: true, note: 'portal host allow rule added (IP/hostname match depends on router DNS resolution)' };
+    } catch (e:any) { results.steps.allowPortal = { ok:false, error:e.message }; }
+    // 3) redirect HTTP to portal
+    try {
+      const nat2: any[] = await restFetch(o, `/ip/firewall/nat?comment=${encodeURIComponent(commentTag + ':redirect-http')}`).catch(()=>[]) as any;
+      const body:any = { chain: 'dstnat', 'src-address-list': list, protocol: 'tcp', 'dst-port': '80', action: 'dst-nat', 'to-addresses': portalHost, 'to-ports': String(portalPort || 80), comment: commentTag + ':redirect-http' };
+      if (Array.isArray(nat2) && nat2.length) {
+        await restSend(o, 'PATCH', `/ip/firewall/nat/${nat2[0]['.id']||nat2[0].id}`, body).catch(()=>{});
+        results.steps.redirect = { ok: true, action: 'updated' };
+      } else {
+        await restSend(o, 'PUT', '/ip/firewall/nat', body).catch(()=>{});
+        results.steps.redirect = { ok: true, action: 'created' };
+      }
+    } catch (e:any) { results.steps.redirect = { ok:false, error:e.message }; }
+    // 4) optional drop other forwarded traffic for walled users (keeps isolation strong)
+    try {
+      const fwd: any[] = await restFetch(o, `/ip/firewall/filter?comment=${encodeURIComponent(commentTag + ':drop-other')}`).catch(()=>[]) as any;
+      if (!Array.isArray(fwd) || !fwd.length) {
+        await restSend(o, 'PUT', '/ip/firewall/filter', { chain: 'forward', 'src-address-list': list, action: 'drop', comment: commentTag + ':drop-other' }).catch(()=>{});
+      }
+      results.steps.dropOther = { ok: true, note: 'other forwarding dropped for walled-garden list (DNS/portal rules should be ordered above)' };
+    } catch (e:any) { results.steps.dropOther = { ok:false, error:e.message }; }
+  };
+
+  const ensureApi = async () => {
+    const o = rosOpts(r, 'API') as any;
+    const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+    try {
+      await api.connect();
+      const safe = async (cmd:string, params:string[]=[]) => { try { return await api.write(cmd, params); } catch(e:any){ if(String(e?.message||'').includes('!empty')||e?.errno==='UNKNOWNREPLY') return []; throw e; } };
+      // dns allow
+      try {
+        const fw = await safe('/ip/firewall/filter/print') as any[]; const ex = (fw||[]).find((x:any)=>String(x.comment)===commentTag+':dns');
+        if (!ex) await api.write('/ip/firewall/filter/add', [`=chain=forward`,`=src-address-list=${list}`,`=protocol=udp`,`=dst-port=53`,`=action=accept`,`=comment=${commentTag}:dns`]).catch(()=>{});
+        results.steps.dns = { ok:true };
+      } catch(e:any){ results.steps.dns={ok:false,error:e.message}; }
+      // allow portal host
+      try {
+        const nat = await safe('/ip/firewall/nat/print') as any[]; const ex = (nat||[]).find((x:any)=>String(x.comment)===commentTag+':allow-portal');
+        if (!ex) await api.write('/ip/firewall/nat/add', [`=chain=dstnat`,`=src-address-list=${list}`,`=protocol=tcp`,`=dst-port=80,443`,`=dst-address=${portalHost}`,`=action=accept`,`=comment=${commentTag}:allow-portal`]).catch(()=>{});
+        results.steps.allowPortal = { ok:true };
+      } catch(e:any){ results.steps.allowPortal={ok:false,error:e.message}; }
+      // redirect http
+      try {
+        const nat = await safe('/ip/firewall/nat/print') as any[]; const ex = (nat||[]).find((x:any)=>String(x.comment)===commentTag+':redirect-http');
+        const params = [`=chain=dstnat`,`=src-address-list=${list}`,`=protocol=tcp`,`=dst-port=80`,`=action=dst-nat`,`=to-addresses=${portalHost}`,`=to-ports=${String(portalPort||80)}`,`=comment=${commentTag}:redirect-http`];
+        if (ex) await api.write('/ip/firewall/nat/set', [`=.id=${ex['.id']}`, ...params.slice(0)]).catch(()=>{});
+        else await api.write('/ip/firewall/nat/add', params).catch(()=>{});
+        results.steps.redirect = { ok:true, action: ex?'updated':'created' };
+      } catch(e:any){ results.steps.redirect={ok:false,error:e.message}; }
+      // drop other
+      try {
+        const fw = await safe('/ip/firewall/filter/print') as any[]; const ex = (fw||[]).find((x:any)=>String(x.comment)===commentTag+':drop-other');
+        if (!ex) await api.write('/ip/firewall/filter/add', [`=chain=forward`,`=src-address-list=${list}`,`=action=drop`,`=comment=${commentTag}:drop-other`]).catch(()=>{});
+        results.steps.dropOther = { ok:true };
+      } catch(e:any){ results.steps.dropOther={ok:false,error:e.message}; }
+    } finally { try { api.close(); } catch {} }
+  };
+
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    await ensureRest(o);
+  } else if (mode === 'API') {
+    await ensureApi();
+  } else {
+    return { ok: false, error: 'Router is not in API/REST mode; configure walled-garden redirect rules on NAS manually (address-list/firewall/nat/dns)', mode };
+  }
+  return results;
+}
+
 export async function mikrotikProvisionWireGuard(r: RouterRow, cfg: { ifName: string; listenPort?: number; privateKey?: string; address: string; peerName?: string; hubPublicKey: string; endpointHost: string; endpointPort: number; allowedAddress: string; keepalive?: number; presharedKey?: string; }) {
   const mode = String(r.integration_mode || 'API').toUpperCase();
   const ifName = String(cfg.ifName || 'wg-izandesk').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 15) || 'wg-izandesk';
