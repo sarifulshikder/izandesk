@@ -134,17 +134,17 @@ router.get('/packages', asyncHandler(async (_req, res) => {
 router.post('/packages', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.name || b.download_mbps == null || b.upload_mbps == null) return res.status(400).json({ message: 'name, download_mbps, upload_mbps required' });
-  const r = await pool.query(`INSERT INTO bandwidth_packages(name,profile_name,download_mbps,upload_mbps,burst_download_mbps,burst_upload_mbps,burst_threshold_download_mbps,burst_threshold_upload_mbps,burst_time_sec,priority,queue_type,price,description,is_active)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-    [b.name,b.profile_name||null,b.download_mbps,b.upload_mbps,b.burst_download_mbps||null,b.burst_upload_mbps||null,b.burst_threshold_download_mbps||null,b.burst_threshold_upload_mbps||null,b.burst_time_sec||null,b.priority??8,b.queue_type||'SIMPLE',b.price||0,b.description||null,b.is_active!==false]);
+  const r = await pool.query(`INSERT INTO bandwidth_packages(name,profile_name,download_mbps,upload_mbps,burst_download_mbps,burst_upload_mbps,burst_threshold_download_mbps,burst_threshold_upload_mbps,burst_time_sec,priority,queue_type,price,description,is_active,data_cap_gb,fup_speed_mbps)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+    [b.name,b.profile_name||null,b.download_mbps,b.upload_mbps,b.burst_download_mbps||null,b.burst_upload_mbps||null,b.burst_threshold_download_mbps||null,b.burst_threshold_upload_mbps||null,b.burst_time_sec||null,b.priority??8,b.queue_type||'SIMPLE',b.price||0,b.description||null,b.is_active!==false,b.data_cap_gb===''||b.data_cap_gb==null?null:Number(b.data_cap_gb),b.fup_speed_mbps===''||b.fup_speed_mbps==null?null:Number(b.fup_speed_mbps)]);
   res.status(201).json(r.rows[0]);
 }));
 router.put('/packages/:id', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const c = (await pool.query('SELECT * FROM bandwidth_packages WHERE id=$1',[req.params.id])).rows[0];
   if (!c) return res.status(404).json({ message: 'Package not found' });
-  const r = await pool.query(`UPDATE bandwidth_packages SET name=$1,profile_name=$2,download_mbps=$3,upload_mbps=$4,burst_download_mbps=$5,burst_upload_mbps=$6,burst_threshold_download_mbps=$7,burst_threshold_upload_mbps=$8,burst_time_sec=$9,priority=$10,queue_type=$11,price=$12,description=$13,is_active=$14,updated_at=now() WHERE id=$15 RETURNING *`,
-    [b.name??c.name,b.profile_name??c.profile_name,b.download_mbps??c.download_mbps,b.upload_mbps??c.upload_mbps,b.burst_download_mbps??c.burst_download_mbps,b.burst_upload_mbps??c.burst_upload_mbps,b.burst_threshold_download_mbps??c.burst_threshold_download_mbps,b.burst_threshold_upload_mbps??c.burst_threshold_upload_mbps,b.burst_time_sec??c.burst_time_sec,b.priority??c.priority,b.queue_type??c.queue_type,b.price??c.price,b.description??c.description,b.is_active??c.is_active,req.params.id]);
+  const r = await pool.query(`UPDATE bandwidth_packages SET name=$1,profile_name=$2,download_mbps=$3,upload_mbps=$4,burst_download_mbps=$5,burst_upload_mbps=$6,burst_threshold_download_mbps=$7,burst_threshold_upload_mbps=$8,burst_time_sec=$9,priority=$10,queue_type=$11,price=$12,description=$13,is_active=$14,data_cap_gb=$15,fup_speed_mbps=$16,updated_at=now() WHERE id=$17 RETURNING *`,
+    [b.name??c.name,b.profile_name??c.profile_name,b.download_mbps??c.download_mbps,b.upload_mbps??c.upload_mbps,b.burst_download_mbps??c.burst_download_mbps,b.burst_upload_mbps??c.burst_upload_mbps,b.burst_threshold_download_mbps??c.burst_threshold_download_mbps,b.burst_threshold_upload_mbps??c.burst_threshold_upload_mbps,b.burst_time_sec??c.burst_time_sec,b.priority??c.priority,b.queue_type??c.queue_type,b.price??c.price,b.description??c.description,b.is_active??c.is_active, b.data_cap_gb==='' ? null : (b.data_cap_gb ?? c.data_cap_gb), b.fup_speed_mbps==='' ? null : (b.fup_speed_mbps ?? c.fup_speed_mbps), req.params.id]);
   res.json(r.rows[0]);
 }));
 router.delete('/packages/:id', asyncHandler(async (req, res) => {

@@ -57,7 +57,7 @@ export default function BandwidthPage() {
         <div className="flex gap-2 flex-wrap">
           <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
           <button onClick={sync} disabled={syncing} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><Router className="w-4 h-4"/>{syncing?'Syncing...':'Sync to Routers'}</button>
-          <button onClick={()=>{setForm({name:'',profile_name:'',download_mbps:20,upload_mbps:20,burst_download_mbps:'',burst_upload_mbps:'',burst_threshold_download_mbps:'',burst_threshold_upload_mbps:'',burst_time_sec:'',priority:8,queue_type:'SIMPLE',price:0,description:'',is_active:true}); setModal('new');}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Package</button>
+          <button onClick={()=>{setForm({name:'',profile_name:'',download_mbps:20,upload_mbps:20,burst_download_mbps:'',burst_upload_mbps:'',burst_threshold_download_mbps:'',burst_threshold_upload_mbps:'',burst_time_sec:'',priority:8,queue_type:'SIMPLE',price:0,description:'',is_active:true,data_cap_gb:'',fup_speed_mbps:''}); setModal('new');}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Package</button>
         </div>
       </div>
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
@@ -67,18 +67,19 @@ export default function BandwidthPage() {
         <div className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden">
           <div className="overflow-auto">
             <table className="w-full text-sm">
-              <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="text-left px-4 py-3">Package</th><th className="text-left px-4 py-3">Speed</th><th className="text-left px-4 py-3">Burst / Queue</th><th className="text-left px-4 py-3">Price</th><th className="text-right px-4 py-3">Actions</th></tr></thead>
+              <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="text-left px-4 py-3">Package</th><th className="text-left px-4 py-3">Speed</th><th className="text-left px-4 py-3">Burst / Queue</th><th className="text-left px-4 py-3">Cap / FUP</th><th className="text-left px-4 py-3">Price</th><th className="text-right px-4 py-3">Actions</th></tr></thead>
               <tbody>
                 {packages.map(p => (
                   <tr key={p.id} className="border-t border-border/70">
                     <td className="px-4 py-3"><div className="font-semibold">{p.name}</div><div className="text-xs text-muted-foreground font-mono">{p.profile_name || '-'}</div><div className="text-xs text-muted-foreground">{p.description || ''}</div></td>
                     <td className="px-4 py-3"><div className="font-medium text-cyan-400">{p.download_mbps} / {p.upload_mbps} Mbps</div><div className="text-xs text-muted-foreground">Down / Up</div></td>
                     <td className="px-4 py-3 text-xs"><div>{p.queue_type} • Priority {p.priority}</div><div className="text-muted-foreground">{p.burst_download_mbps ? `Burst ${p.burst_download_mbps}/${p.burst_upload_mbps}M, Thr ${p.burst_threshold_download_mbps||'-'}/${p.burst_threshold_upload_mbps||'-'}M, ${p.burst_time_sec||'-'}s` : 'No burst'}</div></td>
+                    <td className="px-4 py-3 text-xs"><div>{p.data_cap_gb ? `${Number(p.data_cap_gb)} GB/mo` : 'Unlimited'}</div><div className="text-muted-foreground">{p.fup_speed_mbps ? `FUP ${p.fup_speed_mbps} Mbps` : (p.data_cap_gb ? 'No FUP speed set' : '')}</div></td>
                     <td className="px-4 py-3 text-xs">{p.price ? `৳${p.price}` : '-'} {p.is_active ? <span className="ml-1 text-emerald-400">Active</span> : <span className="ml-1 text-muted-foreground">Inactive</span>}</td>
                     <td className="px-4 py-3 text-right"><button onClick={()=>{setForm({...p}); setModal(p);}} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button><button onClick={()=>del(p.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400"><Trash2 className="w-4 h-4"/></button></td>
                   </tr>
                 ))}
-                {!packages.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No bandwidth packages.</td></tr>}
+                {!packages.length && <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No bandwidth packages.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -116,6 +117,8 @@ export default function BandwidthPage() {
             <F label="Burst Threshold Down"><input className="inp" type="number" value={form.burst_threshold_download_mbps??''} onChange={e=>setForm({...form,burst_threshold_download_mbps:e.target.value===''?null:Number(e.target.value)})}/></F>
             <F label="Burst Threshold Up"><input className="inp" type="number" value={form.burst_threshold_upload_mbps??''} onChange={e=>setForm({...form,burst_threshold_upload_mbps:e.target.value===''?null:Number(e.target.value)})}/></F>
             <F label="Price"><input className="inp" type="number" value={form.price||0} onChange={e=>setForm({...form,price:Number(e.target.value)})}/></F>
+            <F label="Data Cap (GB/mo)"><input className="inp" type="number" placeholder="Unlimited" value={form.data_cap_gb ?? ''} onChange={e=>setForm({...form,data_cap_gb:e.target.value===''?'':Number(e.target.value)})}/></F>
+            <F label="FUP Speed (Mbps)"><input className="inp" type="number" placeholder="None" value={form.fup_speed_mbps ?? ''} onChange={e=>setForm({...form,fup_speed_mbps:e.target.value===''?'':Number(e.target.value)})}/></F>
             <div className="md:col-span-3"><F label="Description"><input className="inp" value={form.description||''} onChange={e=>setForm({...form,description:e.target.value})}/></F></div>
           </div>
           <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={save} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">Save</button></div>
