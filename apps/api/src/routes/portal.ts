@@ -23,6 +23,12 @@ function portalAuth(req: any, res: any, next: any) {
   } catch { return res.status(401).json({ message: 'Invalid or expired portal session' }); }
 }
 
+async function getSubscriber(id: string) {
+  const r = await pool.query(`SELECT id, client_code, full_name, username, phone, email, status, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, address, connection_type, provisioning_mode, suspension_stage, walled_garden, created_at, nid_number
+    FROM subscribers WHERE id=$1`, [id]);
+  return r.rows[0] || null;
+}
+
 router.post('/login', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const id = String(b.client_code || b.username || b.phone || '').trim();
@@ -33,7 +39,6 @@ router.post('/login', asyncHandler(async (req, res) => {
   const s = r.rows[0];
   if (!s) return res.status(401).json({ message: 'Invalid credentials' });
   const stored = s.password ? String(s.password) : '';
-  // if password is set, require it; if not set, allow login with matching identifier as pass (basic self-care) or exact pass empty-string not allowed
   const ok = stored ? (stored === pass) : (pass === String(s.client_code || '') || pass === String(s.username || '') || pass === String(s.phone || ''));
   if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
   const token = issuePortalToken(s);
@@ -43,11 +48,63 @@ router.post('/login', asyncHandler(async (req, res) => {
 
 router.get('/me', portalAuth, asyncHandler(async (req, res) => {
   const id = (req as any).portal.sub;
-  const r = await pool.query(`SELECT id, client_code, full_name, username, phone, email, status, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, address, connection_type, provisioning_mode, suspension_stage, walled_garden, created_at
-    FROM subscribers WHERE id=$1`, [id]);
-  if (!r.rows[0]) return res.status(404).json({ message: 'Subscriber not found' });
-  const session = (await pool.query(`SELECT status, rx_bps, tx_bps, uptime_sec as uptime_seconds, ip_address, updated_at FROM subscriber_sessions WHERE subscriber_id=$1 ORDER BY updated_at DESC LIMIT 1`, [id])).rows[0] || null;
-  res.json({ ok: true, subscriber: r.rows[0], session });
+  const sub = await getSubscriber(id);
+  if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
+  // prefer subscriber_sessions, but also derive live state from radacct open sessions (acctstoptime IS NULL and recent)
+  let session = (await pool.query(`SELECT status, rx_bps, tx_bps, uptime_sec as uptime_seconds, ip_address, updated_at, username FROM subscriber_sessions WHERE subscriber_id=$1 ORDER BY updated_at DESC LIMIT 1`, [id])).rows[0] || null;
+  try {
+    const rad = (await pool.query(`
+      SELECT username, framedipaddress::text as ip_address, acctstarttime, COALESCE(acctupdatetime, acctstarttime) as last_seen,
+             COALESCE(acctsessiontime,0) as uptime_seconds, COALESCE(acctinputoctets,0) as rx_bytes, COALESCE(acctoutputoctets,0) as tx_bytes
+      FROM radacct
+      WHERE (username=$1 OR username IN (SELECT username FROM subscribers WHERE id=$2 AND username IS NOT NULL))
+        AND acctstoptime IS NULL
+      ORDER BY COALESCE(acctupdatetime, acctstarttime) DESC NULLS LAST, acctstarttime DESC NULLS LAST
+      LIMIT 1
+    `, [sub.username || '', id])).rows[0] || null;
+    if (rad) {
+      const lastSeen = rad.last_seen ? new Date(rad.last_seen).getTime() : 0;
+      const fresh = lastSeen && (Date.now() - lastSeen) < 30 * 60 * 1000; // 30 min freshness window
+      if (fresh || !session || String(session.status).toUpperCase() !== 'ONLINE') {
+        session = {
+          status: fresh ? 'ONLINE' : (session?.status || 'ONLINE'),
+          ip_address: rad.ip_address || session?.ip_address || null,
+          rx_bps: session?.rx_bps || 0,
+          tx_bps: session?.tx_bps || 0,
+          uptime_seconds: Number(rad.uptime_seconds || 0),
+          updated_at: rad.last_seen || session?.updated_at || null,
+          username: rad.username || session?.username || sub.username,
+          rx_bytes: Number(rad.rx_bytes || 0),
+          tx_bytes: Number(rad.tx_bytes || 0),
+          source: 'radacct',
+        };
+      }
+    }
+  } catch {}
+  res.json({ ok: true, subscriber: sub, session });
+}));
+
+router.put('/profile', portalAuth, asyncHandler(async (req, res) => {
+  const id = (req as any).portal.sub;
+  const b = req.body || {};
+  const r = await pool.query(`UPDATE subscribers SET phone=COALESCE($1,phone), email=COALESCE($2,email), address=COALESCE($3,address), nid_number=COALESCE($4,nid_number), updated_at=now() WHERE id=$5 RETURNING id, client_code, full_name, username, phone, email, status, package_name, address, nid_number`,
+    [b.phone ?? null, b.email ?? null, b.address ?? null, b.nid_number ?? null, id]);
+  res.json({ ok: true, subscriber: r.rows[0] || await getSubscriber(id) });
+}));
+
+router.post('/change-password', portalAuth, asyncHandler(async (req, res) => {
+  const id = (req as any).portal.sub;
+  const b = req.body || {};
+  const newPass = String(b.new_password || b.password || '').trim();
+  const cur = String(b.current_password || '').trim();
+  if (newPass.length < 4) return res.status(400).json({ message: 'New password must be at least 4 characters' });
+  const row = (await pool.query('SELECT password, client_code, username, phone FROM subscribers WHERE id=$1', [id])).rows[0];
+  if (!row) return res.status(404).json({ message: 'Subscriber not found' });
+  const stored = row.password ? String(row.password) : '';
+  const okCurrent = stored ? (stored === cur) : (cur === String(row.client_code||'') || cur === String(row.username||'') || cur === String(row.phone||''));
+  if (!okCurrent) return res.status(401).json({ message: 'Current password is incorrect' });
+  await pool.query('UPDATE subscribers SET password=$1, updated_at=now() WHERE id=$2', [newPass, id]);
+  res.json({ ok: true, message: 'Password updated' });
 }));
 
 router.get('/invoices', portalAuth, asyncHandler(async (req, res) => {
@@ -77,6 +134,13 @@ router.get('/payments', portalAuth, asyncHandler(async (req, res) => {
   res.json({ ok: true, data: r.rows });
 }));
 
+router.get('/gateways', asyncHandler(async (_req, res) => {
+  // public list of enabled gateways for portal checkout (no secrets)
+  const r = await pool.query(`SELECT gateway, enabled, mode, config FROM payment_gateway_configs WHERE enabled=true ORDER BY gateway`).catch(()=>({ rows: [] as any[] }));
+  const list = (r.rows || []).map((g:any)=>({ gateway: g.gateway, mode: g.mode, label: g.config?.label || String(g.gateway).toUpperCase() }));
+  res.json({ ok: true, data: list.length ? list : [{gateway:'bkash',mode:'SANDBOX'},{gateway:'nagad',mode:'SANDBOX'},{gateway:'stripe',mode:'SANDBOX'}] });
+}));
+
 router.post('/payments/checkout', portalAuth, asyncHandler(async (req, res) => {
   const subId = (req as any).portal.sub;
   const b = req.body || {};
@@ -94,7 +158,7 @@ router.post('/payments/checkout', portalAuth, asyncHandler(async (req, res) => {
   const payment_ref = `PORTAL-${Date.now()}-${Math.random().toString(36).slice(2,8).toUpperCase()}`;
   let checkout: any = { ok: false };
   if (plugin && typeof plugin.createCheckoutSession === 'function') {
-    try { checkout = await plugin.createCheckoutSession({ invoiceId: invoice?.id, paymentRef: payment_ref, amount, currency: b.currency || invoice?.currency || 'BDT', subscriber, invoice, returnUrl: b.return_url, cancelUrl: b.cancel_url, webhookUrl: b.webhook_url, metadata: b.metadata || {}, mode: (cfg?.mode || 'SANDBOX') }); } catch(e:any){ checkout = { ok:false, message:e.message }; }
+    try { checkout = await plugin.createCheckoutSession({ invoiceId: invoice?.id, paymentRef: payment_ref, amount, currency: b.currency || 'BDT', subscriber, invoice, returnUrl: b.return_url, cancelUrl: b.cancel_url, webhookUrl: b.webhook_url, metadata: b.metadata || {}, mode: (cfg?.mode || 'SANDBOX') }); } catch(e:any){ checkout = { ok:false, message:e.message }; }
   } else {
     checkout = { ok: true, gateway, paymentUrl: `https://sandbox-payments.izandesk.local/${gateway}/checkout?payment_ref=${encodeURIComponent(payment_ref)}&amount=${amount}`, simulated: true };
   }
@@ -102,6 +166,90 @@ router.post('/payments/checkout', portalAuth, asyncHandler(async (req, res) => {
     VALUES($1,$2,$3,$4,$5,$6,$7,'PENDING',$8,$9,$10::jsonb) RETURNING *`,
     [payment_ref, invoice?.id || null, subId, gateway, b.method || 'portal', amount, b.currency || 'BDT', checkout.paymentUrl || checkout.approvalUrl || null, checkout.clientSecret || null, JSON.stringify(checkout)]);
   res.json({ ok: true, payment: p.rows[0], checkout });
+}));
+
+router.get('/tickets', portalAuth, asyncHandler(async (req, res) => {
+  const sub = await getSubscriber((req as any).portal.sub);
+  if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
+  const r = await pool.query(`SELECT t.*, (SELECT COUNT(*)::int FROM ticket_comments c WHERE c.ticket_id=t.id) as comment_count
+    FROM tickets t WHERE t.subscriber_id=$1 ORDER BY t.created_at DESC LIMIT 100`, [sub.id]);
+  res.json({ ok: true, data: r.rows });
+}));
+
+router.post('/tickets', portalAuth, asyncHandler(async (req, res) => {
+  const sub = await getSubscriber((req as any).portal.sub);
+  if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
+  const b = req.body || {};
+  if (!b.subject) return res.status(400).json({ message: 'subject is required' });
+  const priority = String(b.priority || 'MEDIUM').toUpperCase();
+  const hours = priority === 'CRITICAL' ? 4 : priority === 'HIGH' ? 8 : priority === 'LOW' ? 48 : 24;
+  const due = new Date(Date.now() + hours*3600*1000);
+  const count = (await pool.query('SELECT COUNT(*)::int AS n FROM tickets')).rows[0]?.n || 0;
+  const ticketNo = `TKT-${String(count+1).padStart(6,'0')}`;
+  const gps = (sub as any).latitude && (sub as any).longitude ? `https://www.google.com/maps/search/?api=1&query=${(sub as any).latitude},${(sub as any).longitude}` : (sub.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(sub.address)}` : null);
+  // try to include site coords if present
+  const full = (await pool.query('SELECT latitude, longitude, address, reseller_id FROM subscribers WHERE id=$1', [sub.id])).rows[0] || {};
+  const lat = full.latitude ?? null; const lng = full.longitude ?? null;
+  const siteAddr = b.site_address || full.address || sub.address || null;
+  const gpsUrl = (lat!=null && lng!=null) ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}` : (siteAddr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(siteAddr)}` : null);
+  const r = await pool.query(`INSERT INTO tickets(ticket_no,subscriber_id,reseller_id,subject,description,category,priority,status,sla_policy,sla_due_at,dispatch_status,site_latitude,site_longitude,site_address,gps_nav_url,source,created_by)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'OPEN',$8,$9,'UNASSIGNED',$10,$11,$12,$13,'PORTAL',$14) RETURNING *`,
+    [ticketNo, sub.id, full.reseller_id || null, b.subject, b.description||null, b.category||'SUPPORT', priority, `${priority} SLA`, due, lat, lng, siteAddr, gpsUrl, sub.client_code || sub.username || sub.id]);
+  res.status(201).json({ ok: true, data: r.rows[0] });
+}));
+
+router.get('/tickets/:id', portalAuth, asyncHandler(async (req, res) => {
+  const subId = (req as any).portal.sub;
+  const r = await pool.query(`SELECT * FROM tickets WHERE id=$1 AND subscriber_id=$2`, [req.params.id, subId]);
+  if (!r.rows[0]) return res.status(404).json({ message: 'Ticket not found' });
+  const comments = await pool.query(`SELECT id, ticket_id, author_name, author_role, body, is_internal, created_at FROM ticket_comments WHERE ticket_id=$1 AND COALESCE(is_internal,false)=false ORDER BY created_at ASC`, [req.params.id]);
+  res.json({ ok: true, data: { ...r.rows[0], comments: comments.rows } });
+}));
+
+router.post('/tickets/:id/comments', portalAuth, asyncHandler(async (req, res) => {
+  const sub = await getSubscriber((req as any).portal.sub);
+  const b = req.body || {};
+  if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
+  if (!b.body) return res.status(400).json({ message: 'body is required' });
+  const t = (await pool.query('SELECT id FROM tickets WHERE id=$1 AND subscriber_id=$2', [req.params.id, sub.id])).rows[0];
+  if (!t) return res.status(404).json({ message: 'Ticket not found' });
+  const r = await pool.query(`INSERT INTO ticket_comments(ticket_id,author_name,author_role,body,is_internal) VALUES($1,$2,'CUSTOMER',$3,false) RETURNING id, ticket_id, author_name, author_role, body, is_internal, created_at`,
+    [req.params.id, sub.full_name || sub.client_code || 'Customer', b.body]);
+  await pool.query('UPDATE tickets SET updated_at=now() WHERE id=$1', [req.params.id]);
+  res.status(201).json({ ok: true, data: r.rows[0] });
+}));
+
+router.get('/usage', portalAuth, asyncHandler(async (req, res) => {
+  const sub = await getSubscriber((req as any).portal.sub);
+  if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
+  const sessions = await pool.query(`
+    SELECT radacctid, username, acctstarttime, acctstoptime, acctsessiontime,
+           COALESCE(acctinputoctets,0) as rx_bytes, COALESCE(acctoutputoctets,0) as tx_bytes,
+           framedipaddress::text as ip_address, nasipaddress::text as nas_ip, acctterminatecause
+    FROM radacct
+    WHERE (username=$1 OR username IN (SELECT username FROM subscribers WHERE id=$2 AND username IS NOT NULL))
+    ORDER BY acctstarttime DESC NULLS LAST
+    LIMIT 100
+  `, [sub.username || '', sub.id]).catch(()=>({ rows: [] as any[] }));
+  const daily = await pool.query(`
+    SELECT date_trunc('day', acctstarttime) as day,
+           COUNT(*)::int as sessions,
+           COALESCE(SUM(acctsessiontime),0)::bigint as session_seconds,
+           COALESCE(SUM(acctinputoctets),0)::bigint as rx_bytes,
+           COALESCE(SUM(acctoutputoctets),0)::bigint as tx_bytes
+    FROM radacct
+    WHERE (username=$1 OR username IN (SELECT username FROM subscribers WHERE id=$2 AND username IS NOT NULL))
+      AND acctstarttime >= now() - interval '30 days'
+    GROUP BY 1 ORDER BY 1 DESC
+  `, [sub.username || '', sub.id]).catch(()=>({ rows: [] as any[] }));
+  res.json({ ok: true, sessions: sessions.rows, daily: daily.rows });
+}));
+
+router.get('/announcements', asyncHandler(async (_req, res) => {
+  // simple announcements; can be DB-backed later
+  res.json({ ok: true, data: [
+    { id: 'welcome', title: 'Welcome to IzanDesk Self-Care', body: 'Manage your subscription, invoices, payments, tickets, usage and Wi-Fi settings from this portal.', created_at: new Date().toISOString() }
+  ]});
 }));
 
 router.get('/speedtest/download', (_req, res) => {
