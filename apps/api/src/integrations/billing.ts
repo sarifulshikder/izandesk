@@ -480,7 +480,7 @@ function fupRateString(mbps: number) {
 
 export async function evaluateFupForSubscriber(subscriberId: string, opts: { forceAction?: 'APPLY'|'CLEAR' } = {}) {
   const rows = (await pool.query(`
-    SELECT s.id, s.username, s.password, s.status, s.suspension_stage, s.walled_garden, s.ip_address, s.package_name, s.router_id, s.provisioning_mode, s.fup_exceeded,
+    SELECT s.id, s.username, s.password, s.status, s.suspension_stage, s.walled_garden, s.ip_address, s.package_name, s.router_id, s.provisioning_mode, s.fup_exceeded, s.fup_exempt,
            bp.profile_name, bp.data_cap_gb, bp.fup_speed_mbps,
            COALESCE((SELECT SUM(COALESCE(acctinputoctets,0)+COALESCE(acctoutputoctets,0))::bigint FROM radacct r
              WHERE (r.username=s.username OR r.username IN (SELECT username FROM subscribers ss WHERE ss.id=s.id AND ss.username IS NOT NULL))
@@ -497,7 +497,8 @@ export async function evaluateFupForSubscriber(subscriberId: string, opts: { for
   const capBytes = capGb != null ? capGb * 1024 * 1024 * 1024 : null;
   const over = capBytes != null && capBytes > 0 && fupMbps != null && fupMbps > 0 && used > capBytes;
   const billingRestricted = String(sub.status).toUpperCase() !== 'ACTIVE' || ['WALLED_GARDEN','ISOLATED','SUSPENDED'].includes(String(sub.suspension_stage||'').toUpperCase()) || !!sub.walled_garden;
-  let shouldFup = over && !billingRestricted;
+  const exempt = !!sub.fup_exempt;
+  let shouldFup = over && !billingRestricted && !exempt;
   if (opts.forceAction === 'CLEAR') shouldFup = false;
   if (opts.forceAction === 'APPLY') shouldFup = !!(fupMbps && !billingRestricted);
   const was = !!sub.fup_exceeded;
@@ -536,7 +537,7 @@ export async function evaluateFupForSubscriber(subscriberId: string, opts: { for
   try {
     await pool.query(`INSERT INTO fup_enforcement_logs(subscriber_id, action, over_cap, used_bytes, cap_gb, fup_speed_mbps, details)
       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,
-      [sub.id, shouldFup ? 'APPLIED' : 'CLEARED', over, used, capGb, fupMbps, JSON.stringify({ previous: was, rate_limit: rl, billing_restricted: billingRestricted, radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null, router_mode: String(sub.provisioning_mode||'').toUpperCase()==='ROUTER', period: 'current_month', forced: opts.forceAction || null })]);
+      [sub.id, shouldFup ? 'APPLIED' : 'CLEARED', over, used, capGb, fupMbps, JSON.stringify({ previous: was, rate_limit: rl, billing_restricted: billingRestricted, exempt, radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null, router_mode: String(sub.provisioning_mode||'').toUpperCase()==='ROUTER', period: 'current_month', forced: opts.forceAction || null })]);
   } catch {}
   return { ok: true, changed: shouldFup !== was || !!opts.forceAction, fup_exceeded: shouldFup, over_cap: over, used_bytes: used, cap_gb: capGb, fup_speed_mbps: fupMbps, enforcement: { radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null } };
 }
@@ -546,7 +547,7 @@ export async function runFupEnforcementSweep() {
   // Best-effort: apply/remove RADIUS rate-limit for subscribers over monthly data cap (FUP).
   // Billing suspension/walled-garden states take precedence and are not overridden.
   const rows = (await pool.query(`
-    SELECT s.id, s.username, s.password, s.status, s.suspension_stage, s.walled_garden, s.ip_address, s.package_name, s.router_id, s.provisioning_mode, s.fup_exceeded,
+    SELECT s.id, s.username, s.password, s.status, s.suspension_stage, s.walled_garden, s.ip_address, s.package_name, s.router_id, s.provisioning_mode, s.fup_exceeded, s.fup_exempt,
            bp.profile_name, bp.data_cap_gb, bp.fup_speed_mbps,
            COALESCE((SELECT SUM(COALESCE(acctinputoctets,0)+COALESCE(acctoutputoctets,0))::bigint FROM radacct r
              WHERE (r.username=s.username OR r.username IN (SELECT username FROM subscribers ss WHERE ss.id=s.id AND ss.username IS NOT NULL))
@@ -563,7 +564,8 @@ export async function runFupEnforcementSweep() {
     const capBytes = capGb != null ? capGb * 1024 * 1024 * 1024 : null;
     const over = capBytes != null && capBytes > 0 && fupMbps != null && fupMbps > 0 && used > capBytes;
     const billingRestricted = String(sub.status).toUpperCase() !== 'ACTIVE' || ['WALLED_GARDEN','ISOLATED','SUSPENDED'].includes(String(sub.suspension_stage||'').toUpperCase()) || !!sub.walled_garden;
-    const shouldFup = over && !billingRestricted;
+    const exempt = !!sub.fup_exempt;
+    const shouldFup = over && !billingRestricted && !exempt;
     const was = !!sub.fup_exceeded;
     if (shouldFup === was) { skipped++; continue; }
     try {
@@ -603,7 +605,7 @@ export async function runFupEnforcementSweep() {
       try {
         await pool.query(`INSERT INTO fup_enforcement_logs(subscriber_id, action, over_cap, used_bytes, cap_gb, fup_speed_mbps, details)
           VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,
-          [sub.id, shouldFup ? 'APPLIED' : 'CLEARED', over, used, capGb, fupMbps, JSON.stringify({ previous: was, rate_limit: rl, billing_restricted: billingRestricted, radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null, router_mode: String(sub.provisioning_mode||'').toUpperCase()==='ROUTER', period: 'current_month' })]);
+          [sub.id, shouldFup ? 'APPLIED' : 'CLEARED', over, used, capGb, fupMbps, JSON.stringify({ previous: was, rate_limit: rl, billing_restricted: billingRestricted, exempt, radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null, router_mode: String(sub.provisioning_mode||'').toUpperCase()==='ROUTER', period: 'current_month' })]);
       } catch {}
       if (shouldFup) applied++; else cleared++;
     } catch { errors++; }

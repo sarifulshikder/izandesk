@@ -110,6 +110,15 @@ router.post('/fup/subscribers/:id/apply', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+router.post('/fup/subscribers/:id/exempt', asyncHandler(async (req, res) => {
+  if (!requireBillingRole(req, res)) return;
+  const exempt = req.body?.exempt !== false; // default true
+  const sub = (await pool.query('UPDATE subscribers SET fup_exempt=$2, updated_at=now() WHERE id=$1 RETURNING id,fup_exempt', [req.params.id, exempt])).rows[0];
+  if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
+  const result = await evaluateFupForSubscriber(req.params.id);
+  res.json({ ok: true, subscriber: sub, evaluation: result });
+}));
+
 router.get('/fup/logs', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
   const subId = req.query.subscriber_id ? String(req.query.subscriber_id) : null;

@@ -212,6 +212,16 @@ export default function SubscribersPage() {
     } catch (e: any) { setError(e.message); }
     finally { setFupBusy(false); }
   };
+  const toggleFupExempt = async () => {
+    if (!token || !detail) return;
+    setFupBusy(true); setError(null);
+    try {
+      await apiFetch(`/api/billing/fup/subscribers/${detail.id}/exempt`, { method: 'POST', body: JSON.stringify({ exempt: !detail.fup_exempt }) }, token);
+      await openDetail(detail.id);
+      await load();
+    } catch (e: any) { setError(e.message); }
+    finally { setFupBusy(false); }
+  };
 
   const onPickLocation = (lat: number, lng: number) => {
     setForm((f: any) => ({ ...f, latitude: Number(lat.toFixed(6)), longitude: Number(lng.toFixed(6)) }));
@@ -369,7 +379,7 @@ export default function SubscribersPage() {
               <div className="pt-2 border-t border-border">
                 <div className="font-semibold text-sm mb-2">FUP / Quota Enforcement</div>
                 <div className="text-xs text-muted-foreground mb-2 space-y-1">
-                  <div>Status: {detail.fup_exceeded ? <span className="text-amber-400 font-semibold">Throttled (FUP enforced)</span> : <span className="text-emerald-400">Not throttled</span>}{detail.fup_applied_at ? ` • applied ${new Date(detail.fup_applied_at).toLocaleString()}` : ''}</div>
+                  <div className="flex flex-wrap items-center gap-2"><span>Status: {detail.fup_exceeded ? <span className="text-amber-400 font-semibold">Throttled (FUP enforced)</span> : <span className="text-emerald-400">Not throttled</span>}{detail.fup_applied_at ? ` • applied ${new Date(detail.fup_applied_at).toLocaleString()}` : ''}</span>{detail.fup_exempt && <span className="text-[10px] px-2 py-0.5 rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-300 font-semibold">EXEMPT</span>}</div>
                   {detail.quota ? (
                     <div>
                       <div>Monthly usage: {Number(detail.quota.used_bytes||0) > 1e9 ? (Number(detail.quota.used_bytes)/1e9).toFixed(2)+' GB' : Number(detail.quota.used_bytes||0) > 1e6 ? (Number(detail.quota.used_bytes)/1e6).toFixed(2)+' MB' : `${Number(detail.quota.used_bytes||0)} B`} of {Number(detail.quota.cap_gb)} GB ({Number(detail.quota.percent||0).toFixed(2)}%) • {detail.quota.over_cap ? <span className="text-red-400">Over cap</span> : <span className="text-emerald-400">Within cap</span>}{detail.quota.fup_speed_mbps ? ` • FUP ${detail.quota.fup_speed_mbps} Mbps` : ''}</div>
@@ -381,6 +391,7 @@ export default function SubscribersPage() {
                   <button disabled={fupBusy} onClick={()=>fupAction('evaluate')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50 disabled:opacity-50">Evaluate</button>
                   <button disabled={fupBusy} onClick={()=>fupAction('clear')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50">Clear FUP</button>
                   <button disabled={fupBusy} onClick={()=>fupAction('apply')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-amber-500/30 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50">Force Apply</button>
+                  <button disabled={fupBusy} onClick={toggleFupExempt} className={`text-[11px] px-2.5 py-1.5 rounded-lg border disabled:opacity-50 ${detail.fup_exempt ? 'border-violet-500/30 text-violet-300 hover:bg-violet-500/10' : 'border-border hover:bg-muted/50'}`}>{detail.fup_exempt ? 'Remove Exemption' : 'Mark Exempt'}</button>
                 </div>
                 <div className="text-[11px] text-muted-foreground mt-2">Best-effort: RADIUS/CoA and direct PPPoE profile throttling (ROUTER mode) with session refresh. Billing restrictions take precedence.</div>
               </div>

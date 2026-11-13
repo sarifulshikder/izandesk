@@ -732,6 +732,7 @@ export async function initDb() {
 
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS fup_exceeded BOOLEAN NOT NULL DEFAULT false`).catch(()=>{});
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS fup_applied_at TIMESTAMPTZ`).catch(()=>{});
+  await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS fup_exempt BOOLEAN NOT NULL DEFAULT false`).catch(()=>{});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fup_enforcement_logs (
