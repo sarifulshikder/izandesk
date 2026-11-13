@@ -658,11 +658,36 @@ export async function initDb() {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       gateway TEXT NOT NULL,
       event_id TEXT,
+      dedupe_key TEXT,
       payload JSONB,
       processed BOOLEAN NOT NULL DEFAULT false,
       processed_at TIMESTAMPTZ,
       result JSONB,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    ALTER TABLE payment_webhook_events ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
+
+    CREATE TABLE IF NOT EXISTS payment_sms_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      gateway TEXT NOT NULL DEFAULT 'bkash',
+      sender TEXT,
+      message TEXT,
+      trx_id TEXT,
+      amount NUMERIC(12,2),
+      payer_number TEXT,
+      matched_payment_ref TEXT,
+      matched_invoice_id UUID,
+      status TEXT NOT NULL DEFAULT 'RECEIVED',
+      payload JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      processed_at TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS billing_scheduler_locks (
+      name TEXT PRIMARY KEY,
+      locked_until TIMESTAMPTZ NOT NULL,
+      holder TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS billing_suspension_logs (
@@ -682,7 +707,11 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_payments_subscriber_id ON payments(subscriber_id);
     CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
     CREATE INDEX IF NOT EXISTS idx_payments_payment_ref ON payments(payment_ref);
+    CREATE INDEX IF NOT EXISTS idx_payments_trx_id ON payments(trx_id);
     CREATE INDEX IF NOT EXISTS idx_wallet_tx_subscriber_id ON wallet_transactions(subscriber_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_webhook_gateway_event ON payment_webhook_events(gateway, event_id) WHERE event_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_webhook_dedupe ON payment_webhook_events(dedupe_key) WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_payment_sms_trx ON payment_sms_events(trx_id);
 
     INSERT INTO billing_policies(name, grace_days, warning_days, auto_suspend, isolate_on_suspend, enable_walled_garden, is_default)
       VALUES('Default ISP Policy', 7, 3, true, true, true, true)

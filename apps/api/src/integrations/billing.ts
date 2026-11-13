@@ -1,5 +1,5 @@
 import { pool } from '../db';
-import { mikrotikSyncPppSecret, mikrotikRemovePppSecret } from './mikrotik';
+import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 
 type AnyObj = Record<string, any>;
@@ -127,13 +127,9 @@ async function resolveNasForSubscriber(sub: AnyObj) {
   return null;
 }
 
-export async function applyProvisioningState(subId: string, desired: { status?: string; stage?: string; walled_garden?: boolean; reason?: string; sendCoa?: boolean; coaAction?: 'DISCONNECT'|'COA'; coaRateLimit?: string; profileOverride?: string }) {
-  const sres = await pool.query(`SELECT s.*, bp.profile_name, nr.* FROM (SELECT s.*, nr2.integration_mode as router_integration_mode, nr2.name as router_name2 FROM subscribers s LEFT JOIN network_routers nr2 ON nr2.id=s.router_id) s
-    LEFT JOIN bandwidth_packages bp ON bp.name=s.package_name
-    LEFT JOIN network_routers nr ON nr.id=s.router_id
-    WHERE s.id=$1`, [subId]);
-  const sub = sres.rows[0];
-  if (!sub) throw new Error('Subscriber not found');
+export async function applyProvisioningState(subId: string, desired: { status?: string; stage?: string; walled_garden?: boolean; reason?: string; sendCoa?: boolean; coaAction?: 'DISCONNECT'|'COA'; coaRateLimit?: string; profileOverride?: string; addressList?: string }) {
+  const sub0 = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subId])).rows[0];
+  if (!sub0) throw new Error('Subscriber not found');
   const updates: any = {};
   if (desired.status) updates.status = desired.status;
   if (desired.stage !== undefined) updates.suspension_stage = desired.stage;
@@ -142,42 +138,79 @@ export async function applyProvisioningState(subId: string, desired: { status?: 
   const setParts: string[] = []; const params: any[] = [subId];
   for (const [k,v] of Object.entries(updates)) { params.push(v); setParts.push(`${k}=$${params.length}`); }
   if (setParts.length) await pool.query(`UPDATE subscribers SET ${setParts.join(',')}, updated_at=now() WHERE id=$1`, params);
-  const cur = (await pool.query('SELECT s.*, bp.profile_name FROM subscribers s LEFT JOIN bandwidth_packages bp ON bp.name=s.package_name WHERE s.id=$1', [subId])).rows[0];
 
-  const router = cur.router_id ? (await pool.query('SELECT * FROM network_routers WHERE id=$1', [cur.router_id])).rows[0] : null;
+  const cur = (await pool.query(`SELECT s.*, bp.profile_name as package_profile_name, nr.id as router_row_id, nr.name as router_name, nr.host as router_host, nr.integration_mode as router_integration_mode,
+      nr.api_port, nr.rest_port, nr.username as router_username, nr.password as router_password, nr.use_ssl, nr.radius_secret, nr.nas_identifier, nr.coa_port, nr.is_enabled as router_enabled
+    FROM subscribers s
+    LEFT JOIN bandwidth_packages bp ON bp.name=s.package_name
+    LEFT JOIN network_routers nr ON nr.id=s.router_id
+    WHERE s.id=$1`, [subId])).rows[0];
+
+  const router = cur.router_row_id ? {
+    id: cur.router_row_id, name: cur.router_name, host: cur.router_host, integration_mode: cur.router_integration_mode,
+    api_port: cur.api_port, rest_port: cur.rest_port, username: cur.router_username, password: cur.router_password, use_ssl: cur.use_ssl,
+    radius_secret: cur.radius_secret, nas_identifier: cur.nas_identifier, coa_port: cur.coa_port, is_enabled: cur.router_enabled
+  } : null;
   const mode = String(cur.provisioning_mode || 'RADIUS').toUpperCase();
   const results: AnyObj = { subscriber_id: subId, mode };
 
-  // effective status/profile for isolation/walled garden
-  const effective = { ...cur };
-  if (desired.profileOverride) effective.profile_name = desired.profileOverride;
-
-  if (mode === 'ROUTER' && router && (String(router.integration_mode||'').toUpperCase()==='API' || String(router.integration_mode||'').toUpperCase()==='REST')) {
-    // ensure secret reflects status/profile; if isolated/walled garden we still keep secret but can disable or set restricted profile
-    if (desired.stage === SUSPENSION_STAGES.ISOLATED || desired.stage === SUSPENSION_STAGES.SUSPENDED) {
-      effective.status = 'SUSPENDED';
-    }
-    try { results.router = await mikrotikSyncPppSecret(router, effective); } catch (e:any) { results.router = { ok:false, error: e.message }; }
+  const effective = { ...cur, profile_name: cur.package_profile_name || cur.package_name || 'default' };
+  const walled = !!(desired.walled_garden ?? effective.walled_garden) && desired.status !== 'ACTIVE';
+  const restrictedProfile = desired.profileOverride || (walled ? 'izn-walled-garden' : null);
+  if (restrictedProfile) effective.profile_name = restrictedProfile;
+  if (desired.status === 'SUSPENDED' || desired.stage === SUSPENSION_STAGES.ISOLATED || desired.stage === SUSPENSION_STAGES.SUSPENDED) {
+    if (!walled) effective.status = 'SUSPENDED';
   }
 
-  // RADIUS sync (covers RADIUS pool subscribers and also useful for AAA consistency)
+  // Direct router provisioning (PPPoE secrets/profiles)
+  if (mode === 'ROUTER' && router && ['API','REST'].includes(String(router.integration_mode||'').toUpperCase())) {
+    try {
+      if (walled) {
+        results.walled_garden_profile = await mikrotikEnsureWalledGarden(router, { profileName: restrictedProfile || 'izn-walled-garden', rateLimit: desired.coaRateLimit || '64k/64k' });
+      }
+      results.router = await mikrotikSyncPppSecret(router, effective);
+    } catch (e:any) { results.router = { ok:false, error: e.message }; }
+  }
+
+  // RADIUS AAA sync (radcheck/radreply/radusergroup) for RADIUS and hybrid consistency
   if (cur.username) {
-    try { await syncSubscriberToRadiusDb(effective); await pool.query(`INSERT INTO radius_users(subscriber_id,username,password,profile,framed_ip_address,status,last_synced_at,last_error)
-      VALUES($1,$2,$3,$4,$5,$6,now(),NULL)
-      ON CONFLICT (username) DO UPDATE SET subscriber_id=$1,password=COALESCE($3,radius_users.password),profile=$4,framed_ip_address=$5,status=$6,last_synced_at=now(),last_error=NULL,updated_at=now()`,
-      [cur.id, cur.username, cur.password || null, effective.profile_name || effective.package_name || 'default', cur.ip_address || null, (effective.status==='SUSPENDED'||effective.status==='EXPIRED'||effective.status==='TERMINATED') ? 'DISABLED' : 'SYNCED']); results.radius_sync = { ok:true }; } catch (e:any) { results.radius_sync = { ok:false, error: e.message }; }
+    try {
+      const syncRes = await syncSubscriberToRadiusDb(effective, { walledGarden: walled, restrictedRateLimit: desired.coaRateLimit || '64k/64k', addressList: desired.addressList || 'izn-walled-garden' });
+      const ruStatus = (effective.status==='SUSPENDED'||effective.status==='EXPIRED'||effective.status==='TERMINATED') && !walled ? 'DISABLED' : (walled ? 'WALLED_GARDEN' : 'SYNCED');
+      await pool.query(`INSERT INTO radius_users(subscriber_id,username,password,profile,framed_ip_address,status,last_synced_at,last_error)
+        VALUES($1,$2,$3,$4,$5,$6,now(),NULL)
+        ON CONFLICT (username) DO UPDATE SET subscriber_id=$1,password=COALESCE($3,radius_users.password),profile=$4,framed_ip_address=$5,status=$6,last_synced_at=now(),last_error=NULL,updated_at=now()`,
+        [cur.id, cur.username, cur.password || null, effective.profile_name || effective.package_name || 'default', cur.ip_address || null, ruStatus]);
+      results.radius_sync = { ok:true, ...syncRes };
+    } catch (e:any) { results.radius_sync = { ok:false, error: e.message }; }
   }
 
-  // CoA/PoD for immediate effect
+  // CoA/PoD for immediate enforcement/reactivation
   const nas = await resolveNasForSubscriber(cur);
   if (desired.sendCoa !== false && cur.username && nas && nas.radius_secret && nas.host) {
     try {
-      const action = desired.coaAction || (desired.status === 'SUSPENDED' || desired.stage === SUSPENSION_STAGES.ISOLATED ? 'DISCONNECT' : 'COA');
+      const suspendedHard = (desired.status === 'SUSPENDED' || desired.stage === SUSPENSION_STAGES.ISOLATED || desired.stage === SUSPENSION_STAGES.SUSPENDED) && !walled;
+      let action: 'DISCONNECT'|'COA' = desired.coaAction || (suspendedHard ? 'DISCONNECT' : 'COA');
       const attrs: AnyObj = {};
-      if (desired.coaRateLimit) attrs['Mikrotik-Rate-Limit'] = desired.coaRateLimit;
-      const coa = await sendCoaPacket({ host: nas.host, port: Number(nas.coa_port || 3799), secret: String(nas.radius_secret), username: cur.username, action: action as any, attributes: attrs });
-      if (coa.ok && action === 'DISCONNECT') await pool.query("UPDATE subscriber_sessions SET status='OFFLINE', rx_bps=0, tx_bps=0, updated_at=now() WHERE username=$1", [cur.username]);
-      results.coa = { ok: coa.ok, action, code: coa.code, error: coa.error, nas: { host: nas.host, port: Number(nas.coa_port || 3799) } };
+      if (walled) {
+        attrs['Mikrotik-Address-List'] = desired.addressList || 'izn-walled-garden';
+        attrs['Mikrotik-Rate-Limit'] = desired.coaRateLimit || '64k/64k';
+        if (restrictedProfile) attrs['Mikrotik-Group'] = restrictedProfile;
+        action = 'COA';
+      } else if (desired.coaRateLimit) {
+        attrs['Mikrotik-Rate-Limit'] = desired.coaRateLimit;
+      }
+      const coa = await sendCoaPacket({ host: nas.host, port: Number(nas.coa_port || 3799), secret: String(nas.radius_secret), username: cur.username, action, attributes: attrs });
+      // if CoA update failed on NAS that doesn't support dynamic attr change well, fallback to disconnect so reconnect applies new RADIUS/profile state
+      let finalCoa = coa;
+      if (!coa.ok && action === 'COA') {
+        const dc = await sendCoaPacket({ host: nas.host, port: Number(nas.coa_port || 3799), secret: String(nas.radius_secret), username: cur.username, action: 'DISCONNECT' });
+        finalCoa = { ...dc, fallback: 'disconnect', original: coa } as any;
+      }
+      if (finalCoa.ok && (action === 'DISCONNECT' || finalCoa.fallback === 'disconnect')) {
+        await pool.query("UPDATE subscriber_sessions SET status='OFFLINE', rx_bps=0, tx_bps=0, updated_at=now() WHERE username=$1", [cur.username]);
+      }
+      results.coa = { ok: finalCoa.ok, action, code: finalCoa.code, error: finalCoa.error, fallback: finalCoa.fallback, nas: { host: nas.host, port: Number(nas.coa_port || 3799) } };
     } catch (e:any) { results.coa = { ok:false, error: e.message }; }
   } else {
     results.coa = { ok:false, skipped:true, reason: 'no NAS/secret/username or sendCoa disabled' };
@@ -222,12 +255,31 @@ export async function evaluateDuePolicies() {
       // overdue: grace -> walled garden/isolation -> suspended
       if (!graceUntil) graceUntil = addDays(due, graceDays);
       if (daysOverdue <= graceDays) {
-        if (!['ISOLATED','SUSPENDED'].includes(targetStage)) { targetStage = SUSPENSION_STAGES.GRACE; walled = !!policy.enable_walled_garden; reason = `Overdue: grace period until ${ymd(graceUntil)}`; }
+        if (!['ISOLATED','SUSPENDED','WALLED_GARDEN'].includes(targetStage)) {
+          targetStage = policy.enable_walled_garden ? SUSPENSION_STAGES.WALLED_GARDEN : SUSPENSION_STAGES.GRACE;
+          walled = !!policy.enable_walled_garden;
+          targetStatus = policy.enable_walled_garden ? 'ACTIVE' : s.status; // keep auth but restrict when walled garden
+          reason = `Overdue: grace period until ${ymd(graceUntil)}${walled ? ' (walled garden)' : ''}`;
+        }
       } else {
         // beyond grace
         if (policy.auto_suspend) {
-          if (policy.isolate_on_suspend) { targetStage = SUSPENSION_STAGES.ISOLATED; targetStatus = 'SUSPENDED'; walled = !!policy.enable_walled_garden; reason = 'Overdue beyond grace: router isolated/suspended'; }
-          else { targetStage = SUSPENSION_STAGES.SUSPENDED; targetStatus = 'SUSPENDED'; reason = 'Overdue beyond grace: suspended'; }
+          if (policy.enable_walled_garden) {
+            targetStage = SUSPENSION_STAGES.WALLED_GARDEN;
+            targetStatus = 'ACTIVE'; // restricted access (walled garden) rather than hard reject
+            walled = true;
+            reason = 'Overdue beyond grace: walled garden isolation active';
+          } else if (policy.isolate_on_suspend) {
+            targetStage = SUSPENSION_STAGES.ISOLATED;
+            targetStatus = 'SUSPENDED';
+            walled = false;
+            reason = 'Overdue beyond grace: router isolated/suspended';
+          } else {
+            targetStage = SUSPENSION_STAGES.SUSPENDED;
+            targetStatus = 'SUSPENDED';
+            walled = false;
+            reason = 'Overdue beyond grace: suspended';
+          }
         }
       }
     }
@@ -241,11 +293,12 @@ export async function evaluateDuePolicies() {
       await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,$2,$3,$4,$5::jsonb,$6)`,
         [s.id, statusChanged ? 'STATUS_CHANGE' : 'STAGE_CHANGE', targetStage, reason, JSON.stringify({ daysOverdue, daysToDue, currentDue, due: ymd(due), walled }), 'policy_engine']);
 
-      // apply network enforcement only when isolating/suspending or reactivating/clearing to restricted states as needed
-      if (targetStage === SUSPENSION_STAGES.ISOLATED || targetStage === SUSPENSION_STAGES.SUSPENDED || (walled && stageChanged)) {
+      // apply network enforcement (including walled-garden restriction profile/address-list/CoA)
+      if (stageChanged || statusChanged || walledChanged) {
         try {
-          const profileOverride = walled ? (policy.walled_garden_profile || undefined) : undefined;
-          await applyProvisioningState(s.id, { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction: 'DISCONNECT', profileOverride });
+          const profileOverride = walled ? (policy.walled_garden_profile || 'izn-walled-garden') : undefined;
+          const coaAction: 'DISCONNECT'|'COA' = (targetStatus === 'SUSPENDED' && !walled) ? 'DISCONNECT' : 'COA';
+          await applyProvisioningState(s.id, { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction, profileOverride, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? 'izn-walled-garden' : undefined });
         } catch (e:any) {
           await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'ENFORCEMENT_ERROR',$2,$3,$4::jsonb,'policy_engine')`, [s.id, targetStage, e.message, JSON.stringify({})]);
         }
@@ -265,9 +318,30 @@ export async function reactivateSubscriber(subscriberId: string, reason = 'Payme
   return { ok: true, duration_ms: Date.now()-start, target_ms: 2000, applied };
 }
 
-export async function recordPaymentAndReactivate(input: { gateway: string; amount: number; invoice_id?: string; subscriber_id?: string; trx_id?: string; method?: string; payer_number?: string; raw?: any; payment_ref?: string; currency?: string; status?: string }) {
+export async function recordPaymentAndReactivate(input: { gateway: string; amount: number; invoice_id?: string; subscriber_id?: string; trx_id?: string; method?: string; payer_number?: string; raw?: any; payment_ref?: string; currency?: string; status?: string; dedupe_key?: string }) {
   const amount = Number(input.amount || 0);
   if (!(amount > 0)) throw new Error('Invalid payment amount');
+  const status = String(input.status || 'COMPLETED').toUpperCase();
+  const trx = input.trx_id ? String(input.trx_id).trim() : null;
+
+  // idempotency: if this transaction/payment already completed, return existing result without double-applying
+  if (trx) {
+    const existingByTrx = await pool.query(`SELECT * FROM payments WHERE gateway=$1 AND trx_id=$2 AND status='COMPLETED' ORDER BY verified_at DESC NULLS LAST, created_at DESC LIMIT 1`, [input.gateway, trx]);
+    if (existingByTrx.rows[0]) {
+      const p = existingByTrx.rows[0];
+      const inv = p.invoice_id ? (await pool.query('SELECT * FROM invoices WHERE id=$1', [p.invoice_id])).rows[0] : null;
+      return { ok: true, duplicate: true, payment: p, invoice: inv, subscriber_id: p.subscriber_id, reactivation: null };
+    }
+  }
+  if (input.payment_ref) {
+    const existingByRef = await pool.query('SELECT * FROM payments WHERE payment_ref=$1', [input.payment_ref]);
+    if (existingByRef.rows[0] && String(existingByRef.rows[0].status).toUpperCase() === 'COMPLETED' && status === 'COMPLETED') {
+      const p = existingByRef.rows[0];
+      const inv = p.invoice_id ? (await pool.query('SELECT * FROM invoices WHERE id=$1', [p.invoice_id])).rows[0] : null;
+      return { ok: true, duplicate: true, payment: p, invoice: inv, subscriber_id: p.subscriber_id, reactivation: null };
+    }
+  }
+
   let invoice = null as any;
   if (input.invoice_id) {
     const ir = await pool.query('SELECT * FROM invoices WHERE id=$1', [input.invoice_id]);
@@ -282,23 +356,34 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
       invoice = ir.rows[0] || null; subscriberId = subscriberId || invoice?.subscriber_id;
     }
   }
+  if (!subscriberId && trx) {
+    // try to match by payer/trx hints later via SMS ingestion context; for now leave null
+  }
+
   const payment_ref = input.payment_ref || `PAY-${Date.now()}-${Math.random().toString(36).slice(2,8).toUpperCase()}`;
-  const status = input.status || 'COMPLETED';
-  const payRes = await pool.query(`INSERT INTO payments (payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, trx_id, payer_number, gateway_response, verified_at)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb, CASE WHEN $8='COMPLETED' THEN now() ELSE NULL END)
-    ON CONFLICT (payment_ref) DO UPDATE SET status=EXCLUDED.status, trx_id=COALESCE(EXCLUDED.trx_id,payments.trx_id), gateway_response=COALESCE(EXCLUDED.gateway_response,payments.gateway_response), verified_at=COALESCE(EXCLUDED.verified_at,payments.verified_at), updated_at=now()
+  const payRes = await pool.query(`INSERT INTO payments (payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, trx_id, payer_number, gateway_response, verified_at, idempotency_key)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb, CASE WHEN $8='COMPLETED' THEN now() ELSE NULL END, $12)
+    ON CONFLICT (payment_ref) DO UPDATE SET
+      status=CASE WHEN payments.status='COMPLETED' THEN payments.status ELSE EXCLUDED.status END,
+      trx_id=COALESCE(EXCLUDED.trx_id,payments.trx_id),
+      payer_number=COALESCE(EXCLUDED.payer_number,payments.payer_number),
+      gateway_response=COALESCE(EXCLUDED.gateway_response,payments.gateway_response),
+      verified_at=COALESCE(payments.verified_at, EXCLUDED.verified_at),
+      updated_at=now()
     RETURNING *`,
-    [payment_ref, invoice?.id || input.invoice_id || null, subscriberId, input.gateway, input.method || null, amount, input.currency || 'BDT', status, input.trx_id || null, input.payer_number || null, JSON.stringify(input.raw || {})]
+    [payment_ref, invoice?.id || input.invoice_id || null, subscriberId, input.gateway, input.method || null, amount, input.currency || 'BDT', status, trx, input.payer_number || null, JSON.stringify(input.raw || {}), input.dedupe_key || null]
   );
   const payment = payRes.rows[0];
 
   let updatedInvoice = invoice;
   if (invoice && status === 'COMPLETED') {
-    const paid = +(Number(invoice.paid_amount || 0) + amount).toFixed(2);
+    // idempotent invoice update: do not exceed total
     const total = Number(invoice.total_amount || invoice.amount || 0);
+    const paidBefore = Number(invoice.paid_amount || 0);
+    const paid = +Math.min(total, paidBefore + amount).toFixed(2);
     const dueAmt = +Math.max(0, total - paid).toFixed(2);
     const invStatus = dueAmt <= 0 ? 'PAID' : (paid > 0 ? 'PARTIAL' : invoice.status);
-    updatedInvoice = (await pool.query(`UPDATE invoices SET paid_amount=$2, due_amount=$3, status=$4, paid_at=CASE WHEN $4='PAID' THEN now() ELSE paid_at END, updated_at=now() WHERE id=$1 RETURNING *`,
+    updatedInvoice = (await pool.query(`UPDATE invoices SET paid_amount=$2, due_amount=$3, status=$4, paid_at=CASE WHEN $4='PAID' THEN COALESCE(paid_at, now()) ELSE paid_at END, updated_at=now() WHERE id=$1 RETURNING *`,
       [invoice.id, paid, dueAmt, invStatus])).rows[0];
   }
 
@@ -306,18 +391,19 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
   if (subscriberId) {
     if (invoice) await recalcSubscriberDue(subscriberId);
     else await pool.query(`UPDATE subscribers SET balance = GREATEST(COALESCE(balance,0)-$2,0), updated_at=now() WHERE id=$1`, [subscriberId, amount]).catch(()=>{});
-    await pool.query(`INSERT INTO wallet_transactions(subscriber_id, type, amount, reference_id, reference_type, description, metadata)
-      VALUES($1,'CREDIT',$2,$3,$4,$5,$6::jsonb)`,
-      [subscriberId, amount, payment.payment_ref, 'PAYMENT', `Payment via ${input.gateway}`, JSON.stringify({ invoice_id: invoice?.id || null, trx_id: input.trx_id || null })]).catch(()=>{});
-    // auto-reactivate if no outstanding dues
+    if (status === 'COMPLETED') {
+      await pool.query(`INSERT INTO wallet_transactions(subscriber_id, type, amount, reference_id, reference_type, description, metadata)
+        VALUES($1,'CREDIT',$2,$3,$4,$5,$6::jsonb)`,
+        [subscriberId, amount, payment.payment_ref, 'PAYMENT', `Payment via ${input.gateway}`, JSON.stringify({ invoice_id: invoice?.id || null, trx_id: trx })]).catch(()=>{});
+    }
     const due = await recalcSubscriberDue(subscriberId);
     const sub = (await pool.query('SELECT status, suspension_stage, walled_garden FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
-    if (due <= 0 && sub && (sub.status === 'SUSPENDED' || sub.status === 'EXPIRED' || sub.suspension_stage !== 'NONE' || sub.walled_garden)) {
-      reactivation = await reactivateSubscriber(subscriberId, `Payment confirmed (${input.gateway}${input.trx_id ? ' '+input.trx_id : ''})`);
+    if (status === 'COMPLETED' && due <= 0 && sub && (sub.status === 'SUSPENDED' || sub.status === 'EXPIRED' || String(sub.suspension_stage || 'NONE') !== 'NONE' || sub.walled_garden)) {
+      reactivation = await reactivateSubscriber(subscriberId, `Payment confirmed (${input.gateway}${trx ? ' '+trx : ''})`);
     }
   }
 
-  return { ok: true, payment, invoice: updatedInvoice, subscriber_id: subscriberId, reactivation };
+  return { ok: true, duplicate: false, payment, invoice: updatedInvoice, subscriber_id: subscriberId, reactivation };
 }
 
 export async function getBillingMetrics() {
@@ -361,11 +447,64 @@ export async function ensureOverdueInvoiceStatuses() {
   await pool.query(`UPDATE invoices SET status='OVERDUE', updated_at=now() WHERE status IN ('UNPAID','PARTIAL') AND due_date < CURRENT_DATE AND due_amount > 0`);
 }
 
+export async function tryAcquireSchedulerLock(name: string, ttlMs = 55_000, holder = `pid:${process.pid}`) {
+  const now = new Date();
+  const until = new Date(now.getTime() + ttlMs);
+  const r = await pool.query(`
+    INSERT INTO billing_scheduler_locks(name, locked_until, holder, updated_at)
+    VALUES($1,$2,$3,now())
+    ON CONFLICT (name) DO UPDATE
+      SET locked_until=EXCLUDED.locked_until, holder=EXCLUDED.holder, updated_at=now()
+      WHERE billing_scheduler_locks.locked_until <= now()
+    RETURNING name
+  `, [name, until.toISOString(), holder]).catch(()=>({ rows: [] as any[] }));
+  return !!r.rows?.[0];
+}
+
 export async function startBillingScheduler() {
-  // in-process scheduler (idempotent-ish operations). Runs on boot and periodically.
+  // in-process scheduler with DB-backed lock to avoid overlapping runs across instances
   const run = async () => {
+    const got = await tryAcquireSchedulerLock('billing-due-policy-sweep', 55_000).catch(()=>false);
+    if (!got) return;
     try { await ensureOverdueInvoiceStatuses(); await evaluateDuePolicies(); } catch (e:any) { console.error('[BillingScheduler] error', e.message); }
   };
   setTimeout(run, 5000);
   setInterval(run, 60 * 1000); // every minute for timely grace/suspension evaluation
+}
+
+export async function ingestMfsSmsEvent(input: { gateway?: string; sender?: string; message?: string; amount?: number; trx_id?: string; payer_number?: string; payload?: any }) {
+  const gateway = String(input.gateway || 'bkash').toLowerCase();
+  const message = String(input.message || input.payload?.text || input.payload?.body || '').trim();
+  const trxId = input.trx_id ? String(input.trx_id).trim() : null;
+  const amount = input.amount != null ? Number(input.amount) : null;
+  const ins = await pool.query(`INSERT INTO payment_sms_events(gateway,sender,message,trx_id,amount,payer_number,status,payload)
+    VALUES($1,$2,$3,$4,$5,$6,'RECEIVED',$7::jsonb) RETURNING *`,
+    [gateway, input.sender || input.payer_number || null, message || null, trxId, Number.isFinite(amount as any) ? amount : null, input.payer_number || input.sender || null, JSON.stringify(input.payload || {})]);
+
+  const ev = ins.rows[0];
+  let match: any = null;
+  let recorded: any = null;
+
+  // best-effort auto-match: prefer existing pending payment by trx/ref hints, else open invoice by amount+recent
+  if (trxId) {
+    const byTrx = await pool.query(`SELECT * FROM payments WHERE trx_id=$1 ORDER BY created_at DESC LIMIT 1`, [trxId]);
+    if (byTrx.rows[0]) match = { type: 'payment', payment: byTrx.rows[0] };
+  }
+  if (!match && ev.amount && Number(ev.amount) > 0) {
+    const inv = await pool.query(`SELECT i.* FROM invoices i
+      WHERE i.status IN ('UNPAID','PARTIAL','OVERDUE') AND ABS(i.due_amount - $1::numeric) < 0.01
+      ORDER BY i.due_date ASC NULLS LAST, i.created_at DESC LIMIT 1`, [ev.amount]);
+    if (inv.rows[0]) match = { type: 'invoice', invoice: inv.rows[0] };
+  }
+
+  if (match?.payment && String(match.payment.status).toUpperCase() !== 'COMPLETED') {
+    recorded = await recordPaymentAndReactivate({ gateway, amount: Number(ev.amount || match.payment.amount || 0), payment_ref: match.payment.payment_ref, invoice_id: match.payment.invoice_id, subscriber_id: match.payment.subscriber_id, trx_id: trxId || undefined, method: 'mfs_sms', payer_number: ev.payer_number || undefined, raw: { sms_event_id: ev.id, message }, status: 'COMPLETED' });
+  } else if (match?.invoice) {
+    recorded = await recordPaymentAndReactivate({ gateway, amount: Number(ev.amount || match.invoice.due_amount || 0), invoice_id: match.invoice.id, subscriber_id: match.invoice.subscriber_id, trx_id: trxId || undefined, method: 'mfs_sms', payer_number: ev.payer_number || undefined, raw: { sms_event_id: ev.id, message }, status: 'COMPLETED' });
+  }
+
+  const status = recorded?.ok ? 'MATCHED' : (match ? 'MATCH_FOUND' : 'UNMATCHED');
+  const upd = await pool.query(`UPDATE payment_sms_events SET status=$2, matched_payment_ref=$3, matched_invoice_id=$4, processed_at=CASE WHEN $2 IN ('MATCHED','MATCH_FOUND') THEN now() ELSE processed_at END WHERE id=$1 RETURNING *`,
+    [ev.id, status, recorded?.payment?.payment_ref || match?.payment?.payment_ref || null, recorded?.invoice?.id || match?.invoice?.id || null]);
+  return { ok: true, event: upd.rows[0], match, recorded };
 }

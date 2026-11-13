@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
-import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses } from '../integrations/billing';
+import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses, ingestMfsSmsEvent } from '../integrations/billing';
 import { getKernel } from '../kernel/kernel-instance';
 import crypto from 'crypto';
 
@@ -77,10 +77,50 @@ router.post('/suspension/evaluate', asyncHandler(async (req, res) => {
 router.post('/subscribers/:id/suspend', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
   const b = req.body || {};
-  await pool.query("UPDATE subscribers SET status='SUSPENDED', suspension_stage='ISOLATED', walled_garden=$2, suspension_reason=$3, updated_at=now() WHERE id=$1", [req.params.id, !!b.walled_garden, b.reason || 'Manual suspension']);
-  const applied = await applyProvisioningState(req.params.id, { status: 'SUSPENDED', stage: 'ISOLATED', walled_garden: !!b.walled_garden, reason: b.reason || 'Manual suspension', sendCoa: true, coaAction: 'DISCONNECT' });
-  await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'MANUAL_SUSPEND','ISOLATED',$2,$3::jsonb,$4)`, [req.params.id, b.reason || 'Manual suspension', JSON.stringify({ walled_garden: !!b.walled_garden }), (req as any).user?.email || 'user']);
+  const walled = !!b.walled_garden;
+  const stage = walled ? 'WALLED_GARDEN' : 'ISOLATED';
+  const status = walled ? 'ACTIVE' : 'SUSPENDED';
+  await pool.query(`UPDATE subscribers SET status=$2, suspension_stage=$3, walled_garden=$4, suspension_reason=$5, updated_at=now() WHERE id=$1`, [req.params.id, status, stage, walled, b.reason || 'Manual suspension']);
+  const applied = await applyProvisioningState(req.params.id, { status, stage, walled_garden: walled, reason: b.reason || 'Manual suspension', sendCoa: true, coaAction: walled ? 'COA' : 'DISCONNECT', profileOverride: walled ? 'izn-walled-garden' : undefined, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? 'izn-walled-garden' : undefined });
+  await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'MANUAL_SUSPEND',$2,$3,$4::jsonb,$5)`, [req.params.id, stage, b.reason || 'Manual suspension', JSON.stringify({ walled_garden: walled }), (req as any).user?.email || 'user']);
   res.json({ ok: true, applied });
+}));
+
+router.post('/payments/sms/ingest', asyncHandler(async (req, res) => {
+  // allow either authenticated billing/admin user or shared SMS ingest token
+  const auth = String(req.headers.authorization || '');
+  const smsToken = String(req.headers['x-sms-token'] || req.query.token || req.body?.token || '');
+  const expected = process.env.MFS_SMS_INGEST_TOKEN || process.env.SMS_INGEST_TOKEN || '';
+  let authorized = !!(auth.startsWith('Bearer ') || (req as any).user);
+  if (!authorized && expected && smsToken && smsToken === expected) authorized = true;
+  if (!authorized && !expected) {
+    // no token configured: only allow from trusted/authenticated context; reject anonymous to be safe
+    return res.status(401).json({ ok: false, message: 'Unauthorized SMS ingest (configure MFS_SMS_INGEST_TOKEN or authenticate)' });
+  }
+  if (!authorized) return res.status(401).json({ ok: false, message: 'Invalid SMS ingest token' });
+
+  const b = req.body || {};
+  const gateway = String(b.gateway || 'bkash').toLowerCase();
+  const payload = b.payload || b;
+  // parse via plugin hook if available
+  let parsed: any = { amount: b.amount, trxId: b.trx_id || b.trxId, payer_number: b.sender || b.payer_number || b.msisdn, text: b.message || b.text };
+  try {
+    const kernel = getKernel();
+    const pluginMeta = kernel?.listPlugins().find(p => p.type === 'PAYMENT_GATEWAY' && (p.id === gateway || p.id === `payment-${gateway}` || p.name.toLowerCase().includes(gateway)));
+    const plugin = pluginMeta ? kernel?.getPlugin(pluginMeta.id)?.instance : null;
+    if (plugin && typeof plugin.onMfsSms === 'function') {
+      const r = await plugin.onMfsSms({ ...payload, gateway, sender: b.sender, message: b.message || b.text });
+      parsed = { ...parsed, ...r, amount: r?.amount ?? parsed.amount, trxId: r?.trxId ?? parsed.trxId, payer_number: r?.payer?.msisdn ?? parsed.payer_number, text: r?.text ?? parsed.text };
+    }
+  } catch {}
+  const result = await ingestMfsSmsEvent({ gateway, sender: b.sender || parsed.payer_number, message: parsed.text || b.message || b.text, amount: parsed.amount != null ? Number(parsed.amount) : undefined, trx_id: parsed.trxId || b.trx_id, payer_number: parsed.payer_number || b.sender, payload: { raw: b, parsed } });
+  res.json(result);
+}));
+
+router.get('/payments/sms', asyncHandler(async (req, res) => {
+  if (!requireBillingRole(req, res)) return;
+  const r = await pool.query('SELECT * FROM payment_sms_events ORDER BY created_at DESC LIMIT 200');
+  res.json({ ok: true, data: r.rows });
 }));
 
 router.post('/subscribers/:id/reactivate', asyncHandler(async (req, res) => {
@@ -166,6 +206,38 @@ router.post('/payments/:paymentRef/confirm', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+function timingSafeEq(a: string, b: string) {
+  const ba = Buffer.from(a || '');
+  const bb = Buffer.from(b || '');
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+function verifyWebhookSignature(gateway: string, req: any, cfg: any) {
+  const secret = cfg?.webhook_secret || cfg?.credentials?.webhook_secret || cfg?.config?.webhook_secret;
+  if (!secret) return { ok: true, skipped: true, reason: 'no webhook secret configured' };
+  const raw = JSON.stringify(req.body || {});
+  const sigHeader = String(req.headers['x-signature'] || req.headers['x-webhook-signature'] || req.headers['stripe-signature'] || req.headers['x-hook-signature'] || '');
+  if (!sigHeader) {
+    // allow token-based verification via query/body for some providers/setups
+    const token = String(req.query?.token || req.body?.token || req.body?.signature || '');
+    if (token && timingSafeEq(token, String(secret))) return { ok: true, mode: 'token' };
+    return { ok: false, error: 'missing webhook signature/token' };
+  }
+  const h = crypto.createHmac('sha256', String(secret)).update(raw).digest('hex');
+  const candidate = sigHeader.replace(/^sha256=/i, '').trim();
+  if (timingSafeEq(candidate, h)) return { ok: true, mode: 'hmac-sha256' };
+  // Stripe-like t=,v1= support best-effort
+  const m = sigHeader.match(/v1=([a-f0-9]+)/i);
+  if (m) {
+    const t = (sigHeader.match(/t=([0-9]+)/i) || [])[1] || '';
+    const signed = `${t}.${raw}`;
+    const h2 = crypto.createHmac('sha256', String(secret)).update(signed).digest('hex');
+    if (timingSafeEq(m[1], h2)) return { ok: true, mode: 'stripe-v1' };
+  }
+  return { ok: false, error: 'invalid webhook signature' };
+}
+
 router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
   const gateway = String(req.params.gateway || '').toLowerCase();
   const cfg = await getGatewayConfig(gateway);
@@ -173,18 +245,45 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
   const pluginMeta = kernel?.listPlugins().find(p => p.type === 'PAYMENT_GATEWAY' && (p.id === gateway || p.id === `payment-${gateway}` || p.name.toLowerCase().includes(gateway)));
   const plugin = pluginMeta ? kernel?.getPlugin(pluginMeta.id)?.instance : null;
   const payload = req.body || {};
+
+  const sig = verifyWebhookSignature(gateway, req, cfg);
+  if (!sig.ok) {
+    await pool.query(`INSERT INTO payment_webhook_events(gateway,event_id,payload,processed,processed_at,result) VALUES($1,$2,$3::jsonb,false,now(),$4::jsonb)`,
+      [gateway, payload.event_id || payload.id || null, JSON.stringify(payload), JSON.stringify({ ok: false, verified: false, reason: 'signature_verification_failed', sig })]);
+    return res.status(401).json({ ok: false, verified: false, message: sig.error || 'Invalid webhook signature' });
+  }
+
   let verification: any = { ok: true, verified: true, status: 'COMPLETED', amount: payload.amount, trxId: payload.trxId || payload.trx_id, paymentRef: payload.paymentRef || payload.payment_ref, invoiceId: payload.invoiceId || payload.invoice_id, raw: payload };
   if (plugin && typeof plugin.verifyWebhook === 'function') {
     try { verification = await plugin.verifyWebhook(payload, req.headers as any, cfg); } catch (e:any) { verification = { ok: false, verified: false, status: 'FAILED', message: e.message, raw: payload }; }
   }
-  await pool.query(`INSERT INTO payment_webhook_events(gateway,event_id,payload,processed,processed_at,result) VALUES($1,$2,$3::jsonb,$4,now(),$5::jsonb)`,
-    [gateway, verification.eventId || payload.event_id || payload.id || null, JSON.stringify(payload), verification.verified === true, JSON.stringify(verification)]);
 
-  if (verification.verified && (String(verification.status).toUpperCase() === 'COMPLETED' || String(verification.status).toUpperCase() === 'PAID')) {
+  const eventId = verification.eventId || payload.event_id || payload.id || verification.trxId || payload.trxId || payload.trx_id || null;
+  const paymentRef = verification.paymentRef || payload.paymentRef || payload.payment_ref || null;
+  const trxId = verification.trxId || payload.trxId || payload.trx_id || null;
+  const dedupeKey = [gateway, eventId || '', trxId || '', paymentRef || ''].join('|');
+  if (dedupeKey.replace(/\|/g, '').length > gateway.length) {
+    const dup = await pool.query('SELECT id, result, processed FROM payment_webhook_events WHERE dedupe_key=$1 LIMIT 1', [dedupeKey]);
+    if (dup.rows[0]) {
+      return res.json({ ok: true, verified: !!verification.verified, processed: !!dup.rows[0].processed, duplicate: true, event: dup.rows[0] });
+    }
+  }
+
+  let eventRow: any = null;
+  try {
+    const ins = await pool.query(`INSERT INTO payment_webhook_events(gateway,event_id,dedupe_key,payload,processed,processed_at,result) VALUES($1,$2,$3,$4::jsonb,$5,now(),$6::jsonb) RETURNING *`,
+      [gateway, eventId, (dedupeKey.replace(/\|/g,'').length > gateway.length ? dedupeKey : null), JSON.stringify(payload), verification.verified === true, JSON.stringify(verification)]);
+    eventRow = ins.rows[0];
+  } catch (e:any) {
+    // unique constraint race -> treat as duplicate
+    return res.json({ ok: true, verified: !!verification.verified, processed: false, duplicate: true });
+  }
+
+  if (verification.verified && (String(verification.status).toUpperCase() === 'COMPLETED' || String(verification.status).toUpperCase() === 'PAID' || String(verification.status).toUpperCase() === 'SUCCESS')) {
     const amount = Number(verification.amount || payload.amount || 0);
-    const paymentRef = verification.paymentRef || payload.paymentRef || payload.payment_ref;
     const invoiceId = verification.invoiceId || payload.invoiceId || payload.invoice_id;
-    const result = amount > 0 ? await recordPaymentAndReactivate({ gateway, amount, invoice_id: invoiceId, subscriber_id: payload.subscriber_id, trx_id: verification.trxId || payload.trxId || payload.trx_id, method: payload.method || 'webhook', payer_number: payload.payer || payload.msisdn, raw: payload, payment_ref: paymentRef, currency: verification.currency || payload.currency || 'BDT', status: 'COMPLETED' }) : { ok:false, message:'No amount in webhook' };
+    const result = amount > 0 ? await recordPaymentAndReactivate({ gateway, amount, invoice_id: invoiceId, subscriber_id: payload.subscriber_id, trx_id: trxId || undefined, method: payload.method || 'webhook', payer_number: payload.payer || payload.msisdn || verification.payer?.msisdn, raw: payload, payment_ref: paymentRef || undefined, currency: verification.currency || payload.currency || 'BDT', status: 'COMPLETED', dedupe_key: dedupeKey }) : { ok:false, message:'No amount in webhook' };
+    await pool.query('UPDATE payment_webhook_events SET processed=true, processed_at=now(), result=$2::jsonb WHERE id=$1', [eventRow?.id, JSON.stringify({ verification, result })]);
     return res.json({ ok: true, verified: true, processed: true, result });
   }
   res.json({ ok: true, verified: !!verification.verified, processed: false, verification });

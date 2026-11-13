@@ -130,8 +130,8 @@ async function bootstrap() {
   app.use('/api/wireguard', authMiddleware, wireguardRouter);
 
   // Phase 4: Billing, Invoicing, Payments, Suspension/Reactivation
-  // Webhooks are public (provider callbacks) but processed by billing router
-  app.use('/api/billing', (req, res, next) => (req.path.startsWith('/webhooks/') ? next() : authMiddleware(req, res, next)), billingRouter);
+  // Webhooks and MFS SMS ingest are public callbacks (validated in-route)
+  app.use('/api/billing', (req, res, next) => ((req.path.startsWith('/webhooks/') || req.path === '/payments/sms/ingest') ? next() : authMiddleware(req, res, next)), billingRouter);
 
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error(err);

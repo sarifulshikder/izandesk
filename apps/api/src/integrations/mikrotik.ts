@@ -331,6 +331,35 @@ export async function mikrotikRemovePppSecret(r: RouterRow, username: string) {
   } finally { try { api.close(); } catch {} }
 }
 
+export async function mikrotikEnsureWalledGarden(r: RouterRow, opts: { profileName?: string; rateLimit?: string } = {}) {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  const profileName = String(opts.profileName || 'izn-walled-garden').trim() || 'izn-walled-garden';
+  const rate = String(opts.rateLimit || '64k/64k');
+  const comment = 'IzanDesk:WalledGarden';
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    const existing: any[] = await restFetch(o, `/ppp/profile?name=${encodeURIComponent(profileName)}`).catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, `/ppp/profile?name=${encodeURIComponent(profileName)}`); throw e; }) as any;
+    const body: any = { name: profileName, 'rate-limit': rate, comment };
+    if (Array.isArray(existing) && existing.length) {
+      const id = existing[0]['.id'] || existing[0].id;
+      await restSend(o, 'PATCH', `/ppp/profile/${id}`, body).catch(async (e)=>{ if (o.scheme==='https') return restSendHttps(o,'PATCH',`/ppp/profile/${id}`,body); throw e; });
+      return { ok: true, action: 'updated', profile: profileName, mode: 'REST' };
+    }
+    await restSend(o, 'PUT', `/ppp/profile`, body).catch(async (e)=>{ if (o.scheme==='https') return restSendHttps(o,'PUT',`/ppp/profile`,body); throw e; });
+    return { ok: true, action: 'created', profile: profileName, mode: 'REST' };
+  }
+  const o = rosOpts(r, 'API') as any;
+  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  try {
+    await api.connect();
+    const all: any[] = await api.write('/ppp/profile/print').catch(()=>[]) as any;
+    const existing = (all || []).find((x:any)=>String(x.name)===profileName);
+    if (existing) await api.write('/ppp/profile/set', [`=.id=${existing['.id']}`, `=rate-limit=${rate}`, `=comment=${comment}`]);
+    else await api.write('/ppp/profile/add', [`=name=${profileName}`, `=rate-limit=${rate}`, `=comment=${comment}`]);
+    return { ok: true, action: existing ? 'updated' : 'created', profile: profileName, mode: 'API' };
+  } finally { try { api.close(); } catch {} }
+}
+
 export async function mikrotikProvisionWireGuard(r: RouterRow, cfg: { ifName: string; listenPort?: number; privateKey?: string; address: string; peerName?: string; hubPublicKey: string; endpointHost: string; endpointPort: number; allowedAddress: string; keepalive?: number; presharedKey?: string; }) {
   const mode = String(r.integration_mode || 'API').toUpperCase();
   const ifName = String(cfg.ifName || 'wg-izandesk').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 15) || 'wg-izandesk';

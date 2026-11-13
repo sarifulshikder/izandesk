@@ -39,26 +39,35 @@ export async function syncAllRadiusNas() {
   return { synced: r.rows.length };
 }
 
-export async function syncSubscriberToRadiusDb(sub: any) {
+export async function syncSubscriberToRadiusDb(sub: any, opts: { walledGarden?: boolean; restrictedRateLimit?: string; addressList?: string } = {}) {
   const username = String(sub.username || '').trim();
   if (!username) return { skipped: true, reason: 'no username' };
   const password = String(sub.password || 'changeme');
   const profile = String(sub.profile_name || sub.package_name || 'default');
   const ip = sub.ip_address || null;
+  const suspended = sub.status === 'SUSPENDED' || sub.status === 'TERMINATED' || sub.status === 'EXPIRED';
+  const walled = !!(opts.walledGarden || sub.walled_garden || sub.suspension_stage === 'WALLED_GARDEN' || sub.suspension_stage === 'ISOLATED');
 
   await pool.query('DELETE FROM radcheck WHERE username=$1', [username]);
   await pool.query('DELETE FROM radreply WHERE username=$1', [username]);
   await pool.query('DELETE FROM radusergroup WHERE username=$1', [username]);
 
-  if (sub.status === 'SUSPENDED' || sub.status === 'TERMINATED' || sub.status === 'EXPIRED') {
+  if (suspended && !walled) {
     await pool.query("INSERT INTO radcheck(username,attribute,op,value) VALUES($1,'Auth-Type',':=','Reject')", [username]);
   } else {
     await pool.query("INSERT INTO radcheck(username,attribute,op,value) VALUES($1,'Cleartext-Password',':=',$2)", [username, password]);
   }
   if (profile) await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Mikrotik-Group',':=',$2)", [username, profile]);
   if (ip) await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Framed-IP-Address',':=',$2)", [username, String(ip)]);
+  if (walled && !suspended) {
+    const addrList = opts.addressList || 'izn-walled-garden';
+    const rl = opts.restrictedRateLimit || '64k/64k';
+    await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Mikrotik-Address-List',':=',$2)", [username, addrList]);
+    await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Mikrotik-Rate-Limit',':=',$2)", [username, rl]);
+    await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Reply-Message',':=',$2)", [username, 'Account restricted: please pay outstanding dues to restore service']);
+  }
   await pool.query("INSERT INTO radusergroup(username,groupname,priority) VALUES($1,$2,1)", [username, profile || 'default']);
-  return { ok: true, username, profile };
+  return { ok: true, username, profile, walled_garden: walled && !suspended, suspended: suspended && !walled };
 }
 
 function encodeAttr(type: number, value: Buffer) {
@@ -67,19 +76,25 @@ function encodeAttr(type: number, value: Buffer) {
 }
 function encodeStringAttr(type: number, str: string) { return encodeAttr(type, Buffer.from(str, 'utf8')); }
 
+function encodeMikrotikVsa(vendorType: number, value: string) {
+  const vsaVal = Buffer.concat([Buffer.from([vendorType]), Buffer.alloc(1), Buffer.from(String(value), 'utf8')]);
+  vsaVal[1] = vsaVal.length;
+  const vendor = Buffer.alloc(4); vendor.writeUInt32BE(14988, 0);
+  return encodeAttr(26, Buffer.concat([vendor, vsaVal]));
+}
+
 export async function sendCoaPacket(opts: { host: string; port: number; secret: string; username: string; action: 'DISCONNECT'|'COA'; attributes?: Record<string,string> }) {
   const code = opts.action === 'DISCONNECT' ? 40 : 43; // Disconnect-Request / CoA-Request
   const id = crypto.randomInt(1, 255);
   const attrs: Buffer[] = [];
   attrs.push(encodeStringAttr(1, opts.username)); // User-Name
   if (opts.attributes) {
-    const rl = opts.attributes['Mikrotik-Rate-Limit'] || opts.attributes['rate-limit'];
-    if (rl) {
-      // Vendor-Specific (26), Vendor-Id 14988 (Mikrotik), Vendor-Type 8 (Mikrotik-Rate-Limit)
-      const vsaVal = Buffer.concat([Buffer.from([8]), Buffer.alloc(1), Buffer.from(String(rl), 'utf8')]);
-      vsaVal[1] = vsaVal.length;
-      const vendor = Buffer.alloc(4); vendor.writeUInt32BE(14988, 0);
-      attrs.push(encodeAttr(26, Buffer.concat([vendor, vsaVal])));
+    for (const [k, v] of Object.entries(opts.attributes)) {
+      if (v == null || v === '') continue;
+      const key = String(k);
+      if (key === 'Mikrotik-Rate-Limit' || key === 'rate-limit') attrs.push(encodeMikrotikVsa(8, String(v)));
+      else if (key === 'Mikrotik-Address-List' || key === 'address-list') attrs.push(encodeMikrotikVsa(19, String(v)));
+      else if (key === 'Mikrotik-Group' || key === 'group') attrs.push(encodeMikrotikVsa(3, String(v)));
     }
   }
   const body = Buffer.concat(attrs);
@@ -90,9 +105,9 @@ export async function sendCoaPacket(opts: { host: string; port: number; secret: 
   const hash = crypto.createHash('md5').update(Buffer.concat([head, zeroAuth, body, Buffer.from(opts.secret, 'utf8')])).digest();
   const packet = Buffer.concat([head, hash, body]);
 
-  return await new Promise<{ok:boolean; code?:number; error?:string}>((resolve) => {
+  const once = () => new Promise<{ok:boolean; code?:number; error?:string}>((resolve) => {
     const sock = dgram.createSocket('udp4');
-    const to = setTimeout(() => { try{sock.close();}catch{} resolve({ ok: false, error: 'timeout (no CoA/Disconnect response from NAS)' }); }, 4000);
+    const to = setTimeout(() => { try{sock.close();}catch{} resolve({ ok: false, error: 'timeout (no CoA/Disconnect response from NAS)' }); }, 3000);
     sock.on('message', (msg) => {
       clearTimeout(to);
       const rcode = msg[0]; // 41 Disconnect-ACK, 42 Disconnect-NAK, 44 CoA-ACK, 45 CoA-NAK
@@ -102,4 +117,11 @@ export async function sendCoaPacket(opts: { host: string; port: number; secret: 
     sock.on('error', (e) => { clearTimeout(to); try{sock.close();}catch{} resolve({ ok: false, error: e.message }); });
     sock.send(packet, opts.port, opts.host, (err) => { if (err) { clearTimeout(to); try{sock.close();}catch{} resolve({ ok:false, error: err.message }); } });
   });
+
+  let last: any = null;
+  for (let i = 0; i < 2; i++) {
+    last = await once();
+    if (last.ok) return last;
+  }
+  return last;
 }

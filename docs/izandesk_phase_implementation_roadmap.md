@@ -117,19 +117,22 @@ flowchart LR
 ---
 
 ### Phase 4: Automated Billing, Due Policies & Payment Gateways
+- **Status:** Implemented (gap-hardened)
 - **Engineering Deliverables**:
-  1. Automated Monthly Invoicing Engine: Batch invoice generator with prorated mid-month calculations.
-  2. Multi-stage auto-suspension state machine: Pre-expiry warning, grace period countdown, and router isolation.
-  3. Walled Garden redirection mechanism for non-paying users.
+  1. Automated Monthly Invoicing Engine: Batch invoice generator with prorated mid-month calculations, invoice items/records, and due recalculation.
+  2. Multi-stage due policy engine & scheduler: Pre-expiry warning, grace countdown, and overdue suspension/isolation with **DB-locked periodic evaluation** (idempotent-ish sweep), status/log tracking.
+  3. Walled Garden / restricted-access enforcement: policy-driven walled-garden stage with **MikroTik restricted PPP profile provisioning** (e.g. `izn-walled-garden`), **RADIUS reply attributes** (`Mikrotik-Address-List`, `Mikrotik-Rate-Limit`, group/message) and **RFC3576 CoA/PoD** (CoA with fallback disconnect/reconnect) for immediate effect. *(Full captive redirect requires corresponding address-list/firewall/DNS/NAT/hotspot rules on the NAS/router.)*
   4. Dual-Mode Payment Gateway Drivers (Hot-Reloadable Plugins):
-     - bKash Tokenized Checkout & Personal MFS SMS Listener.
+     - bKash Tokenized Checkout & Personal MFS SMS Listener hook.
      - Nagad Merchant PGW & Rocket adapters.
-     - Stripe Elements (Cards, Apple Pay) & PayPal Smart Buttons.
-  5. Instant auto-reactivation restoring full bandwidth in <2 seconds upon payment confirmation.
-- **Browser Verification Milestone**:
-  - Run the batch billing generator to create invoices for a billing cycle.
-  - Trigger auto-suspend on an overdue test account; verify status flips to "Suspended".
-  - Simulate a payment via sandbox gateway; verify instant status restoration to "Active".
+     - Stripe Elements (Cards, Apple Pay/Google Pay) & PayPal Smart Buttons.
+  5. Payment hardening & ingestion: checkout/confirm/webhook APIs with **idempotent processing** (event/trx/payment_ref dedupe), **webhook signature/token verification** when secrets configured, and **MFS SMS ingestion endpoint** (`/api/billing/payments/sms/ingest`, plugin parsing + auto-match).
+  6. Instant auto-reactivation restoring full bandwidth on confirmed/cleared payment (PPP/RADIUS/CoA/profile restore) with measured duration (target < 2s).
+- **Browser/Operational Verification Milestone**:
+  - Run batch billing generation (`/billing`) and confirm prorated invoices.
+  - Evaluate due policies / trigger suspension-walled-garden and verify restricted provisioning state, RADIUS/CoA enforcement and logs.
+  - Complete sandbox checkout+confirm or post a gateway webhook; verify idempotent payment recording and instant reactivation when dues are cleared.
+  - Ingest a bKash/personal MFS SMS payload (authenticated or `MFS_SMS_INGEST_TOKEN`) and verify parse/match/recording behavior.
 
 ---
 
