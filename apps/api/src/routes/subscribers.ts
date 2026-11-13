@@ -138,8 +138,23 @@ router.get('/:id', asyncHandler(async (req, res) => {
     LEFT JOIN resellers rs ON rs.id=s.reseller_id
     WHERE s.id=$1`, [req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Subscriber not found' });
+  const sub = r.rows[0];
   const kyc = await pool.query('SELECT * FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [req.params.id]);
-  res.json({ ...r.rows[0], kyc_documents: kyc.rows });
+  let quota: any = null;
+  let pkg: any = null;
+  try {
+    if (sub.package_name) {
+      pkg = (await pool.query('SELECT id,name,download_mbps,upload_mbps,price,data_cap_gb,fup_speed_mbps FROM bandwidth_packages WHERE name=$1 LIMIT 1', [sub.package_name])).rows[0] || null;
+    }
+    if (pkg?.data_cap_gb != null) {
+      const u = (await pool.query(`SELECT COALESCE(SUM(COALESCE(acctinputoctets,0)+COALESCE(acctoutputoctets,0)),0)::bigint AS used_bytes
+        FROM radacct WHERE (username=$1 OR username IN (SELECT username FROM subscribers WHERE id=$2 AND username IS NOT NULL)) AND acctstarttime >= date_trunc('month', now())`, [sub.username || '', sub.id])).rows[0];
+      const used = Number(u?.used_bytes || 0);
+      const capBytes = Number(pkg.data_cap_gb) * 1024 * 1024 * 1024;
+      quota = { period: 'current_month', cap_gb: Number(pkg.data_cap_gb), fup_speed_mbps: pkg.fup_speed_mbps, used_bytes: used, remaining_bytes: Math.max(0, capBytes - used), over_cap: used > capBytes, percent: capBytes > 0 ? Math.min(999, (used / capBytes) * 100) : 0 };
+    }
+  } catch {}
+  res.json({ ...sub, kyc_documents: kyc.rows, quota, package_info: pkg });
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

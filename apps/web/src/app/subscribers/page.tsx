@@ -368,9 +368,14 @@ export default function SubscribersPage() {
               </div>
               <div className="pt-2 border-t border-border">
                 <div className="font-semibold text-sm mb-2">FUP / Quota Enforcement</div>
-                <div className="text-xs text-muted-foreground mb-2">
-                  Status: {detail.fup_exceeded ? <span className="text-amber-400 font-semibold">Throttled (FUP enforced)</span> : <span className="text-emerald-400">Not throttled</span>}
-                  {detail.fup_applied_at ? ` • applied ${new Date(detail.fup_applied_at).toLocaleString()}` : ''}
+                <div className="text-xs text-muted-foreground mb-2 space-y-1">
+                  <div>Status: {detail.fup_exceeded ? <span className="text-amber-400 font-semibold">Throttled (FUP enforced)</span> : <span className="text-emerald-400">Not throttled</span>}{detail.fup_applied_at ? ` • applied ${new Date(detail.fup_applied_at).toLocaleString()}` : ''}</div>
+                  {detail.quota ? (
+                    <div>
+                      <div>Monthly usage: {Number(detail.quota.used_bytes||0) > 1e9 ? (Number(detail.quota.used_bytes)/1e9).toFixed(2)+' GB' : Number(detail.quota.used_bytes||0) > 1e6 ? (Number(detail.quota.used_bytes)/1e6).toFixed(2)+' MB' : `${Number(detail.quota.used_bytes||0)} B`} of {Number(detail.quota.cap_gb)} GB ({Number(detail.quota.percent||0).toFixed(2)}%) • {detail.quota.over_cap ? <span className="text-red-400">Over cap</span> : <span className="text-emerald-400">Within cap</span>}{detail.quota.fup_speed_mbps ? ` • FUP ${detail.quota.fup_speed_mbps} Mbps` : ''}</div>
+                      <div className="mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden"><div className={`${detail.quota.over_cap?'bg-red-500':'bg-cyan-500'} h-full`} style={{width:`${Math.min(100,Number(detail.quota.percent||0))}%`}}/></div>
+                    </div>
+                  ) : <div>Quota: not configured for this package.</div>}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button disabled={fupBusy} onClick={()=>fupAction('evaluate')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50 disabled:opacity-50">Evaluate</button>
