@@ -73,6 +73,14 @@ const sidebarGroups: NavGroup[] = [
     ],
   },
   {
+    label: 'Resellers',
+    items: [
+      { name: 'All Resellers', href: '/resellers', icon: Briefcase, badge: 'All' },
+      { name: 'Wallet & Recharge', href: '/resellers?tab=wallet', icon: Wallet },
+      { name: 'Renew Subscriber', href: '/resellers?tab=renew', icon: CreditCard },
+    ],
+  },
+  {
     label: 'Network',
     items: [
       { name: 'Bandwidth & QoS', href: '/bandwidth', icon: Radio },
@@ -86,7 +94,6 @@ const sidebarGroups: NavGroup[] = [
     label: 'Billing',
     items: [
       { name: 'Billing & Invoices', href: '/billing', icon: CreditCard },
-      { name: 'Resellers & Wallet', href: '/resellers', icon: Briefcase },
     ],
   },
   {
@@ -137,6 +144,10 @@ function isItemActive(pathname: string, searchParams: URLSearchParams | null, hr
     if (searchParams?.get('new') === '1' || searchParams?.get('action') === 'new' || searchParams?.get('add') === '1') return false;
     return true;
   }
+  if (href === '/resellers' && pathname === '/resellers') {
+    if (searchParams?.get('tab')) return false;
+    return true;
+  }
   return pathname === href || (href !== '/' && pathname.startsWith(href + '/'));
 }
 
@@ -144,11 +155,12 @@ export function Sidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { activeRole, user, isMobileMenuOpen, setMobileMenuOpen } = useAuth();
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Network: true, Billing: true, Support: true, Plugins: true, System: false });
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Resellers: true, Network: true, Billing: true, Support: true, Plugins: true, System: false });
   const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true });
 
   useEffect(() => {
     if (pathname.startsWith('/subscribers')) setOpenGroups(s => ({ ...s, Subscribers: true }));
+    if (pathname.startsWith('/resellers')) setOpenGroups(s => ({ ...s, Resellers: true }));
     if (pathname.startsWith('/plugins')) setOpenGroups(s => ({ ...s, Plugins: true }));
     if (pathname.startsWith('/plugins/payment-gateways')) setOpenSub(s => ({ ...s, 'Payment Gateways': true }));
   }, [pathname]);

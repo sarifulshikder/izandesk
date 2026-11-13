@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import { RefreshCw, Wallet, Users, ArrowUpRight, ArrowDownLeft, Plus, Building2, CreditCard, BadgePercent, Globe } from 'lucide-react';
@@ -10,6 +11,8 @@ const money = (v:any) => `৳${Number(v||0).toLocaleString(undefined,{minimumFra
 
 export default function ResellersPage() {
   const { token, user } = useAuth();
+  const searchParams = useSearchParams();
+  const tab = (searchParams?.get('tab') || '').toLowerCase();
   const [resellers, setResellers] = useState<AnyObj[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
   const [detail, setDetail] = useState<AnyObj|null>(null);
@@ -47,6 +50,13 @@ export default function ResellersPage() {
   }, [token, selectedId]);
 
   useEffect(()=>{ load(); }, [load]);
+
+  useEffect(() => {
+    if (!tab) return;
+    const id = tab === 'wallet' ? 'reseller-wallet' : tab === 'renew' ? 'reseller-renew' : '';
+    if (!id) return;
+    setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+  }, [tab, selectedId, loading]);
 
   const recharge = async () => {
     if (!token || !selectedId) return;
@@ -138,7 +148,7 @@ export default function ResellersPage() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
+              <div id="reseller-wallet" className={`rounded-2xl border bg-card p-4 space-y-3 ${tab==='wallet'?'border-emerald-500/40 ring-1 ring-emerald-500/20':'border-border'}`}>
                 <h2 className="font-bold flex items-center gap-2"><ArrowUpRight className="w-4 h-4 text-emerald-400"/>Wallet Recharge</h2>
                 <p className="text-xs text-muted-foreground">Recharge prepaid reseller wallet balance (manual/admin or reseller self-recharge flow).</p>
                 <div className="flex gap-2">
@@ -147,7 +157,7 @@ export default function ResellersPage() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
+              <div id="reseller-renew" className={`rounded-2xl border bg-card p-4 space-y-3 ${tab==='renew'?'border-primary/40 ring-1 ring-primary/20':'border-border'}`}>
                 <h2 className="font-bold flex items-center gap-2"><CreditCard className="w-4 h-4 text-primary"/>Renew Subscriber (Auto-deduct Wallet)</h2>
                 <p className="text-xs text-muted-foreground">Renew a subscriber using reseller credit. Wholesale charge = retail monthly bill minus buying margin; deducted from wallet and recorded as payment/transaction.</p>
                 <select className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" value={renewSubId} onChange={e=>setRenewSubId(e.target.value)}>
