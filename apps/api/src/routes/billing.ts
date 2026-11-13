@@ -5,6 +5,8 @@ import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoi
 import { getKernel } from '../kernel/kernel-instance';
 import { mikrotikProvisionWalledGardenRedirect } from '../integrations/mikrotik';
 import crypto from 'crypto';
+import { dispatchMessage, trySendTemplateToSubscriber } from '../integrations/messaging';
+import { renderInvoiceHtml, renderSimpleInvoicePdf } from '../integrations/pdf';
 
 const router: Router = Router();
 
@@ -34,10 +36,17 @@ router.get('/invoices/:id', asyncHandler(async (req, res) => {
 router.post('/invoices/generate', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
   const b = req.body || {};
+  const base = `${req.protocol}://${req.get('host')}`;
   if (b.subscriber_id) {
     const s = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [b.subscriber_id])).rows[0];
     if (!s) return res.status(404).json({ message: 'Subscriber not found' });
     const result = await generateInvoiceForSubscriber(s, { cycleDate: b.cycle_date ? new Date(b.cycle_date) : new Date(), force: !!b.force });
+    if (result?.ok && result.invoice?.id) {
+      const pdfUrl = `${base}/api/billing/invoices/${result.invoice.id}/pdf?token=${result.invoice.id}`;
+      try { await trySendTemplateToSubscriber(s.id, 'invoice_delivery_whatsapp', { invoice_number: result.invoice.invoice_number, amount: result.invoice.total_amount, due: result.invoice.due_amount, pdf_url: pdfUrl }, { channel_type: 'WHATSAPP' }); } catch {}
+      try { await trySendTemplateToSubscriber(s.id, 'invoice_due_reminder_sms', { invoice_number: result.invoice.invoice_number, amount: result.invoice.total_amount, due: result.invoice.due_amount, due_date: result.invoice.due_date }, { channel_type: 'SMS' }); } catch {}
+      (result as any).pdf_url = pdfUrl;
+    }
     return res.json({ ok: true, ...result });
   }
   const result = await runBatchInvoicing({ subscriber_ids: b.subscriber_ids, cycleDate: b.cycle_date });
@@ -317,6 +326,34 @@ router.post('/walled-garden/provision-router', asyncHandler(async (req, res) => 
   await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES(NULL,'WALLED_GARDEN_ROUTER_PROVISION',NULL,$1,$2::jsonb,$3)`,
     ['Provisioned walled-garden redirect/profile rules on router', JSON.stringify({ router_id: router.id, router: router.name, result }), (req as any).user?.email || 'user']);
   res.json({ ok: true, router: { id: router.id, name: router.name, host: router.host, integration_mode: router.integration_mode }, portalUrl, result });
+}));
+
+
+router.get('/invoices/:id/html', asyncHandler(async (req, res) => {
+  const inv = await getInvoiceWithItems(req.params.id);
+  if (!inv) return res.status(404).send('Invoice not found');
+  const base = `${req.protocol}://${req.get('host')}`;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(renderInvoiceHtml(inv, { baseUrl: base, paymentUrl: `${base}/billing?invoice=${encodeURIComponent(inv.id)}` }));
+}));
+
+router.get('/invoices/:id/pdf', asyncHandler(async (req, res) => {
+  const inv = await getInvoiceWithItems(req.params.id);
+  if (!inv) return res.status(404).json({ message: 'Invoice not found' });
+  const pdf = renderSimpleInvoicePdf(inv);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="invoice-${inv.invoice_number || inv.id}.pdf"`);
+  res.send(pdf);
+}));
+
+router.get('/invoices/:id/share', asyncHandler(async (req, res) => {
+  const inv = await getInvoiceWithItems(req.params.id);
+  if (!inv) return res.status(404).json({ message: 'Invoice not found' });
+  const base = `${req.protocol}://${req.get('host')}`;
+  const pdfUrl = `${base}/api/billing/invoices/${inv.id}/pdf?token=${inv.id}`;
+  const htmlUrl = `${base}/api/billing/invoices/${inv.id}/html?token=${inv.id}`;
+  const payUrl = `${base}/billing?invoice=${encodeURIComponent(inv.id)}`;
+  res.json({ ok: true, invoice_id: inv.id, invoice_number: inv.invoice_number, pdf_url: pdfUrl, html_url: htmlUrl, payment_url: payUrl });
 }));
 
 export default router;

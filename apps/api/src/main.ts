@@ -21,6 +21,7 @@ import billingRouter from './routes/billing';
 import resellersRouter from './routes/resellers';
 import ticketsRouter from './routes/tickets';
 import messagingRouter from './routes/messaging';
+import brandingRouter from './routes/branding';
 import { startBillingScheduler } from './integrations/billing';
 
 const PORT = Number(process.env.API_PORT || 4000);
@@ -35,7 +36,7 @@ const users: AuthUser[] = [
   { id: 'usr-noc-02', name: 'Tariqul Islam (NOC Lead)', email: 'noc@izandesk.com', password: 'noc123', role: 'NOC_ENGINEER', tenantId: 'tnt-primary-01', permissions: ['ROUTERS_READ','ROUTERS_WRITE','OLT_READ','SUBSCRIBERS_KICK'], avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80' },
   { id: 'usr-bill-03', name: 'Sadia Akhter (Accounts)', email: 'billing@izandesk.com', password: 'billing123', role: 'BILLING_OPERATOR', tenantId: 'tnt-primary-01', permissions: ['INVOICES_READ','PAYMENTS_CREATE','BILLS_ADJUST'], avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&auto=format&fit=crop&q=80' },
   { id: 'usr-tech-04', name: 'Kamrul Hasan (Field Lead)', email: 'tech@izandesk.com', password: 'tech123', role: 'TECHNICIAN', tenantId: 'tnt-primary-01', permissions: ['TICKETS_ASSIGNED','OPTICAL_READ','CLIENTS_READ'], avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80' },
-  { id: 'usr-reseller-05', name: 'Shahriar Kabir (CyberNet Reseller)', email: 'reseller@cybernet.bd', password: 'reseller123', role: 'RESELLER', tenantId: 'tnt-primary-01', resellerId: 'res-cybernet-01', permissions: ['RESELLER_CLIENTS_ALL','WALLET_RECHARGE'], avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&auto=format&fit=crop&q=80' },
+  { id: 'usr-reseller-05', name: 'Shahriar Kabir (CyberNet Reseller)', email: 'reseller@cybernet.bd', password: 'reseller123', role: 'RESELLER', tenantId: 'tnt-primary-01', resellerId: 'RES-CYBERNET', permissions: ['RESELLER_CLIENTS_ALL','WALLET_RECHARGE'], avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&auto=format&fit=crop&q=80' },
 ];
 
 function toSession(u: AuthUser): UserSession { const { password, ...rest } = u; return rest; }
@@ -87,6 +88,7 @@ async function bootstrap() {
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, service: 'izandesk-api', phase: 5, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length });
   });
+  app.use('/api/branding', brandingRouter);
 
   app.post('/api/auth/login', (req, res) => {
     const body = req.body as LoginRequest;
@@ -179,8 +181,11 @@ async function bootstrap() {
   app.use('/api/wireguard', authMiddleware, wireguardRouter);
 
   // Phase 4: Billing, Invoicing, Payments, Suspension/Reactivation
-  // Webhooks and MFS SMS ingest are public callbacks (validated in-route)
-  app.use('/api/billing', (req, res, next) => ((req.path.startsWith('/webhooks/') || req.path === '/payments/sms/ingest') ? next() : authMiddleware(req, res, next)), billingRouter);
+  // Webhooks, MFS SMS ingest, and shareable invoice links are public (validated in-route/by token)
+  app.use('/api/billing', (req, res, next) => {
+    const publicPath = req.path.startsWith('/webhooks/') || req.path === '/payments/sms/ingest' || /^\/invoices\/[^/]+\/(pdf|html|share)$/.test(req.path);
+    return publicPath ? next() : authMiddleware(req, res, next);
+  }, billingRouter);
 
   // Phase 5: Resellers, CRM/Tickets, Messaging
   app.use('/api/resellers', authMiddleware, resellersRouter);

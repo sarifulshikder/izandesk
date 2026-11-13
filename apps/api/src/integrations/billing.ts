@@ -1,6 +1,7 @@
 import { pool } from '../db';
 import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
+import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
 
 type AnyObj = Record<string, any>;
 
@@ -403,6 +404,15 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
     }
   }
 
+  // Best-effort receipt notification
+  try {
+    if (status === 'COMPLETED' && subscriberId) {
+      const sub = (await pool.query('SELECT full_name, phone FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
+      if (sub?.phone) {
+        await trySendTemplateToSubscriber(subscriberId, 'payment_received_sms', { name: sub.full_name, amount, trx_id: trx, invoice_number: updatedInvoice?.invoice_number, paid: updatedInvoice?.paid_amount, due: updatedInvoice?.due_amount }, { channel_type: 'SMS' }).catch(()=>{});
+      }
+    }
+  } catch {}
   return { ok: true, duplicate: false, payment, invoice: updatedInvoice, subscriber_id: subscriberId, reactivation };
 }
 
@@ -468,8 +478,13 @@ export async function startBillingScheduler() {
     if (!got) return;
     try { await ensureOverdueInvoiceStatuses(); await evaluateDuePolicies(); } catch (e:any) { console.error('[BillingScheduler] error', e.message); }
   };
+  const runMsg = async () => {
+    try { await runMessagingSchedulerSweep(); } catch (e:any) { console.error('[MessagingScheduler] error', e.message); }
+  };
   setTimeout(run, 5000);
   setInterval(run, 60 * 1000); // every minute for timely grace/suspension evaluation
+  setTimeout(runMsg, 15000);
+  setInterval(runMsg, 10 * 60 * 1000); // messaging summaries/reminders every 10 minutes
 }
 
 export async function ingestMfsSmsEvent(input: { gateway?: string; sender?: string; message?: string; amount?: number; trx_id?: string; payer_number?: string; payload?: any }) {

@@ -139,21 +139,24 @@ flowchart LR
 ---
 
 ### Phase 5: Reseller Multi-Tier System, CRM & Omnichannel Messaging
-- **Status:** Implemented (foundation)
+- **Status:** Implemented (code-complete foundation with automation & integration hooks)
 - **Engineering Deliverables**:
-  1. Multi-Tier Reseller management and portal data model with white-label branding fields (subdomain/custom domain, brand, colors/logo/title) and reseller-scoped views/APIs.
+  1. Multi-Tier Reseller management and portal data model with white-label branding fields (subdomain/custom domain, brand, colors/logo/title), reseller-scoped views/APIs, dynamic reseller pages (`/resellers`, `/resellers/add`, `/resellers/[id]`), and subscriber counts/status/session stats.
   2. Reseller Prepaid Wallet: balance recharge, wholesale buying margin calculations, wallet transaction ledger, and subscriber renewal with auto-deduction/payment recording.
-  3. SLA-Driven Trouble Ticketing (CRM): ticket lifecycle, priority-based SLA due/breach tracking, technician assignment/dispatch, comments/activity, site/GPS navigation links, and mobile-friendly resolution workflow.
-  4. Omnichannel Messaging Engine:
-     - Local Bangladesh SMS (GreenWeb) & Twilio international SMS channel/config/test-dispatch support.
-     - WhatsApp Business API channel/template hooks for invoice delivery (including invoice PDF links).
-     - Telegram Bot channel/template hooks for NOC alerts and daily executive revenue summaries.
-     - Message templates, delivery logs, and built-in Gateway Tester.
+  3. Subscriber ownership/linkage: subscribers can be assigned to own ISP or a specific reseller in onboarding/edit flows and reflected in reseller scoping/stats.
+  4. SLA-Driven Trouble Ticketing (CRM): ticket lifecycle, priority-based SLA due/breach tracking, technician assignment/dispatch, comments/activity, site/GPS navigation links, mobile-friendly resolution workflow, access scoping, and event notifications.
+  5. Omnichannel Messaging Engine:
+     - Channel/config/template/log models and gateway tester with live provider dispatch attempts (GreenWeb, Twilio, WhatsApp Cloud, Telegram Bot) when credentials are configured (safe simulated fallback otherwise).
+     - Invoice/payment/ticket/messaging hooks and scheduled sweeps for due reminders and daily revenue summaries (best-effort) with delivery logs.
+     - Invoice HTML/PDF/share endpoints (`/api/billing/invoices/:id/{html,pdf,share}`) for invoice links/PDF delivery.
+  6. White-label host resolution: Next.js host middleware and branding resolve API (`/api/branding/resolve`) for subdomain/custom-domain mapping (runtime serving requires DNS/reverse-proxy host mapping).
 - **Browser/Operational Verification Milestone**:
-  - Log in as Reseller, check wallet balance, and renew a subscriber using reseller credit. ✅ (API/UI flow implemented and verified)
-  - Submit a support ticket, assign to technician, and verify mobile resolution/GPS workflow. ✅ (implemented)
-  - Dispatch a test SMS from the built-in Gateway Tester. ✅ (implemented; simulated when live provider credentials are not configured)
-- **Notes:** Real WhatsApp/Telegram/Twilio/GreenWeb delivery and invoice-PDF generation/attachment depend on provider credentials/tokens and external API configuration. White-label subdomain/custom-domain serving requires DNS and reverse-proxy host mapping in deployment.
+  - Create reseller, open reseller page from dynamic drawer, and verify subscriber counts/status breakdown. ✅
+  - Log in as Reseller, check wallet balance, and renew a subscriber using reseller credit. ✅
+  - Add/edit subscriber with ownership (Own/Reseller) and verify reseller linkage. ✅
+  - Submit/assign/resolve a support ticket and verify scoped access/GPS workflow. ✅
+  - Dispatch a test SMS/WhatsApp/Telegram message from Gateway Tester and review logs. ✅ (live delivery depends on provider credentials/config)
+- **Notes:** Live external delivery (GreenWeb/Twilio/Meta WhatsApp/Telegram), signed webhook/provider setup, and automated outreach require valid credentials/tokens, approved senders/templates, and environment connectivity. White-label subdomain/custom-domain serving requires DNS and reverse-proxy (e.g. Caddy) host mapping; branding resolution hooks are implemented.
 
 ---
 

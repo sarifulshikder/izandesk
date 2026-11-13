@@ -1,9 +1,37 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
+import { dispatchMessage } from '../integrations/messaging';
 
 const router: Router = Router();
 function user(req:any){ return req.user || {}; }
+async function resolveResellerIdForUser(req:any){
+  const u = user(req);
+  if (u.resellerId) {
+    const r = await pool.query('SELECT id FROM resellers WHERE id::text=$1 OR lower(code)=lower($1) OR lower(subdomain)=lower($1) LIMIT 1', [String(u.resellerId)]);
+    if (r.rows[0]) return r.rows[0].id as string;
+  }
+  if (u.email) {
+    const r = await pool.query('SELECT id FROM resellers WHERE lower(email)=lower($1) LIMIT 1', [String(u.email)]);
+    if (r.rows[0]) return r.rows[0].id as string;
+  }
+  return null;
+}
+async function canAccessTicket(req:any, ticketId:string){
+  const u = user(req);
+  if (['SUPER_ADMIN','BILLING_OPERATOR','NOC_ENGINEER'].includes(String(u.role))) return true;
+  const t = (await pool.query('SELECT * FROM tickets WHERE id=$1', [ticketId])).rows[0];
+  if (!t) return false;
+  if (u.role === 'TECHNICIAN') {
+    const name = String(u.name||'').toLowerCase(); const id = String(u.id||'');
+    return String(t.assigned_technician_id||'') === id || String(t.assigned_technician_name||'').toLowerCase().includes(name) || !t.assigned_technician_id;
+  }
+  if (u.role === 'RESELLER') {
+    const rid = await resolveResellerIdForUser(req);
+    return !!rid && String(t.reseller_id||'') === String(rid);
+  }
+  return false;
+}
 
 function slaDue(priority: string, from = new Date()) {
   const hours = priority === 'CRITICAL' ? 4 : priority === 'HIGH' ? 8 : priority === 'LOW' ? 48 : 24;
@@ -24,8 +52,9 @@ router.get('/', asyncHandler(async (req, res) => {
     where.push(`(t.assigned_technician_id = $${params.length} OR t.assigned_technician_name ILIKE '%' || $${params.length-1} || '%')`);
   }
   if (u.role === 'RESELLER') {
-    params.push(u.resellerId || u.email || '');
-    where.push(`(t.reseller_id::text = $${params.length} OR r.email = $${params.length} OR r.code = $${params.length})`);
+    const rid = await resolveResellerIdForUser(req);
+    params.push(rid || u.resellerId || u.email || '');
+    where.push(`(t.reseller_id::text = $${params.length})`);
   }
   const status = String(req.query.status || '').trim();
   if (status) { params.push(status); where.push(`t.status = $${params.length}`); }
@@ -47,6 +76,7 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
+  if (!(await canAccessTicket(req, req.params.id))) return res.status(403).json({ message: 'Forbidden' });
   const r = await pool.query(`
     SELECT t.*, s.full_name as subscriber_name, s.client_code, s.phone as subscriber_phone, s.address as subscriber_address,
            r.name as reseller_name
@@ -78,10 +108,12 @@ router.post('/', asyncHandler(async (req, res) => {
   const r = await pool.query(`INSERT INTO tickets(ticket_no,subscriber_id,reseller_id,subject,description,category,priority,status,sla_policy,sla_due_at,assigned_technician_id,assigned_technician_name,assigned_technician_phone,dispatch_status,site_latitude,site_longitude,site_address,gps_nav_url,source,created_by)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
     [ticketNo,b.subscriber_id||null,b.reseller_id||null,b.subject,b.description||null,b.category||'SUPPORT',priority,b.status||'OPEN',b.sla_policy||`${priority} SLA`,due,b.assigned_technician_id||null,b.assigned_technician_name||null,b.assigned_technician_phone||null,b.assigned_technician_id||b.assigned_technician_name?'DISPATCHED':'UNASSIGNED',siteLat,siteLng,siteAddress,gps,b.source||'PORTAL',user(req).email||user(req).id||'system']);
+  try { await dispatchMessage({ provider: 'TELEGRAM_BOT', channel_type: 'TELEGRAM', body: `New ticket ${r.rows[0].ticket_no}: ${r.rows[0].subject}\nPriority: ${r.rows[0].priority} SLA due: ${new Date(r.rows[0].sla_due_at).toLocaleString()}\nSite: ${r.rows[0].site_address || '-'}`, related_type:'TICKET', related_id:String(r.rows[0].id), requireEnabled:false }); } catch {}
   res.status(201).json({ data: r.rows[0] });
 }));
 
 router.put('/:id', asyncHandler(async (req, res) => {
+  if (!(await canAccessTicket(req, req.params.id))) return res.status(403).json({ message: 'Forbidden' });
   const b = req.body || {};
   const cur = (await pool.query('SELECT * FROM tickets WHERE id=$1', [req.params.id])).rows[0];
   if (!cur) return res.status(404).json({ message: 'Ticket not found' });
@@ -102,6 +134,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/comments', asyncHandler(async (req, res) => {
+  if (!(await canAccessTicket(req, req.params.id))) return res.status(403).json({ message: 'Forbidden' });
   const b = req.body || {};
   if (!b.body) return res.status(400).json({ message: 'body is required' });
   const r = await pool.query(`INSERT INTO ticket_comments(ticket_id,author_name,author_role,body,is_internal) VALUES($1,$2,$3,$4,$5) RETURNING *`,
@@ -111,12 +144,14 @@ router.post('/:id/comments', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/assign', asyncHandler(async (req, res) => {
+  if (!['SUPER_ADMIN','BILLING_OPERATOR','NOC_ENGINEER'].includes(String(user(req).role))) return res.status(403).json({ message: 'Forbidden' });
   const b = req.body || {};
   const r = await pool.query(`UPDATE tickets SET assigned_technician_id=$1, assigned_technician_name=$2, assigned_technician_phone=$3, dispatch_status='DISPATCHED', status=CASE WHEN status='OPEN' THEN 'IN_PROGRESS' ELSE status END, updated_at=now() WHERE id=$4 RETURNING *`,
     [b.technician_id||null,b.technician_name||b.name||null,b.technician_phone||b.phone||null,req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Ticket not found' });
   await pool.query(`INSERT INTO ticket_comments(ticket_id,author_name,author_role,body,is_internal) VALUES($1,$2,$3,$4,false)`,
     [req.params.id,user(req).name||'System',user(req).role||'SYSTEM',`Assigned to ${b.technician_name||b.name||b.technician_id||'technician'} for dispatch.`]);
+  try { await dispatchMessage({ provider: 'TELEGRAM_BOT', channel_type: 'TELEGRAM', body: `Ticket ${r.rows[0].ticket_no} assigned: ${r.rows[0].subject}\nPriority: ${r.rows[0].priority}\nTechnician: ${r.rows[0].assigned_technician_name || '-'}\nSite: ${r.rows[0].site_address || '-'}`, related_type:'TICKET', related_id:String(r.rows[0].id), requireEnabled:false }); } catch {}
   res.json({ data: r.rows[0] });
 }));
 

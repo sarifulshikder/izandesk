@@ -18,9 +18,7 @@ async function resolveResellerIdForUser(req: any) {
     const r = await pool.query('SELECT id FROM resellers WHERE lower(email)=lower($1) LIMIT 1', [String(user.email)]);
     if (r.rows[0]) return r.rows[0].id as string;
   }
-  // fallback to demo reseller
-  const r = await pool.query("SELECT id FROM resellers WHERE code='RES-CYBERNET' LIMIT 1");
-  return r.rows[0]?.id || null;
+  return null;
 }
 
 async function getResellerById(id: string) {
