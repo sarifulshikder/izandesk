@@ -1,5 +1,5 @@
 import { pool } from '../db';
-import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile } from './mikrotik';
+import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikDisconnectPppUser } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
 
@@ -476,6 +476,72 @@ function fupRateString(mbps: number) {
   return `${m}M/${m}M`;
 }
 
+
+
+export async function evaluateFupForSubscriber(subscriberId: string, opts: { forceAction?: 'APPLY'|'CLEAR' } = {}) {
+  const rows = (await pool.query(`
+    SELECT s.id, s.username, s.password, s.status, s.suspension_stage, s.walled_garden, s.ip_address, s.package_name, s.router_id, s.provisioning_mode, s.fup_exceeded,
+           bp.profile_name, bp.data_cap_gb, bp.fup_speed_mbps,
+           COALESCE((SELECT SUM(COALESCE(acctinputoctets,0)+COALESCE(acctoutputoctets,0))::bigint FROM radacct r
+             WHERE (r.username=s.username OR r.username IN (SELECT username FROM subscribers ss WHERE ss.id=s.id AND ss.username IS NOT NULL))
+               AND r.acctstarttime >= date_trunc('month', now())),0) as used_bytes
+    FROM subscribers s
+    LEFT JOIN bandwidth_packages bp ON bp.name=s.package_name
+    WHERE s.id=$1
+  `, [subscriberId])).rows;
+  const sub = rows[0];
+  if (!sub) throw new Error('Subscriber not found');
+  const capGb = sub.data_cap_gb != null ? Number(sub.data_cap_gb) : null;
+  const fupMbps = sub.fup_speed_mbps != null ? Number(sub.fup_speed_mbps) : null;
+  const used = Number(sub.used_bytes || 0);
+  const capBytes = capGb != null ? capGb * 1024 * 1024 * 1024 : null;
+  const over = capBytes != null && capBytes > 0 && fupMbps != null && fupMbps > 0 && used > capBytes;
+  const billingRestricted = String(sub.status).toUpperCase() !== 'ACTIVE' || ['WALLED_GARDEN','ISOLATED','SUSPENDED'].includes(String(sub.suspension_stage||'').toUpperCase()) || !!sub.walled_garden;
+  let shouldFup = over && !billingRestricted;
+  if (opts.forceAction === 'CLEAR') shouldFup = false;
+  if (opts.forceAction === 'APPLY') shouldFup = !!(fupMbps && !billingRestricted);
+  const was = !!sub.fup_exceeded;
+  if (shouldFup === was && !opts.forceAction) return { ok: true, changed: false, fup_exceeded: was, over_cap: over };
+  await pool.query('UPDATE subscribers SET fup_exceeded=$2, fup_applied_at=CASE WHEN $2 THEN now() ELSE NULL END, updated_at=now() WHERE id=$1', [sub.id, shouldFup]);
+  const effective: any = { ...sub, profile_name: sub.profile_name || sub.package_name || 'default' };
+  const rl = shouldFup ? fupRateString(fupMbps as number) : null;
+  let radiusSyncOk = true, coaOk: any = null, routerOk: any = null;
+  try { await syncSubscriberToRadiusDb(effective, { fupRateLimit: rl, fupExceeded: shouldFup }); } catch { radiusSyncOk = false; }
+  try {
+    const nas = await resolveNasForSubscriber(sub);
+    if (nas?.radius_secret && nas?.host && sub.username) {
+      const coa = await sendCoaPacket({ host: nas.host, port: Number(nas.coa_port || 3799), secret: String(nas.radius_secret), username: sub.username, action: 'COA', attributes: rl ? { 'Mikrotik-Rate-Limit': rl } : {} });
+      coaOk = coa?.ok ?? null;
+      if (!coa.ok) {
+        const dc = await sendCoaPacket({ host: nas.host, port: Number(nas.coa_port || 3799), secret: String(nas.radius_secret), username: sub.username, action: 'DISCONNECT' }).catch(()=>null);
+        coaOk = dc?.ok ?? coaOk;
+      }
+    }
+  } catch {}
+  try {
+    if (String(sub.provisioning_mode||'').toUpperCase() === 'ROUTER' && sub.router_id && sub.username) {
+      const rr = (await pool.query('SELECT * FROM network_routers WHERE id=$1', [sub.router_id])).rows[0];
+      if (rr && ['API','REST'].includes(String(rr.integration_mode||'').toUpperCase()) && rr.is_enabled !== false) {
+        if (shouldFup && fupMbps) {
+          const prof = `izn-fup-${Math.max(1, Math.round(Number(fupMbps)||1))}m`;
+          await mikrotikEnsureFupProfile(rr, { speedMbps: Number(fupMbps), profileName: prof }).catch(()=>{});
+          routerOk = await mikrotikSyncPppSecret(rr, { ...effective, profile_name: prof, profile: prof }).catch((e:any)=>({ ok:false, error: e.message }));
+        } else {
+          routerOk = await mikrotikSyncPppSecret(rr, { ...effective, profile_name: sub.profile_name || sub.package_name || 'default' }).catch((e:any)=>({ ok:false, error: e.message }));
+        }
+        try { await mikrotikDisconnectPppUser(rr, sub.username); } catch {}
+      }
+    }
+  } catch {}
+  try {
+    await pool.query(`INSERT INTO fup_enforcement_logs(subscriber_id, action, over_cap, used_bytes, cap_gb, fup_speed_mbps, details)
+      VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+      [sub.id, shouldFup ? 'APPLIED' : 'CLEARED', over, used, capGb, fupMbps, JSON.stringify({ previous: was, rate_limit: rl, billing_restricted: billingRestricted, radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null, router_mode: String(sub.provisioning_mode||'').toUpperCase()==='ROUTER', period: 'current_month', forced: opts.forceAction || null })]);
+  } catch {}
+  return { ok: true, changed: shouldFup !== was || !!opts.forceAction, fup_exceeded: shouldFup, over_cap: over, used_bytes: used, cap_gb: capGb, fup_speed_mbps: fupMbps, enforcement: { radius_sync_ok: radiusSyncOk, coa_ok: coaOk, router_ok: routerOk?.ok ?? null } };
+}
+
+
 export async function runFupEnforcementSweep() {
   // Best-effort: apply/remove RADIUS rate-limit for subscribers over monthly data cap (FUP).
   // Billing suspension/walled-garden states take precedence and are not overridden.
@@ -530,6 +596,7 @@ export async function runFupEnforcementSweep() {
             } else {
               routerOk = await mikrotikSyncPppSecret(rr, { ...effective, profile_name: sub.profile_name || sub.package_name || 'default' }).catch((e:any)=>({ ok:false, error: e.message }));
             }
+            try { await mikrotikDisconnectPppUser(rr, sub.username); } catch {}
           }
         }
       } catch {}

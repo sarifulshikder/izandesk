@@ -559,3 +559,34 @@ export async function mikrotikEnsureFupProfile(r: RouterRow, opts: { speedMbps: 
   const profileName = String(opts.profileName || `izn-fup-${speed}m`).trim() || `izn-fup-${speed}m`;
   return mikrotikEnsureWalledGarden(r, { profileName, rateLimit: `${speed}M/${speed}M` });
 }
+
+
+
+export async function mikrotikDisconnectPppUser(r: RouterRow, username: string) {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  const uname = String(username || '').trim();
+  if (!uname) return { ok: false, skipped: true, reason: 'no username' };
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    const actives: any[] = await restFetch(o, `/ppp/active?name=${encodeURIComponent(uname)}`).catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, `/ppp/active?name=${encodeURIComponent(uname)}`); throw e; }) as any;
+    let removed = 0;
+    for (const a of (Array.isArray(actives) ? actives : [])) {
+      const id = a?.['.id'] || a?.id;
+      if (!id) continue;
+      try { await restSend(o, 'DELETE', `/ppp/active/${id}`).catch(async (e)=>{ if (o.scheme==='https') return restSendHttps(o,'DELETE',`/ppp/active/${id}`); throw e; }); removed++; } catch {}
+    }
+    return { ok: true, mode: 'REST', removed };
+  }
+  const o = rosOpts(r, 'API') as any;
+  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  try {
+    await api.connect();
+    const all: any[] = await api.write('/ppp/active/print').catch(()=>[]) as any;
+    const matches = (all || []).filter((x:any)=>String(x.name)===uname);
+    let removed = 0;
+    for (const m of matches) {
+      try { await api.write('/ppp/active/remove', [`=.id=${m['.id']}`]); removed++; } catch {}
+    }
+    return { ok: true, mode: 'API', removed };
+  } finally { try { api.close(); } catch {} }
+}
