@@ -147,6 +147,7 @@ export function Sidebar() {
       items: [
         { name: 'CRM & Tickets', href: '/tickets', icon: LifeBuoy },
         { name: 'Omnichannel SMS', href: '/messaging', icon: MessageSquare },
+        { name: 'Customer Portal', href: '/portal', icon: Users, badge: 'PWA' },
       ],
     },
     {
@@ -170,6 +171,7 @@ export function Sidebar() {
     {
       label: 'System',
       items: [
+        { name: 'System Health & Backup', href: '/system/health', icon: ShieldCheck, badge: 'Ops' },
         { name: 'Settings & Security', href: '/settings', icon: Settings },
       ],
     },

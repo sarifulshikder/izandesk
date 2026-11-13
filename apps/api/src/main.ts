@@ -22,6 +22,9 @@ import resellersRouter from './routes/resellers';
 import ticketsRouter from './routes/tickets';
 import messagingRouter from './routes/messaging';
 import brandingRouter from './routes/branding';
+import portalRouter from './routes/portal';
+import systemRouter from './routes/system';
+import acsRouter from './routes/acs';
 import { startBillingScheduler } from './integrations/billing';
 
 const PORT = Number(process.env.API_PORT || 4000);
@@ -89,6 +92,9 @@ async function bootstrap() {
     res.json({ ok: true, service: 'izandesk-api', phase: 5, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length });
   });
   app.use('/api/branding', brandingRouter);
+  app.use('/api/portal', portalRouter);
+  app.use('/api/system', systemRouter);
+  app.use('/api/acs', acsRouter);
 
   app.post('/api/auth/login', (req, res) => {
     const body = req.body as LoginRequest;

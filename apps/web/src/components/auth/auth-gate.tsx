@@ -1,11 +1,17 @@
 'use client';
 
 import React from 'react';
+import { usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { LoginScreen } from './login-screen';
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
+  const pathname = usePathname();
+  // Public/self-contained routes (customer portal, walled garden notice) do not require admin auth
+  if (pathname?.startsWith('/portal') || pathname === '/walled-garden') {
+    return <>{children}</>;
+  }
 
   if (loading) {
     return (
