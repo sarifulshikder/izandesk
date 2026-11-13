@@ -445,6 +445,30 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
     } catch {}
   }
 
+  // Best-effort finance posting & audit for completed payments
+  if (status === 'COMPLETED') {
+    try {
+      const ref = payment.payment_ref || payment_ref;
+      const exists = await pool.query(`SELECT 1 FROM finance_transactions WHERE reference_id=$1 LIMIT 1`, [ref]).catch(()=>({rows:[]}));
+      if (!exists.rows?.length) {
+        const method = String(input.gateway||input.method||'CASH').toUpperCase();
+        const accCode = method.includes('BANK')?'1010':(method.match(/BKASH|NAGAD|ROCKET|MFS/)?'1020':'1000');
+        const cashAccR = await pool.query('SELECT id FROM finance_accounts WHERE code=$1 LIMIT 1',[accCode]).catch(()=>({rows:[]}));
+        const revAccR = await pool.query("SELECT id FROM finance_accounts WHERE code='4000' LIMIT 1").catch(()=>({rows:[]}));
+        await pool.query(`INSERT INTO finance_transactions(txn_date,txn_type,method,amount,currency,reference_type,reference_id,subscriber_id,description,created_by) VALUES(COALESCE($1::date,CURRENT_DATE),'COLLECTION',$2,$3,$4,'PAYMENT',$5,$6,$7,'system')`,
+          [payment.verified_at||payment.created_at, input.gateway||input.method||'CASH', amount, input.currency||'BDT', ref, subscriberId, `Payment ${ref} (${input.gateway||''}${trx?` ${trx}`:''})`]).catch(()=>{});
+        const cashAcc=cashAccR.rows[0]?.id, revAcc=revAccR.rows[0]?.id;
+        if(cashAcc && revAcc){
+          const je=await pool.query(`INSERT INTO finance_journal_entries(entry_no,entry_date,description,source_type,source_id,posted,created_by) VALUES($1,COALESCE($2::date,CURRENT_DATE),$3,'PAYMENT',$4,true,'system') RETURNING id`,
+            [`JE-PAY-${Date.now()}-${Math.random().toString(36).slice(2,5).toUpperCase()}`, payment.verified_at||payment.created_at, `Payment ${ref}`, String(ref)]).catch(()=>({rows:[]}));
+          const jid=je.rows[0]?.id;
+          if(jid){ await pool.query(`INSERT INTO finance_journal_lines(entry_id,account_id,debit,credit,memo) VALUES($1,$2,$3,0,'cash/mfs'),($1,$4,0,$3,'revenue')`, [jid,cashAcc,amount,revAcc]).catch(()=>{}); }
+        }
+      }
+      await auditLog({ action:'PAYMENT_COMPLETED', entity_type:'payment', entity_id: payment.id||ref, details:{ gateway: input.gateway, amount, trx_id: trx, subscriber_id: subscriberId } }).catch(()=>{});
+    } catch {}
+  }
+
   // Best-effort receipt notification
   try {
     if (status === 'COMPLETED' && subscriberId) {

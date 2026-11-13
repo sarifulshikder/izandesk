@@ -33,6 +33,7 @@ import reportsRouter from './routes/reports';
 import auditRouter from './routes/audit';
 import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
+import { startReportScheduler } from './integrations/report-scheduler';
 
 const PORT = Number(process.env.API_PORT || 4000);
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
@@ -266,6 +267,7 @@ async function bootstrap() {
   if (dbReady) {
     startBillingScheduler();
     startBackupScheduler();
+    startReportScheduler();
   }
 }
 

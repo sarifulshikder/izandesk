@@ -5,6 +5,27 @@ import crypto from 'crypto';
 import { auditLog, reqActor } from '../integrations/audit';
 
 const router: Router = Router();
+
+async function syncVoucherToRadius(v:any, active:boolean){
+  try {
+    const username = String(v.code||'').trim(); if(!username) return {ok:false,reason:'no code'};
+    await pool.query('DELETE FROM radcheck WHERE username=$1', [username]);
+    await pool.query('DELETE FROM radreply WHERE username=$1', [username]);
+    await pool.query('DELETE FROM radusergroup WHERE username=$1', [username]);
+    if (!active) {
+      await pool.query("INSERT INTO radcheck(username,attribute,op,value) VALUES($1,'Auth-Type',':=','Reject')", [username]);
+      return {ok:true,active:false};
+    }
+    const pass = String(v.code);
+    await pool.query("INSERT INTO radcheck(username,attribute,op,value) VALUES($1,'Cleartext-Password',':=',$2)", [username, pass]);
+    const profile = String(v.package_name || v.plan_name || 'hotspot-voucher');
+    await pool.query("INSERT INTO radusergroup(username,groupname,priority) VALUES($1,$2,1)", [username, profile]);
+    if (v.expires_at) await pool.query("INSERT INTO radcheck(username,attribute,op,value) VALUES($1,'Expiration',':=',$2)", [username, new Date(v.expires_at).toUTCString().replace('GMT','') || String(v.expires_at)]);
+    if (v.data_limit_mb) await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Mikrotik-Total-Limit',':=',$2)", [username, String(Math.max(0, Number(v.data_limit_mb))*1024*1024)]);
+    await pool.query(`UPDATE hotspot_vouchers SET radius_synced=true WHERE id=$1`, [v.id]).catch(()=>{});
+    return {ok:true,active:true,username,profile};
+  } catch(e:any){ return {ok:false,error:e.message}; }
+}
 function guard(req:any,res:any, roles=['SUPER_ADMIN','BILLING_OPERATOR','RESELLER']){ if(!roles.includes(String((req as any).user?.role||''))){ res.status(403).json({message:'Forbidden'}); return false;} return true; }
 function makeCode(){ return crypto.randomBytes(4).toString('hex').toUpperCase(); }
 
@@ -55,15 +76,36 @@ router.post('/vouchers/:id/activate', asyncHandler(async (req,res)=>{
   const hours = Number(b.duration_hours || v0.duration_hours || 24);
   const r=await pool.query(`UPDATE hotspot_vouchers SET status='ACTIVE', activated_at=now(), expires_at=now() + ($2 || ' hours')::interval, subscriber_id=COALESCE($3,subscriber_id), mac_address=COALESCE($4,mac_address) WHERE id=$1 RETURNING *`,
     [req.params.id, String(hours), b.subscriber_id||null, b.mac_address||null]);
-  await auditLog({ ...reqActor(req), action:'HOTSPOT_VOUCHER_ACTIVATE', entity_type:'hotspot_voucher', entity_id:req.params.id, details:{hours} });
-  res.json({ok:true,data:r.rows[0], sync:{ attempted:false, note:'RADIUS/hotspot profile sync hook: integrate with router/NAS or external hotspot controller for live enforcement.' }});
+  const sync = await syncVoucherToRadius(r.rows[0], true);
+  await auditLog({ ...reqActor(req), action:'HOTSPOT_VOUCHER_ACTIVATE', entity_type:'hotspot_voucher', entity_id:req.params.id, details:{hours, radius_sync: sync} });
+  res.json({ok:true,data:r.rows[0], sync});
 }));
 
 router.post('/vouchers/:id/expire', asyncHandler(async (req,res)=>{
   if(!guard(req,res,['SUPER_ADMIN','BILLING_OPERATOR'])) return;
   const r=await pool.query(`UPDATE hotspot_vouchers SET status='EXPIRED' WHERE id=$1 RETURNING *`, [req.params.id]);
   if(!r.rows[0]) return res.status(404).json({message:'Not found'});
-  res.json({ok:true,data:r.rows[0]});
+  const sync = await syncVoucherToRadius(r.rows[0], false);
+  await auditLog({ ...reqActor(req), action:'HOTSPOT_VOUCHER_EXPIRE', entity_type:'hotspot_voucher', entity_id:req.params.id, details:{radius_sync:sync} });
+  res.json({ok:true,data:r.rows[0], sync});
+}));
+
+router.post('/vouchers/:id/sync-radius', asyncHandler(async (req,res)=>{
+  if(!guard(req,res,['SUPER_ADMIN','BILLING_OPERATOR'])) return;
+  const v=(await pool.query('SELECT * FROM hotspot_vouchers WHERE id=$1',[req.params.id])).rows[0];
+  if(!v) return res.status(404).json({message:'Not found'});
+  const active = ['ACTIVE','SOLD'].includes(String(v.status).toUpperCase());
+  const sync = await syncVoucherToRadius(v, active);
+  res.json({ok:true,data:v,sync});
+}));
+
+router.post('/vouchers/sync-radius/batch', asyncHandler(async (req,res)=>{
+  if(!guard(req,res,['SUPER_ADMIN','BILLING_OPERATOR'])) return;
+  const b=req.body||{};
+  const rows=(await pool.query(`SELECT * FROM hotspot_vouchers WHERE ($1::text IS NULL OR batch_no=$1) ORDER BY created_at DESC LIMIT 1000`, [b.batch_no||null])).rows;
+  let ok=0, fail=0;
+  for(const v of rows){ const active=['ACTIVE','SOLD'].includes(String(v.status).toUpperCase()); const r=await syncVoucherToRadius(v, active); if(r.ok) ok++; else fail++; }
+  res.json({ok:true,synced:ok,failed:fail,total:rows.length});
 }));
 
 router.get('/summary', asyncHandler(async (_req,res)=>{
