@@ -213,6 +213,21 @@ export default function SubscribersPage() {
     );
   };
 
+  const counts = {
+    active: rows.filter(r => String(r.status).toUpperCase() === 'ACTIVE').length,
+    expired: rows.filter(r => String(r.status).toUpperCase() === 'EXPIRED').length,
+    suspended: rows.filter(r => String(r.status).toUpperCase() === 'SUSPENDED').length,
+    pending: rows.filter(r => ['PENDING','INACTIVE'].includes(String(r.status).toUpperCase())).length,
+  };
+  const statusBadge = (s: string) => {
+    const v = String(s || '').toUpperCase();
+    if (v === 'ACTIVE') return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+    if (v === 'EXPIRED') return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
+    if (v === 'SUSPENDED') return 'bg-red-500/10 text-red-400 border-red-500/20';
+    if (v === 'PENDING') return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
+    return 'bg-muted/40 text-muted-foreground border-border';
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -227,6 +242,14 @@ export default function SubscribersPage() {
       </div>
 
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="p-4 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground">Total (all)</div><div className="text-xl font-black mt-1">{total}</div></div>
+        <div className="p-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5"><div className="text-xs text-emerald-300/80">Active (loaded)</div><div className="text-xl font-black mt-1 text-emerald-400">{counts.active}</div></div>
+        <div className="p-4 rounded-2xl border border-amber-500/20 bg-amber-500/5"><div className="text-xs text-amber-300/80">Expired (loaded)</div><div className="text-xl font-black mt-1 text-amber-400">{counts.expired}</div></div>
+        <div className="p-4 rounded-2xl border border-red-500/20 bg-red-500/5"><div className="text-xs text-red-300/80">Suspended (loaded)</div><div className="text-xl font-black mt-1 text-red-400">{counts.suspended}</div></div>
+        <div className="p-4 rounded-2xl border border-blue-500/20 bg-blue-500/5"><div className="text-xs text-blue-300/80">Pending (loaded)</div><div className="text-xl font-black mt-1 text-blue-400">{counts.pending}</div></div>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <div className="md:col-span-2 relative">
@@ -280,7 +303,7 @@ export default function SubscribersPage() {
                       <div className="text-xs">{[r.area_name, r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || `${r.area_name_db || r.area_name || '-'}`}</div>
                       <div className="text-xs text-muted-foreground">{r.distribution_box_name || r.distribution_box_code || '-'} {r.latitude ? '• 📍' : ''}</div>
                     </td>
-                    <td className="px-4 py-3"><span className="text-[11px] px-2 py-1 rounded-full border border-border bg-muted/40">{r.status}</span></td>
+                    <td className="px-4 py-3"><span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${statusBadge(r.status)}`}>{r.status}</span></td>
                     <td className="px-4 py-3 text-right" onClick={e=>e.stopPropagation()}>
                       <button onClick={()=>openEdit(r)} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button>
                       <button onClick={()=>remove(r.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400"><Trash2 className="w-4 h-4"/></button>
