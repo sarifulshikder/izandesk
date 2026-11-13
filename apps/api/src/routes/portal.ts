@@ -52,7 +52,7 @@ router.get('/me', portalAuth, asyncHandler(async (req, res) => {
 
 router.get('/invoices', portalAuth, asyncHandler(async (req, res) => {
   const id = (req as any).portal.sub;
-  const r = await pool.query(`SELECT id, invoice_number, bill_month, period_start, period_end, issue_date, due_date, total_amount, paid_amount, due_amount, status, currency FROM invoices WHERE subscriber_id=$1 ORDER BY issue_date DESC, created_at DESC LIMIT 100`, [id]);
+  const r = await pool.query(`SELECT id, invoice_number, bill_month, period_start, period_end, issue_date, due_date, total_amount, paid_amount, due_amount, status, 'BDT' as currency FROM invoices WHERE subscriber_id=$1 ORDER BY issue_date DESC, created_at DESC LIMIT 100`, [id]);
   res.json({ ok: true, data: r.rows });
 }));
 
