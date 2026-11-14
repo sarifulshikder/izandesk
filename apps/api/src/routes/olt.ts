@@ -19,6 +19,23 @@ router.get('/olts', asyncHandler(async (_req, res) => {
   res.json({ data: r.rows });
 }));
 
+router.get('/olts/:id', asyncHandler(async (req, res) => {
+  const r = await pool.query(`SELECT o.*, p.name as wg_peer_name, p.tunnel_ip as wg_peer_tunnel_ip, p.site_name as wg_peer_site
+    FROM olts o LEFT JOIN wg_peers p ON p.id=o.wg_peer_id WHERE o.id=$1`, [req.params.id]);
+  const olt = r.rows[0];
+  if (!olt) return res.status(404).json({ message: 'OLT not found' });
+  const stats = await pool.query(`SELECT
+      COUNT(*)::int AS total_onus,
+      COUNT(*) FILTER (WHERE status='ONLINE')::int AS online_onus,
+      COUNT(*) FILTER (WHERE status='OFFLINE')::int AS offline_onus,
+      COUNT(*) FILTER (WHERE status='AUTHORIZED')::int AS authorized_onus,
+      COUNT(*) FILTER (WHERE status='DISCOVERED')::int AS discovered_onus,
+      COUNT(*) FILTER (WHERE subscriber_id IS NOT NULL)::int AS linked_onus,
+      AVG(rx_power_dbm)::float AS avg_rx_power_dbm
+    FROM onus WHERE olt_id=$1`, [req.params.id]);
+  res.json({ ...olt, stats: stats.rows[0] || {} });
+}));
+
 router.post('/olts', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.name || !b.host) return res.status(400).json({ message: 'name and host are required' });

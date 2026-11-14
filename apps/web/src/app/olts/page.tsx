@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { Package, Plus, RefreshCw, Pencil, Trash2, Play, Search, Radio, CheckCircle2, X, Wifi } from 'lucide-react';
+import { Package, Plus, RefreshCw, Pencil, Trash2, Play, Search, Radio, CheckCircle2, X, Wifi, ExternalLink } from 'lucide-react';
 
 function opticalTone(status: string) {
   if (status === 'CRITICAL') return 'text-red-400 bg-red-500/10 border-red-500/20';
@@ -87,7 +88,9 @@ export default function OltsPage() {
               <div key={o.id} className={`p-3 rounded-xl border cursor-pointer ${selectedOlt===o.id?'border-primary bg-primary/5':'border-border bg-muted/20'}`} onClick={()=>setSelectedOlt(selectedOlt===o.id?'':o.id)}>
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <div className="font-semibold">{o.name}</div>
+                    <Link href={`/olts/${o.id}`} className="font-semibold hover:text-primary inline-flex items-center gap-1.5 group" onClick={e=>e.stopPropagation()}>
+                      {o.name} <ExternalLink className="w-3.5 h-3.5 opacity-0 group-hover:opacity-70" />
+                    </Link>
                     <div className="text-xs text-muted-foreground">{o.vendor} {o.model||''} • {o.host}</div>
                     <div className="text-[11px] mt-1"><span className={`px-2 py-0.5 rounded-full border font-semibold ${o.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-red-500/10 text-red-400 border-red-500/20'}`}>{o.status}</span> {o.site?`• ${o.site}`:''}</div>
                     {o.wg_peer_name && <div className="text-[11px] mt-1 text-cyan-400">WG: {o.wg_peer_name}{o.wg_peer_tunnel_ip ? ` (${o.wg_peer_tunnel_ip})` : ''}</div>}
