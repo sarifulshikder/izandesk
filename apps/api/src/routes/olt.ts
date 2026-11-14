@@ -113,7 +113,7 @@ router.get('/onus', asyncHandler(async (req, res) => {
   if (q) { params.push(`%${String(q).toLowerCase()}%`); where.push(`(lower(COALESCE(o.serial_number,'')) LIKE $${params.length} OR lower(COALESCE(o.name,'')) LIKE $${params.length} OR lower(COALESCE(o.pon_port,'')) LIKE $${params.length})`); }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const r = await pool.query(`SELECT o.*, ol.name as olt_name, ol.vendor as olt_vendor, s.full_name as subscriber_name, s.client_code as subscriber_code
-    FROM onus o JOIN olts ol ON ol.id=o.olt_id LEFT JOIN subscribers s ON s.id=o.subscriber_id ${whereSql} ORDER BY o.updated_at DESC`);
+    FROM onus o JOIN olts ol ON ol.id=o.olt_id LEFT JOIN subscribers s ON s.id=o.subscriber_id ${whereSql} ORDER BY o.updated_at DESC`, params);
   const rows = r.rows.map((x:any)=>({ ...x, optical_status: opticalStatus(x.rx_power_dbm != null ? Number(x.rx_power_dbm) : null) }));
   res.json({ data: rows });
 }));
