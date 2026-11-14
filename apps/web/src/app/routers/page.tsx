@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { RefreshCw, Plus, Pencil, Trash2, Server, Wifi, Activity, Cpu, HardDrive, ArrowDown, ArrowUp, Play, X, ShieldCheck, Link2, Globe, Download, ExternalLink, Network } from 'lucide-react';
+import { RefreshCw, Plus, Pencil, Trash2, Server, Wifi, Cpu, HardDrive, ArrowDown, ArrowUp, Play, X, ShieldCheck, Link2, Globe, Download, ExternalLink, Network } from 'lucide-react';
 
 const modeBadge = (m: string) => m === 'RADIUS' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' : m === 'REST' ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' : 'bg-blue-500/10 text-blue-400 border-blue-500/20';
 
@@ -138,74 +138,56 @@ export default function RoutersPage() {
         <Stat label="Aggregate TX" value={fmtBps(summary.aggTxBps||0)} icon={ArrowUp} accent="text-indigo-400" />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-2 rounded-2xl border border-border bg-card p-4">
-          <h2 className="font-bold mb-3 flex items-center gap-2"><Server className="w-4 h-4 text-primary"/>Routers & NAS <span className="text-xs font-normal text-muted-foreground">({routers.length})</span></h2>
-          <div className="space-y-3 max-h-[760px] overflow-auto">
-            {routers.map(r => {
-              const m = String(r.integration_mode||'API').toUpperCase();
-              return (
-                <div key={r.id} className="p-4 rounded-xl border border-border bg-muted/20 hover:bg-muted/30 transition-colors">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Link href={`/routers/${r.id}`} className="font-semibold hover:text-primary inline-flex items-center gap-1.5 group">
-                          {r.name} <ExternalLink className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100" />
-                        </Link>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${modeBadge(m)}`}>{m}</span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${r.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':r.status==='OFFLINE'?'bg-red-500/10 text-red-400 border-red-500/20':'bg-muted text-muted-foreground border-border'}`}>{r.status}</span>
-                        <span className="text-[10px] text-muted-foreground">{r.router_type} {r.ros_version}</span>
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-1">
-                        <span className="font-mono">{r.host}</span>
-                        {m !== 'RADIUS' ? <>:{r.api_port}{r.rest_port ? ` • REST ${r.rest_port}` : ''}</> : <> • CoA {r.coa_port||3799}{r.nas_identifier ? ` • NAS ${r.nas_identifier}` : ''}</>}
-                        {r.site ? ` • ${r.site}` : ''}
-                      </div>
+      <div className="rounded-2xl border border-border bg-card p-4">
+        <h2 className="font-bold mb-3 flex items-center gap-2"><Server className="w-4 h-4 text-primary"/>Routers & NAS <span className="text-xs font-normal text-muted-foreground">({routers.length})</span></h2>
+        <div className="space-y-3 max-h-[760px] overflow-auto">
+          {routers.map(r => {
+            const m = String(r.integration_mode||'API').toUpperCase();
+            return (
+              <div key={r.id} className="p-4 rounded-xl border border-border bg-muted/20 hover:bg-muted/30 transition-colors">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Link href={`/routers/${r.id}`} className="font-semibold hover:text-primary inline-flex items-center gap-1.5 group">
+                        {r.name} <ExternalLink className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100" />
+                      </Link>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border ${modeBadge(m)}`}>{m}</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full border ${r.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':r.status==='OFFLINE'?'bg-red-500/10 text-red-400 border-red-500/20':'bg-muted text-muted-foreground border-border'}`}>{r.status}</span>
+                      <span className="text-[10px] text-muted-foreground">{r.router_type} {r.ros_version}</span>
                     </div>
-                    <div className="flex gap-1 shrink-0 flex-wrap justify-end">
-                      <Link href={`/routers/${r.id}`} className="p-2 rounded-lg hover:bg-muted" title="Open 360° view"><ExternalLink className="w-4 h-4"/></Link>
-                      <button onClick={()=>testConn(r.id)} className="p-2 rounded-lg hover:bg-muted" title="Test connection"><Play className="w-4 h-4"/></button>
-                      {m !== 'RADIUS' && <button onClick={()=>openImport(r)} className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400" title="Import from MikroTik"><Download className="w-4 h-4"/></button>}
-                      {m !== 'RADIUS' && <button onClick={()=>provisionWalledGarden(r)} className="p-2 rounded-lg hover:bg-amber-500/10 text-amber-400" title="Provision walled-garden"><Globe className="w-4 h-4"/></button>}
-                      <button onClick={()=>{setForm({...r, integration_mode: m, radius_secret: r.radius_secret||'', coa_port: r.coa_port||3799, nas_identifier: r.nas_identifier||''}); setModal(r);}} className="p-2 rounded-lg hover:bg-muted" title="Edit"><Pencil className="w-4 h-4"/></button>
-                      <button onClick={()=>del(r.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400" title="Delete"><Trash2 className="w-4 h-4"/></button>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      <span className="font-mono">{r.host}</span>
+                      {m !== 'RADIUS' ? <>:{r.api_port}{r.rest_port ? ` • REST ${r.rest_port}` : ''}</> : <> • CoA {r.coa_port||3799}{r.nas_identifier ? ` • NAS ${r.nas_identifier}` : ''}</>}
+                      {r.site ? ` • ${r.site}` : ''}
                     </div>
                   </div>
-                  {m !== 'RADIUS' ? (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-xs">
-                      <Meter icon={Cpu} label="CPU" value={`${Number(r.cpu_load||0).toFixed(1)}%`} />
-                      <Meter icon={HardDrive} label="Memory" value={`${Number(r.memory_used_mb||0).toFixed(0)}/${Number(r.memory_total_mb||0).toFixed(0)} MB`} />
-                      <Meter icon={ArrowDown} label="RX" value={fmtBps(Number(r.rx_bps||0))} />
-                      <Meter icon={ArrowUp} label="TX" value={fmtBps(Number(r.tx_bps||0))} />
-                    </div>
-                  ) : (
-                    <div className="mt-3 text-xs p-2 rounded-lg bg-violet-500/5 border border-violet-500/20 text-violet-300 inline-flex items-center gap-2"><ShieldCheck className="w-4 h-4"/>RADIUS NAS • AAA/CoA pool. Open 360° view for details.</div>
-                  )}
-                  <div className="flex items-center justify-between gap-2 mt-2 text-[11px] text-muted-foreground">
-                    <span>Uptime: {formatUptime(Number(r.uptime_seconds||0))} • Last seen: {r.last_seen_at ? new Date(r.last_seen_at).toLocaleTimeString() : '-'}</span>
-                    <Link href={`/routers/${r.id}`} className="text-primary hover:underline inline-flex items-center gap-1">Open 360° <ExternalLink className="w-3 h-3" /></Link>
+                  <div className="flex gap-1 shrink-0 flex-wrap justify-end">
+                    <Link href={`/routers/${r.id}`} className="p-2 rounded-lg hover:bg-muted" title="Open 360° view"><ExternalLink className="w-4 h-4"/></Link>
+                    <button onClick={()=>testConn(r.id)} className="p-2 rounded-lg hover:bg-muted" title="Test connection"><Play className="w-4 h-4"/></button>
+                    {m !== 'RADIUS' && <button onClick={()=>openImport(r)} className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400" title="Import from MikroTik"><Download className="w-4 h-4"/></button>}
+                    {m !== 'RADIUS' && <button onClick={()=>provisionWalledGarden(r)} className="p-2 rounded-lg hover:bg-amber-500/10 text-amber-400" title="Provision walled-garden"><Globe className="w-4 h-4"/></button>}
+                    <button onClick={()=>{setForm({...r, integration_mode: m, radius_secret: r.radius_secret||'', coa_port: r.coa_port||3799, nas_identifier: r.nas_identifier||''}); setModal(r);}} className="p-2 rounded-lg hover:bg-muted" title="Edit"><Pencil className="w-4 h-4"/></button>
+                    <button onClick={()=>del(r.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400" title="Delete"><Trash2 className="w-4 h-4"/></button>
                   </div>
                 </div>
-              );
-            })}
-            {!routers.length && <div className="text-sm text-muted-foreground py-8 text-center">No routers configured. Click “Add Router / NAS” to get started.</div>}
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-border bg-card p-4">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <h2 className="font-bold flex items-center gap-2"><Activity className="w-4 h-4 text-primary"/>Live Sessions Snapshot</h2>
-            <Link href="/subscribers/live" className="text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50">Full View</Link>
-          </div>
-          <div className="text-xs text-muted-foreground mb-2">Recent sessions across routers/NAS (open a router for per-device view).</div>
-          <div className="overflow-auto max-h-[760px]">
-            <table className="w-full text-xs">
-              <thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border"><th className="text-left py-2 px-2">User</th><th className="text-left py-2 px-2">Router/NAS</th><th className="text-left py-2 px-2">RX/TX</th><th className="text-left py-2 px-2">Status</th></tr></thead>
-              <tbody>{sessions.slice(0,40).map((s:any,i:number)=>(
-                <tr key={i} className="border-b border-border/50"><td className="py-2 px-2"><div className="font-medium">{s.full_name||s.username}</div><div className="text-muted-foreground font-mono">{s.username}</div></td><td className="py-2 px-2"><div className="flex items-center gap-1">{s.router_name||'-'} {s.integration_mode && <span className={`text-[9px] px-1.5 py-0.5 rounded border ${modeBadge(String(s.integration_mode))}`}>{s.integration_mode}</span>}</div></td><td className="py-2 px-2"><div className="text-cyan-400">↓ {fmtBps(Number(s.rx_bps||0))}</div><div className="text-indigo-400">↑ {fmtBps(Number(s.tx_bps||0))}</div></td><td className="py-2 px-2"><span className={`px-2 py-0.5 rounded-full border ${s.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-muted text-muted-foreground border-border'}`}>{s.status}</span></td></tr>
-              ))}{!sessions.length && <tr><td colSpan={4} className="py-8 text-center text-muted-foreground">No session data yet.</td></tr>}</tbody>
-            </table>
-          </div>
+                {m !== 'RADIUS' ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-xs">
+                    <Meter icon={Cpu} label="CPU" value={`${Number(r.cpu_load||0).toFixed(1)}%`} />
+                    <Meter icon={HardDrive} label="Memory" value={`${Number(r.memory_used_mb||0).toFixed(0)}/${Number(r.memory_total_mb||0).toFixed(0)} MB`} />
+                    <Meter icon={ArrowDown} label="RX" value={fmtBps(Number(r.rx_bps||0))} />
+                    <Meter icon={ArrowUp} label="TX" value={fmtBps(Number(r.tx_bps||0))} />
+                  </div>
+                ) : (
+                  <div className="mt-3 text-xs p-2 rounded-lg bg-violet-500/5 border border-violet-500/20 text-violet-300 inline-flex items-center gap-2"><ShieldCheck className="w-4 h-4"/>RADIUS NAS • AAA/CoA pool. Open 360° view for details.</div>
+                )}
+                <div className="flex items-center justify-between gap-2 mt-2 text-[11px] text-muted-foreground">
+                  <span>Uptime: {formatUptime(Number(r.uptime_seconds||0))} • Last seen: {r.last_seen_at ? new Date(r.last_seen_at).toLocaleTimeString() : '-'}</span>
+                  <Link href={`/routers/${r.id}`} className="text-primary hover:underline inline-flex items-center gap-1">Open 360° <ExternalLink className="w-3 h-3" /></Link>
+                </div>
+              </div>
+            );
+          })}
+          {!routers.length && <div className="text-sm text-muted-foreground py-8 text-center">No routers configured. Click “Add Router / NAS” to get started.</div>}
         </div>
       </div>
 
