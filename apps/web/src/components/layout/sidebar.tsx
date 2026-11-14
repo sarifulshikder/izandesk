@@ -39,6 +39,7 @@ import {
   BarChart3,
   ScrollText,
   Wifi,
+  Truck,
 } from 'lucide-react';
 
 interface NavGroup {
@@ -62,6 +63,8 @@ function isItemActive(pathname: string, searchParams: URLSearchParams | null, hr
     return true;
   }
   if (href === '/resellers' && pathname === '/resellers') return true;
+  if (href === '/olts' && pathname === '/olts') return true;
+  if (href === '/olts') return false;
   return pathname === href || (href !== '/' && pathname.startsWith(href + '/'));
 }
 
@@ -70,8 +73,9 @@ export function Sidebar() {
   const searchParams = useSearchParams();
   const { token, activeRole, user, isMobileMenuOpen, setMobileMenuOpen } = useAuth();
   const [resellers, setResellers] = useState<any[]>([]);
+  const [olts, setOlts] = useState<any[]>([]);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Resellers: true, Network: true, Billing: true, Support: true, 'Finance & Ops': true, Plugins: true, System: false });
-  const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true, 'All Resellers': true });
+  const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true, 'All Resellers': true, 'FTTH & OLTs': true });
 
   const loadResellers = useCallback(async () => {
     if (!token) return;
@@ -83,11 +87,22 @@ export function Sidebar() {
     }
   }, [token]);
 
-  useEffect(() => { loadResellers(); }, [loadResellers, pathname]);
+  const loadOlts = useCallback(async () => {
+    if (!token) return;
+    try {
+      const r = await apiFetch<any>('/api/olt/olts', {}, token);
+      setOlts(r.data || []);
+    } catch {
+      setOlts([]);
+    }
+  }, [token]);
+
+  useEffect(() => { loadResellers(); loadOlts(); }, [loadResellers, loadOlts, pathname]);
 
   useEffect(() => {
     if (pathname.startsWith('/subscribers')) setOpenGroups(s => ({ ...s, Subscribers: true }));
     if (pathname.startsWith('/resellers')) { setOpenGroups(s => ({ ...s, Resellers: true })); setOpenSub(s => ({ ...s, 'All Resellers': true })); }
+    if (pathname.startsWith('/olts')) { setOpenGroups(s => ({ ...s, Network: true })); setOpenSub(s => ({ ...s, 'FTTH & OLTs': true })); }
     if (pathname.startsWith('/plugins')) setOpenGroups(s => ({ ...s, Plugins: true }));
     if (pathname.startsWith('/plugins/payment-gateways')) setOpenSub(s => ({ ...s, 'Payment Gateways': true }));
     if (pathname.startsWith('/finance') || pathname.startsWith('/hr') || pathname.startsWith('/procurement') || pathname.startsWith('/hotspot') || pathname.startsWith('/reports') || pathname.startsWith('/audit')) setOpenGroups(s => ({ ...s, 'Finance & Ops': true }));
@@ -113,7 +128,9 @@ export function Sidebar() {
         { name: 'All Subscribers', href: '/subscribers', icon: Users, badge: 'All' },
         { name: 'Add Subscriber', href: '/subscribers?new=1', icon: UserPlus },
         { name: 'Live Sessions', href: '/subscribers/live', icon: Activity },
-        { name: 'Expired Subscribers', href: '/subscribers?status=EXPIRED', icon: Clock3 },
+          { name: 'Leads Pipeline', href: '/leads', icon: UsersRound, badge: 'CRM' },
+          { name: 'Installation Orders', href: '/installation-orders', icon: Truck, badge: 'Field' },
+          { name: 'Expired Subscribers', href: '/subscribers?status=EXPIRED', icon: Clock3 },
         { name: 'Suspended Subscribers', href: '/subscribers?status=SUSPENDED', icon: UserX },
         { name: 'Pending / Inactive', href: '/subscribers?status=PENDING', icon: UserMinus },
       ],
@@ -141,7 +158,14 @@ export function Sidebar() {
         { name: 'Network & Routers', href: '/routers', icon: Network, badge: 'NAS' },
         { name: 'WireGuard Overlay', href: '/wireguard', icon: Shield, badge: 'WG' },
         { name: 'RADIUS & AAA', href: '/radius', icon: ShieldCheck },
-        { name: 'FTTH & OLTs', href: '/olts', icon: Package },
+        {
+          name: 'FTTH & OLTs',
+          icon: Package,
+          children: [
+            { name: 'Overview', href: '/olts' },
+            ...olts.map((o: any) => ({ name: o.name || o.host || 'OLT', href: `/olts/${o.id}` })),
+          ],
+        },
       ],
     },
     {
