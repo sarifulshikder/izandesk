@@ -1,0 +1,37 @@
+# Development override: hot-reload for web (Next.js HMR) and api (tsc watch + node --watch)
+# Usage:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up
+#   # or only app servers (with infra already running):
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up api web
+#
+# Notes:
+# - Uses bind-mounted source from the base compose. File watching inside containers depends on your
+#   host/FS; if changes aren't detected, prefer running `web`/`api` locally and keep infra in Docker.
+# - API runs from compiled `dist` with a restart-on-change watcher, so edits trigger rebuild+restart.
+
+services:
+  api:
+    environment:
+      NODE_ENV: development
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      [
+        "sh",
+        "-lc",
+        "apk add --no-cache docker-cli iproute2 >/dev/null 2>&1 || true; GW=$$(getent hosts izandesk-wg-hub wg-hub 2>/dev/null | awk '{print $$1; exit}'); if [ -n \"$$GW\" ]; then ip route replace 10.77.0.0/16 via $$GW 2>/dev/null || true; ip route replace 10.5.0.0/24 via $$GW 2>/dev/null || true; fi; corepack enable >/dev/null 2>&1 || true; corepack prepare pnpm@10.37.0 --activate >/dev/null 2>&1 || true; pnpm install --frozen-lockfile=false; pnpm --filter @izandesk/shared-types build; pnpm --filter api build; pnpm --filter api dev & node --watch --watch-path apps/api/dist apps/api/dist/main.js"
+      ]
+
+  web:
+    environment:
+      NODE_ENV: development
+      WATCHPACK_POLLING: ${WATCHPACK_POLLING:-true}
+      CHOKIDAR_USEPOLLING: ${CHOKIDAR_USEPOLLING:-true}
+    command:
+      [
+        "sh",
+        "-lc",
+        "corepack enable >/dev/null 2>&1 || true; corepack prepare pnpm@10.37.0 --activate >/dev/null 2>&1 || true; pnpm install --frozen-lockfile=false; pnpm --filter @izandesk/shared-types build; pnpm --filter web exec next dev -H 0.0.0.0 -p ${WEB_PORT:-3000}"
+      ]

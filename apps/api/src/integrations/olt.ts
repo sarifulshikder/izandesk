@@ -15,7 +15,8 @@ async function dockerExecSnmp(args: string[], timeoutSec = 6): Promise<string> {
   // ensure route for target host in wg-hub if provided in args
   const routeCmd = hostArg ? `ip route replace ${hostArg}/32 dev ${process.env.WG_INTERFACE || 'wg0'} 2>/dev/null || true; ` : '';
   const cmd = routeCmd + args.map(a => `'${String(a).replace(/'/g, "'\\''")}'`).join(' ');
-  const { stdout } = await execFileAsync('docker', ['exec', 'izandesk-wg-hub', 'sh', '-lc', cmd], { timeout: (timeoutSec + 4) * 1000, maxBuffer: 4 * 1024 * 1024 });
+  const container = process.env.WG_HUB_CONTAINER || 'izandesk-wg-hub';
+  const { stdout } = await execFileAsync('docker', ['exec', container, 'sh', '-lc', cmd], { timeout: (timeoutSec + 4) * 1000, maxBuffer: 4 * 1024 * 1024 });
   return String(stdout || '');
 }
 
@@ -29,9 +30,8 @@ async function runSnmp(bin: 'snmpget'|'snmpwalk'|'snmpbulkwalk', args: string[],
       // fall through to tunnel exec
     }
   }
-  // tunnel-aware fallback via wg-hub
+  // tunnel-aware fallback via wg-hub (requires docker CLI + socket access to host)
   try {
-    await execFileAsync('docker', ['ps', '--format', '{{.Names}}'], { timeout: 3000 });
     return await dockerExecSnmp([bin, ...args], timeoutSec);
   } catch (e) {
     throw new Error(`SNMP unavailable locally and tunnel exec failed (${bin}): ${(e as any).message || e}`);

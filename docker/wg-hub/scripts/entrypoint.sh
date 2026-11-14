@@ -31,6 +31,11 @@ apply_radius_forward() {
   iptables -t nat -C POSTROUTING -d ${fr} -p udp -m multiport --dports 1812,1813 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -d ${fr} -p udp -m multiport --dports 1812,1813 -j MASQUERADE || true
 }
 
+apply_tunnel_nat() {
+  # Allow other containers (e.g. API) to reach tunnel peers/OLT mgmt subnets via wg-hub
+  iptables -t nat -C POSTROUTING -o "$IFACE" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o "$IFACE" -j MASQUERADE || true
+}
+
 apply_olt_routes() {
   local routes="/etc/wireguard/olt_routes.txt"
   [ -f "$routes" ] || return 0
@@ -54,6 +59,7 @@ apply_conf() {
   fi
   apply_olt_routes || true
   apply_radius_forward || true
+  apply_tunnel_nat || true
 }
 
 mkdir -p /etc/wireguard
@@ -67,5 +73,6 @@ while true; do
   apply_conf || echo "[wg-hub] apply failed"
   apply_olt_routes || true
   apply_radius_forward || true
+  apply_tunnel_nat || true
   write_status || true
 done
