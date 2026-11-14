@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
-import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage } from '../integrations/mikrotik';
+import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret } from '../integrations/mikrotik';
 import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas } from '../integrations/radius';
+import { autoLinkOnusBulk } from '../integrations/onu-autolink';
 
 const router: Router = Router();
 
@@ -190,6 +191,180 @@ router.get('/packages/sync-status', asyncHandler(async (_req, res) => {
   res.json({ data: r.rows });
 }));
 
+// MikroTik import (preview + import) for PPP/Hotspot users & profiles
+function mbpsFromRateLimit(rate: any): number {
+  const s = String(rate || '').trim();
+  if (!s) return 0;
+  const first = s.split(/\s+/)[0] || s;
+  const pick = (x: string) => {
+    const m = String(x || '').trim().match(/^([\d.]+)\s*([kKmMgG])?/);
+    if (!m) return 0;
+    const n = Number(m[1]); if (!Number.isFinite(n)) return 0;
+    const u = (m[2] || '').toLowerCase();
+    if (u === 'g') return Math.round(n * 1000);
+    if (u === 'k') return Math.max(1, Math.round(n / 1000));
+    return Math.round(n);
+  };
+  const parts = first.split('/');
+  return Math.max(pick(parts[0] || ''), pick(parts[1] || parts[0] || '')) || 0;
+}
+
+router.get('/routers/:id/mikrotik/import-preview', asyncHandler(async (req, res) => {
+  const r = await pool.query('SELECT * FROM network_routers WHERE id=$1', [req.params.id]);
+  if (!r.rows[0]) return res.status(404).json({ message: 'Router not found' });
+  const row = r.rows[0];
+  const mode = String(row.integration_mode || 'API').toUpperCase();
+  if (!['API', 'REST'].includes(mode)) return res.status(400).json({ message: 'Import is supported only for direct API/REST MikroTik routers' });
+  const type = String(req.query.type || '').toLowerCase();
+  try {
+    if (type === 'ppp-secrets' || type === 'ppp_users' || type === 'ppp-users') {
+      const items = await mikrotikListPppSecrets(row);
+      const names = items.map((x: any) => x.name).filter(Boolean);
+      const existing = names.length ? (await pool.query('SELECT username FROM subscribers WHERE username = ANY($1::text[])', [names])).rows.map((x: any) => x.username) : [];
+      const set = new Set(existing);
+      return res.json({ ok: true, type: 'ppp-secrets', count: items.length, items: items.map((x: any) => ({ ...x, exists: set.has(x.name) })) });
+    }
+    if (type === 'ppp-profiles' || type === 'ppp_profiles') {
+      const items = await mikrotikListPppProfiles(row);
+      const names = items.map((x: any) => x.name).filter(Boolean);
+      const existing = names.length ? (await pool.query('SELECT name, profile_name FROM bandwidth_packages WHERE name = ANY($1::text[]) OR profile_name = ANY($1::text[])', [names])).rows : [];
+      const set = new Set(existing.flatMap((x: any) => [x.name, x.profile_name]).filter(Boolean));
+      return res.json({ ok: true, type: 'ppp-profiles', count: items.length, items: items.map((x: any) => ({ ...x, exists: set.has(x.name) })) });
+    }
+    if (type === 'hotspot-users' || type === 'hotspot_users') {
+      const items = await mikrotikListHotspotUsers(row);
+      const names = items.map((x: any) => x.name).filter(Boolean);
+      const existing = names.length ? (await pool.query('SELECT username FROM subscribers WHERE username = ANY($1::text[])', [names])).rows.map((x: any) => x.username) : [];
+      const set = new Set(existing);
+      return res.json({ ok: true, type: 'hotspot-users', count: items.length, items: items.map((x: any) => ({ ...x, exists: set.has(x.name) })) });
+    }
+    if (type === 'hotspot-profiles' || type === 'hotspot_profiles') {
+      const items = await mikrotikListHotspotProfiles(row);
+      const names = items.map((x: any) => x.name).filter(Boolean);
+      const existing = names.length ? (await pool.query('SELECT name, profile_name FROM bandwidth_packages WHERE name = ANY($1::text[]) OR profile_name = ANY($1::text[])', [names])).rows : [];
+      const set = new Set(existing.flatMap((x: any) => [x.name, x.profile_name]).filter(Boolean));
+      return res.json({ ok: true, type: 'hotspot-profiles', count: items.length, items: items.map((x: any) => ({ ...x, exists: set.has(x.name) })) });
+    }
+    return res.status(400).json({ message: 'type must be ppp-secrets, ppp-profiles, hotspot-users, or hotspot-profiles' });
+  } catch (e: any) {
+    return res.status(502).json({ ok: false, message: `Failed to fetch from MikroTik: ${e.message || e}` });
+  }
+}));
+
+router.post('/routers/:id/mikrotik/import', asyncHandler(async (req, res) => {
+  const r = await pool.query('SELECT * FROM network_routers WHERE id=$1', [req.params.id]);
+  if (!r.rows[0]) return res.status(404).json({ message: 'Router not found' });
+  const row = r.rows[0];
+  const mode = String(row.integration_mode || 'API').toUpperCase();
+  if (!['API', 'REST'].includes(mode)) return res.status(400).json({ message: 'Import is supported only for direct API/REST MikroTik routers' });
+
+  const b = req.body || {};
+  const type = String(b.type || '').toLowerCase();
+  const selected: string[] = Array.isArray(b.selected) ? b.selected.map((x: any) => String(x)) : [];
+  const selectedSet = selected.length ? new Set(selected) : null;
+  const opts = b.options || {};
+  const skipExisting = opts.skip_existing !== false; // default true
+  const provisionRouterMode = opts.provisioning_mode ? String(opts.provisioning_mode).toUpperCase() : 'ROUTER';
+
+  const summary = { imported: 0, skipped: 0, failed: 0, errors: [] as any[] };
+
+  try {
+    if (type === 'ppp-profiles' || type === 'ppp_profiles') {
+      const items = await mikrotikListPppProfiles(row);
+      for (const it of items) {
+        if (selectedSet && !selectedSet.has(it.name)) continue;
+        try {
+          const ex = await pool.query('SELECT id FROM bandwidth_packages WHERE name=$1 OR profile_name=$1 LIMIT 1', [it.name]);
+          if (ex.rows[0]) { summary.skipped++; continue; }
+          const speed = Math.max(1, mbpsFromRateLimit(it.rate_limit) || 1);
+          await pool.query(`INSERT INTO bandwidth_packages(name,profile_name,download_mbps,upload_mbps,queue_type,priority,price,description,is_active)
+            VALUES($1,$2,$3,$4,'SIMPLE',8,0,$5,true)`,
+            [it.name, it.name, speed, speed, it.comment || `Imported from MikroTik ${row.name}`]);
+          summary.imported++;
+        } catch (e: any) { summary.failed++; summary.errors.push({ name: it.name, error: e.message }); }
+      }
+      return res.json({ ok: true, type: 'ppp-profiles', ...summary });
+    }
+
+    if (type === 'hotspot-profiles' || type === 'hotspot_profiles') {
+      const items = await mikrotikListHotspotProfiles(row);
+      for (const it of items) {
+        if (selectedSet && !selectedSet.has(it.name)) continue;
+        try {
+          const ex = await pool.query('SELECT id FROM bandwidth_packages WHERE name=$1 OR profile_name=$1 LIMIT 1', [it.name]);
+          if (ex.rows[0]) { summary.skipped++; continue; }
+          const speed = Math.max(1, mbpsFromRateLimit(it.rate_limit) || 1);
+          await pool.query(`INSERT INTO bandwidth_packages(name,profile_name,download_mbps,upload_mbps,queue_type,priority,price,description,is_active)
+            VALUES($1,$2,$3,$4,'SIMPLE',8,0,$5,true)`,
+            [it.name, it.name, speed, speed, it.comment || `Imported Hotspot profile from MikroTik ${row.name}`]);
+          summary.imported++;
+        } catch (e: any) { summary.failed++; summary.errors.push({ name: it.name, error: e.message }); }
+      }
+      return res.json({ ok: true, type: 'hotspot-profiles', ...summary });
+    }
+
+    if (type === 'ppp-secrets' || type === 'ppp_users' || type === 'ppp-users') {
+      const items = await mikrotikListPppSecrets(row);
+      const profiles = await pool.query('SELECT id,name,profile_name,download_mbps,price FROM bandwidth_packages');
+      const byName = new Map<string, any>();
+      for (const p of profiles.rows) { if (p.profile_name) byName.set(String(p.profile_name), p); if (p.name) byName.set(String(p.name), p); }
+      for (const it of items) {
+        if (selectedSet && !selectedSet.has(it.name)) continue;
+        try {
+          const ex = await pool.query('SELECT id FROM subscribers WHERE username=$1', [it.name]);
+          if (ex.rows[0]) { if (skipExisting) { summary.skipped++; continue; } }
+          const pkg = byName.get(String(it.profile || ''));
+          const seq = await pool.query("SELECT nextval('subscriber_client_code_seq')::int AS n");
+          const n = Number(seq.rows[0]?.n || Date.now() % 100000);
+          const clientCode = `IZN-MT-${String(n).padStart(5, '0')}`;
+          const status = it.disabled ? 'SUSPENDED' : 'ACTIVE';
+          const uname = String(it.name).slice(0, 64);
+          const ins = await pool.query(`INSERT INTO subscribers(
+              client_code, full_name, subscriber_type, connection_type, username, password, phone, email, nid_number,
+              package_name, bandwidth_mbps, monthly_bill, status, address, ip_address, mac_address,
+              provisioning_mode, router_id
+            ) VALUES($1,$2,'HOME','PPPOE',$3,$4,NULL,NULL,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id, username, client_code`,
+            [clientCode, uname, uname, it.password || null, pkg?.name || it.profile || null, pkg?.download_mbps || null, Number(pkg?.price || 0), status,
+             it.comment || `Imported from MikroTik ${row.name}`, it.remote_address || null, it.caller_id || null,
+             provisionRouterMode === 'RADIUS' ? 'RADIUS' : 'ROUTER', provisionRouterMode === 'RADIUS' ? null : row.id]);
+          summary.imported++;
+        } catch (e: any) { summary.failed++; summary.errors.push({ name: it.name, error: e.message }); }
+      }
+      return res.json({ ok: true, type: 'ppp-secrets', ...summary, note: 'Imported subscribers are created in IzanDesk (client_code auto-generated). RADIUS sync/provisioning is not auto-run for imported rows; review and provision as needed.' });
+    }
+
+    if (type === 'hotspot-users' || type === 'hotspot_users') {
+      const items = await mikrotikListHotspotUsers(row);
+      for (const it of items) {
+        if (selectedSet && !selectedSet.has(it.name)) continue;
+        try {
+          const ex = await pool.query('SELECT id FROM subscribers WHERE username=$1', [it.name]);
+          if (ex.rows[0]) { if (skipExisting) { summary.skipped++; continue; } }
+          const seq = await pool.query("SELECT nextval('subscriber_client_code_seq')::int AS n");
+          const n = Number(seq.rows[0]?.n || Date.now() % 100000);
+          const clientCode = `IZN-HS-${String(n).padStart(5, '0')}`;
+          const status = it.disabled ? 'SUSPENDED' : 'ACTIVE';
+          const uname = String(it.name).slice(0, 64);
+          await pool.query(`INSERT INTO subscribers(
+              client_code, full_name, subscriber_type, connection_type, username, password, phone, email, nid_number,
+              package_name, bandwidth_mbps, monthly_bill, status, address, mac_address,
+              provisioning_mode, router_id
+            ) VALUES($1,$2,'HOTSPOT','HOTSPOT',$3,$4,NULL,NULL,NULL,$5,NULL,0,$6,$7,$8,$9,$10)`,
+            [clientCode, uname, uname, it.password || null, it.profile || null, status,
+             it.comment || `Imported Hotspot user from MikroTik ${row.name}`, it.mac_address || null,
+             provisionRouterMode === 'RADIUS' ? 'RADIUS' : 'ROUTER', provisionRouterMode === 'RADIUS' ? null : row.id]);
+          summary.imported++;
+        } catch (e: any) { summary.failed++; summary.errors.push({ name: it.name, error: e.message }); }
+      }
+      return res.json({ ok: true, type: 'hotspot-users', ...summary, note: 'Hotspot users imported as subscribers (HOTSPOT). Voucher-based hotspot flows remain separate in Hotspot module.' });
+    }
+
+    return res.status(400).json({ message: 'type must be ppp-secrets, ppp-profiles, hotspot-users, or hotspot-profiles' });
+  } catch (e: any) {
+    return res.status(502).json({ ok: false, message: `Import failed: ${e.message || e}`, ...summary });
+  }
+}));
+
 // Live sessions / throughput
 router.get('/sessions', asyncHandler(async (req, res) => {
   const subs = await pool.query(`SELECT s.id, s.username, s.full_name, s.client_code, s.status, s.connection_type, s.ip_address, s.mac_address, s.provisioning_mode, s.router_id
@@ -271,6 +446,9 @@ router.get('/sessions', asyncHandler(async (req, res) => {
     LEFT JOIN subscribers s ON s.id=ss.subscriber_id LEFT JOIN network_routers r ON r.id=ss.router_id
     ORDER BY ss.status DESC, ss.updated_at DESC LIMIT 200`)).rows;
   if (q) rows = rows.filter((x:any)=>[x.username,x.full_name,x.client_code,x.ip_address,x.router_name].some(v=>String(v||'').toLowerCase().includes(q)));
+  rows = rows.map((x:any) => ({ ...x, uptime: formatUptimeSec(Number(x.uptime_sec || 0)) }));
+  // Best-effort automatic ONU↔subscriber linking (name/client_code + MAC/FDB correlation)
+  try { await autoLinkOnusBulk({ allowFdb: true, limit: 30 }); } catch {}
   res.json({ data: rows, summary: { online: rows.filter((r:any)=>r.status==='ONLINE').length, total: rows.length, aggRxBps: rows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: rows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } });
 }));
 
@@ -278,6 +456,14 @@ function parseUptimeSimple(s: string): number {
   let sec = 0; const re = /(\d+)(w|d|h|m|s)/g; let m: RegExpExecArray | null;
   while ((m = re.exec(s))) { const v = Number(m[1]); sec += m[2]==='w'?v*604800:m[2]==='d'?v*86400:m[2]==='h'?v*3600:m[2]==='m'?v*60:v; }
   return sec || 0;
+}
+function formatUptimeSec(sec: number): string {
+  const s = Math.max(0, Number(sec || 0));
+  if (!s) return '-';
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
 // SSE live throughput stream
@@ -290,9 +476,10 @@ router.get('/sessions/stream', asyncHandler(async (req, res) => {
   req.on('close', () => { closed = true; });
   const send = async () => {
     if (closed) return;
-    const rows = (await pool.query(`SELECT ss.username, ss.rx_bps, ss.tx_bps, ss.status, ss.ip_address, r.name as router_name, r.integration_mode, s.full_name, s.provisioning_mode
+    let rows = (await pool.query(`SELECT ss.username, ss.rx_bps, ss.tx_bps, ss.status, ss.ip_address, ss.uptime_sec, r.name as router_name, r.integration_mode, s.full_name, s.provisioning_mode
       FROM subscriber_sessions ss LEFT JOIN network_routers r ON r.id=ss.router_id LEFT JOIN subscribers s ON s.id=ss.subscriber_id
       ORDER BY ss.updated_at DESC LIMIT 50`)).rows;
+    rows = rows.map((x:any) => ({ ...x, uptime: formatUptimeSec(Number(x.uptime_sec || 0)) }));
     const payload = { t: Date.now(), sessions: rows, summary: { online: rows.filter((r:any)=>r.status==='ONLINE').length, aggRxBps: rows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: rows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } };
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };

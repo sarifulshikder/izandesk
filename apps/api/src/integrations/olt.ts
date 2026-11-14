@@ -178,6 +178,80 @@ function parseHexMac(val: string): string | null {
   return null;
 }
 
+function normalizeMac(s: string): string | null {
+  const m = String(s || '').toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (m.length !== 12) return null;
+  return m.match(/.{2}/g)!.join(':');
+}
+
+function macToOidDecimal(mac: string): string | null {
+  const n = normalizeMac(mac);
+  if (!n) return null;
+  return n.split(':').map(x => parseInt(x, 16)).join('.');
+}
+
+async function findOnuByFdbMac(host: string, community: string, clientMac: string): Promise<{ ifIndex?: number; ifName?: string } | null> {
+  const dec = macToOidDecimal(clientMac);
+  if (!dec) return null;
+  let port: number | null = null;
+
+  // 1) Targeted Q-BRIDGE-MIB lookups for common VLANs (fast): dot1qTpFdbPort.<vlan>[.6].<macDec>
+  for (const vlan of [1, 100, 200, 400, 1000, 2000]) {
+    for (const mid of ['', '.6']) {
+      try {
+        const oid = `.1.3.6.1.2.1.17.7.1.2.2.1.2.${vlan}${mid}.${dec}`;
+        const vals = await snmpGet(host, community, [oid], 3);
+        const v = vals[oid] || Object.values(vals)[0] || '';
+        if (/No Such/i.test(String(v))) continue;
+        const m = String(v).match(/(\d+)/);
+        if (m) { port = Number(m[1]); break; }
+      } catch {}
+    }
+    if (port != null) break;
+  }
+
+  // 2) Targeted BRIDGE-MIB lookup: dot1dTpFdbPort.<macDec>
+  if (port == null) {
+    try {
+      const oid = `.1.3.6.1.2.1.17.4.3.1.2.${dec}`;
+      const vals = await snmpGet(host, community, [oid], 3);
+      const v = vals[oid] || Object.values(vals)[0] || '';
+      if (!/No Such/i.test(String(v))) {
+        const m = String(v).match(/(\d+)/);
+        if (m) port = Number(m[1]);
+      }
+    } catch {}
+  }
+
+  // 3) Fallback: bounded walk search (slower)
+  if (port == null) {
+    try {
+      const lines = await snmpWalk(host, community, `.1.3.6.1.2.1.17.7.1.2.2.1.2`, 8);
+      const re = new RegExp('^\\.1\\.3\\.6\\.1\\.2\\.1\\.17\\.7\\.1\\.2\\.2\\.1\\.2\\.\\d+\\.(?:6\\.)?' + dec.replace(/\./g,'\\.') + '\\s+(\\d+)$');
+      for (const line of lines) { const m = line.match(re); if (m) { port = Number(m[1]); break; } }
+    } catch {}
+  }
+
+  if (port == null) return null;
+  try {
+    const vals = await snmpGet(host, community, [`.1.3.6.1.2.1.31.1.1.1.1.${port}`], 4);
+    const ifName = vals[`.1.3.6.1.2.1.31.1.1.1.1.${port}`] || Object.values(vals)[0] || '';
+    return { ifIndex: port, ifName: String(ifName).replace(/^"|"$/g,'').trim() };
+  } catch {
+    return { ifIndex: port };
+  }
+}
+
+export async function oltFindOnuByClientMac(olt: OltRow, clientMac: string) {
+  const host = String(olt.host || '').trim();
+  const community = String(olt.snmp_community || 'public');
+  const hit = await findOnuByFdbMac(host, community, clientMac);
+  if (!hit) return { ok: false, mode: 'snmp', error: 'MAC not found in FDB' };
+  const ifName = String(hit.ifName || '');
+  const ep = parseVsolEponOnu(ifName);
+  return { ok: true, mode: 'snmp', ifIndex: hit.ifIndex, ifName, pon_port: ep?.pon || null, onu_id: ep?.onuId || null, client_mac: normalizeMac(clientMac) };
+}
+
 async function bdcomMacMap(host: string, community: string): Promise<Map<number, string>> {
   const map = new Map<number, string>();
   try {

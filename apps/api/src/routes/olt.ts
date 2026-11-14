@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { oltTest, oltDiscoverOnus, oltRefreshTelemetry } from '../integrations/olt';
+import { autoLinkOnusBulk } from '../integrations/onu-autolink';
 
 const router: Router = Router();
 
@@ -131,7 +132,17 @@ router.post('/olts/:id/discover', asyncHandler(async (req, res) => {
     discovered.push({ ...r.rows[0], optical_status: opticalStatus(r.rows[0].rx_power_dbm != null ? Number(r.rows[0].rx_power_dbm) : null) });
   }
   if (result.ok) await pool.query('UPDATE olts SET status=\'ONLINE\', last_seen_at=now(), updated_at=now() WHERE id=$1',[olt.id]);
-  res.json({ ok: !!result.ok, mode: result.mode, discovered: discovered.length, onus: discovered, note: result.note || result.error || (result.mode === 'snmp' ? 'Discovered via SNMP (best-effort OID mapping).' : 'SNMP discovery unavailable; simulated ONUs generated. Provide SNMP access/tools and vendor OID mapping for real discovery.') });
+  let autoLinked: any = null;
+  try { autoLinked = await autoLinkOnusBulk({ allowFdb: true, limit: 300 }); } catch {}
+  res.json({ ok: !!result.ok, mode: result.mode, discovered: discovered.length, onus: discovered, auto_linked: autoLinked?.linked?.length || 0, note: result.note || result.error || (result.mode === 'snmp' ? 'Discovered via SNMP (best-effort OID mapping).' : 'SNMP discovery unavailable; simulated ONUs generated. Provide SNMP access/tools and vendor OID mapping for real discovery.') });
+}));
+
+// Bulk auto-link discovered ONUs to subscribers (name/client_code + MAC/FDB correlation)
+router.post('/auto-link', asyncHandler(async (req, res) => {
+  const allowFdb = req.body?.allowFdb !== false;
+  const limit = Math.max(1, Math.min(Number(req.body?.limit || 500), 2000));
+  const result = await autoLinkOnusBulk({ allowFdb, limit });
+  res.json({ ok: true, ...result });
 }));
 
 // Authorize ONU (1-click)
