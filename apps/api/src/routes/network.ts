@@ -41,6 +41,22 @@ router.get('/routers', asyncHandler(async (req, res) => {
   res.json({ data: rows });
 }));
 
+router.get('/routers/:id', asyncHandler(async (req, res) => {
+  const r = await pool.query('SELECT * FROM network_routers WHERE id=$1', [req.params.id]);
+  const row = r.rows[0];
+  if (!row) return res.status(404).json({ message: 'Router not found' });
+  const [sess, subs] = await Promise.all([
+    pool.query(`SELECT
+        COUNT(*)::int AS total_sessions,
+        COUNT(*) FILTER (WHERE status='ONLINE')::int AS online_sessions,
+        COALESCE(SUM(COALESCE(rx_bps,0)),0)::bigint AS agg_rx_bps,
+        COALESCE(SUM(COALESCE(tx_bps,0)),0)::bigint AS agg_tx_bps
+      FROM subscriber_sessions WHERE router_id=$1`, [req.params.id]),
+    pool.query(`SELECT COUNT(*)::int AS assigned_subscribers FROM subscribers WHERE router_id=$1`, [req.params.id]).catch(()=>({ rows:[{ assigned_subscribers: 0 }] } as any)),
+  ]);
+  res.json({ ...row, stats: { ...(sess.rows[0] || {}), ...(subs.rows[0] || {}) } });
+}));
+
 router.post('/routers', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const mode = String(b.integration_mode || 'API').toUpperCase();

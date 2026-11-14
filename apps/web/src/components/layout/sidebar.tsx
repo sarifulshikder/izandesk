@@ -65,6 +65,8 @@ function isItemActive(pathname: string, searchParams: URLSearchParams | null, hr
   if (href === '/resellers' && pathname === '/resellers') return true;
   if (href === '/olts' && pathname === '/olts') return true;
   if (href === '/olts') return false;
+  if (href === '/routers' && pathname === '/routers') return true;
+  if (href === '/routers') return false;
   return pathname === href || (href !== '/' && pathname.startsWith(href + '/'));
 }
 
@@ -74,8 +76,9 @@ export function Sidebar() {
   const { token, activeRole, user, isMobileMenuOpen, setMobileMenuOpen } = useAuth();
   const [resellers, setResellers] = useState<any[]>([]);
   const [olts, setOlts] = useState<any[]>([]);
+  const [routers, setRouters] = useState<any[]>([]);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Resellers: true, Network: true, Billing: true, Support: true, 'Finance & Ops': true, Plugins: true, System: false });
-  const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true, 'All Resellers': true, 'FTTH & OLTs': true });
+  const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true, 'All Resellers': true, 'FTTH & OLTs': true, 'Network & Routers': true });
 
   const loadResellers = useCallback(async () => {
     if (!token) return;
@@ -97,11 +100,22 @@ export function Sidebar() {
     }
   }, [token]);
 
-  useEffect(() => { loadResellers(); loadOlts(); }, [loadResellers, loadOlts, pathname]);
+  const loadRouters = useCallback(async () => {
+    if (!token) return;
+    try {
+      const r = await apiFetch<any>('/api/network/routers', {}, token);
+      setRouters(r.data || []);
+    } catch {
+      setRouters([]);
+    }
+  }, [token]);
+
+  useEffect(() => { loadResellers(); loadOlts(); loadRouters(); }, [loadResellers, loadOlts, loadRouters, pathname]);
 
   useEffect(() => {
     if (pathname.startsWith('/subscribers')) setOpenGroups(s => ({ ...s, Subscribers: true }));
     if (pathname.startsWith('/resellers')) { setOpenGroups(s => ({ ...s, Resellers: true })); setOpenSub(s => ({ ...s, 'All Resellers': true })); }
+    if (pathname.startsWith('/routers')) { setOpenGroups(s => ({ ...s, Network: true })); setOpenSub(s => ({ ...s, 'Network & Routers': true })); }
     if (pathname.startsWith('/olts')) { setOpenGroups(s => ({ ...s, Network: true })); setOpenSub(s => ({ ...s, 'FTTH & OLTs': true })); }
     if (pathname.startsWith('/plugins')) setOpenGroups(s => ({ ...s, Plugins: true }));
     if (pathname.startsWith('/plugins/payment-gateways')) setOpenSub(s => ({ ...s, 'Payment Gateways': true }));
@@ -155,7 +169,14 @@ export function Sidebar() {
       label: 'Network',
       items: [
         { name: 'Bandwidth & QoS', href: '/bandwidth', icon: Radio },
-        { name: 'Network & Routers', href: '/routers', icon: Network, badge: 'NAS' },
+        {
+          name: 'Network & Routers',
+          icon: Network,
+          children: [
+            { name: 'Overview', href: '/routers' },
+            ...routers.map((r: any) => ({ name: r.name || r.host || 'Router', href: `/routers/${r.id}` })),
+          ],
+        },
         { name: 'WireGuard Overlay', href: '/wireguard', icon: Shield, badge: 'WG' },
         { name: 'RADIUS & AAA', href: '/radius', icon: ShieldCheck },
         {
