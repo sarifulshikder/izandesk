@@ -4,14 +4,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { Package, Plus, RefreshCw, Pencil, Trash2, Play, Search, Radio, CheckCircle2, X, Wifi, ExternalLink, Server, Signal, Activity } from 'lucide-react';
+import { Package, Plus, RefreshCw, Pencil, Trash2, Play, Search, Radio, X, Wifi, ExternalLink, Server, Activity } from 'lucide-react';
 
-function opticalTone(status: string) {
-  if (status === 'CRITICAL') return 'text-red-400 bg-red-500/10 border-red-500/20';
-  if (status === 'WARNING') return 'text-amber-400 bg-amber-500/10 border-amber-500/20';
-  if (status === 'NORMAL') return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
-  return 'text-muted-foreground bg-muted border-border';
-}
+
 
 function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
@@ -27,7 +22,6 @@ export default function OltsPage() {
   const { token } = useAuth();
   const [olts, setOlts] = useState<any[]>([]);
   const [onus, setOnus] = useState<any[]>([]);
-  const [subscribers, setSubscribers] = useState<any[]>([]);
   const [wgPeers, setWgPeers] = useState<any[]>([]);
   const [selectedOlt, setSelectedOlt] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -35,21 +29,18 @@ export default function OltsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [modal, setModal] = useState<any>(null);
   const [form, setForm] = useState<any>({});
-  const [authModal, setAuthModal] = useState<any>(null);
-  const [authSub, setAuthSub] = useState('');
 
   const load = useCallback(async () => {
     if (!token) return;
     setLoading(true); setError(null);
     try {
       const onuUrl = selectedOlt ? `/api/olt/onus?olt_id=${encodeURIComponent(selectedOlt)}` : '/api/olt/onus';
-      const [o, n, s, w] = await Promise.all([
+      const [o, n, w] = await Promise.all([
         apiFetch<{data:any[]}>('/api/olt/olts', {}, token),
         apiFetch<{data:any[]}>(onuUrl, {}, token),
-        apiFetch<{data:any[]}>('/api/subscribers?limit=300', {}, token).catch(()=>({data:[]})),
         apiFetch<any>('/api/wireguard/peers', {}, token).catch(()=>({data:[]})),
       ]);
-      setOlts(o.data || []); setOnus(n.data || []); setSubscribers(s.data || []); setWgPeers(w.data || []);
+      setOlts(o.data || []); setOnus(n.data || []); setWgPeers(w.data || []);
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
   }, [token, selectedOlt]);
 
@@ -69,7 +60,6 @@ export default function OltsPage() {
   const discover = async (id: string) => { if (!token) return; try { const r = await apiFetch<any>(`/api/olt/olts/${id}/discover`, { method: 'POST' }, token); setMsg(`Discovered ${r.discovered} ONU(s).`); await load(); } catch(e:any){ setError(e.message);} };
   const refreshTelemetry = async () => { if (!token) return; try { const r = await apiFetch<any>('/api/olt/onus/refresh-telemetry', { method: 'POST', body: JSON.stringify({ olt_id: selectedOlt || undefined }) }, token); setMsg(`Refreshed optical telemetry for ${r.updated} ONU(s).`); setOnus(r.data || []); } catch(e:any){ setError(e.message);} };
   const autoLink = async () => { if (!token) return; try { const r = await apiFetch<any>('/api/olt/auto-link', { method: 'POST', body: JSON.stringify({ allowFdb: true, limit: 500 }) }, token); setMsg(`Auto-link checked ${r.checked || 0} subscriber(s), linked ${r.linked?.length || 0} ONU(s).`); await load(); } catch(e:any){ setError(e.message);} };
-  const authorize = async () => { if (!token || !authModal) return; try { const r = await apiFetch<any>(`/api/olt/onus/${authModal.id}/authorize`, { method: 'POST', body: JSON.stringify({ subscriber_id: authSub || null, name: authModal.name || authModal.serial_number }) }, token); setMsg(r.message); setAuthModal(null); setAuthSub(''); await load(); } catch(e:any){ setError(e.message);} };
 
   const discovered = onus.filter(o => o.status === 'DISCOVERED');
 
@@ -159,33 +149,13 @@ export default function OltsPage() {
             </div>
           )}
 
-          <div className="rounded-2xl border border-border bg-card overflow-hidden">
-            <div className="px-4 py-3 border-b border-border font-semibold flex items-center gap-2"><Signal className="w-4 h-4 text-amber-400" />Discovered / Pending ONUs <span className="text-xs text-muted-foreground font-normal">({discovered.length})</span></div>
-            <div className="p-4 space-y-3 max-h-[320px] overflow-auto">
-              {discovered.map(o => (
-                <div key={o.id} className="p-3 rounded-xl border border-amber-500/20 bg-amber-500/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="text-sm">
-                    <div className="font-semibold font-mono">{o.serial_number || 'N/A'} <span className="text-muted-foreground font-sans font-normal">• {o.olt_name} • PON {o.pon_port}</span></div>
-                    <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-1">
-                      <span>Rx <b className="text-foreground">{o.rx_power_dbm ?? '-'} dBm</b></span>
-                      <span>Tx <b className="text-foreground">{o.tx_power_dbm ?? '-'} dBm</b></span>
-                      <span>Dist <b className="text-foreground">{o.distance_m != null ? `${o.distance_m} m` : '-'}</b></span>
-                      <span>Temp <b className="text-foreground">{o.temperature_c != null ? `${Number(o.temperature_c).toFixed(1)} °C` : '-'}</b></span>
-                      <span className={`px-2 py-0.5 rounded-full border ${opticalTone(o.optical_status)}`}>{o.optical_status}</span>
-                    </div>
-                  </div>
-                  <button onClick={()=>{setAuthModal(o); setAuthSub('');}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><CheckCircle2 className="w-4 h-4" />Authorize</button>
-                </div>
-              ))}
-              {!discovered.length && <div className="text-sm text-muted-foreground py-4 text-center">{selected ? 'No discovered ONUs for this OLT.' : 'No discovered ONUs. Select an OLT and click “Discover ONUs”.'}</div>}
-            </div>
-          </div>
-
           <div className="rounded-2xl border border-dashed border-border bg-card/40 p-5 text-sm text-muted-foreground flex items-start gap-3">
             <Activity className="w-4 h-4 mt-0.5 text-primary" />
             <div>
-              <div className="font-medium text-foreground">ONU & optical telemetry details</div>
-              <div className="mt-0.5">Open a specific OLT’s dedicated page to view and search its full ONU list, optical levels, distance, temperature/voltage/bias, and status.</div>
+              <div className="font-medium text-foreground">OLT details & ONU management</div>
+              <div className="mt-0.5">
+                Open a specific OLT’s dedicated page to review <b className="text-foreground">{selected ? discovered.length : discovered.length}</b> discovered/pending ONU(s), authorize devices, and view full ONU telemetry (Rx/Tx, distance, temperature/voltage/bias, status).
+              </div>
               {selectedOlt && <Link href={`/olts/${selectedOlt}`} className="inline-flex items-center gap-1 text-primary hover:underline mt-2">Open selected OLT page <ExternalLink className="w-3.5 h-3.5" /></Link>}
             </div>
           </div>
@@ -212,22 +182,7 @@ export default function OltsPage() {
         </div></div>
       )}
 
-      {authModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-lg bg-card border border-border rounded-2xl shadow-2xl my-8">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-border"><h2 className="font-bold">Authorize ONU</h2><button onClick={()=>setAuthModal(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4" /></button></div>
-          <div className="p-5 space-y-3 text-sm">
-            <div className="p-3 rounded-xl bg-muted/40 border border-border"><div className="font-mono font-semibold">{authModal.serial_number}</div><div className="text-xs text-muted-foreground">{authModal.olt_name} • PON {authModal.pon_port}</div></div>
-            <label className="block"><div className="text-xs text-muted-foreground mb-1">Link Subscriber (optional)</div>
-              <select className="w-full p-2.5 rounded-xl border border-border bg-card" value={authSub} onChange={e=>setAuthSub(e.target.value)}>
-                <option value="">No subscriber link</option>
-                {subscribers.map((s:any)=>(<option key={s.id} value={s.id}>{s.client_code || ''} — {s.full_name} ({s.username||'no username'})</option>))}
-              </select>
-            </label>
-            <p className="text-xs text-muted-foreground">Authorizes the ONU on the OLT and optionally binds it to a subscriber record.</p>
-          </div>
-          <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setAuthModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={authorize} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold inline-flex items-center gap-2"><CheckCircle2 className="w-4 h-4" />Authorize</button></div>
-        </div></div>
-      )}
+
 
       <style jsx>{`.inp{width:100%;padding:.5rem .75rem;border-radius:.75rem;background:var(--card);color:var(--foreground);border:1px solid var(--border);font-size:.875rem}`}</style>
     </div>
