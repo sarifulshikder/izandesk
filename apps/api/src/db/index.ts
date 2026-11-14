@@ -156,7 +156,8 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS area_name TEXT,
       ADD COLUMN IF NOT EXISTS ward_no TEXT,
       ADD COLUMN IF NOT EXISTS road_no TEXT,
-      ADD COLUMN IF NOT EXISTS house_no TEXT;
+      ADD COLUMN IF NOT EXISTS house_no TEXT,
+      ADD COLUMN IF NOT EXISTS notes TEXT;
   `);
 
   // Phase 3.1: dual-mode provisioning (API/REST direct router vs RADIUS pool)
@@ -385,6 +386,9 @@ export async function initDb() {
       status TEXT NOT NULL DEFAULT 'DISCOVERED',
       rx_power_dbm NUMERIC(6,2),
       tx_power_dbm NUMERIC(6,2),
+      temperature_c NUMERIC(6,2),
+      voltage_v NUMERIC(6,2),
+      tx_bias_ma NUMERIC(8,2),
       distance_m INT,
       last_down_cause TEXT,
       authorized_at TIMESTAMPTZ,
@@ -429,6 +433,9 @@ export async function initDb() {
   // Phase 3.3: ONU MAC/identity enrichment (VSOL/V1600D and other OLTs)
   await pool.query(`
     ALTER TABLE onus ADD COLUMN IF NOT EXISTS mac_address TEXT;
+    ALTER TABLE onus ADD COLUMN IF NOT EXISTS temperature_c NUMERIC(6,2);
+    ALTER TABLE onus ADD COLUMN IF NOT EXISTS voltage_v NUMERIC(6,2);
+    ALTER TABLE onus ADD COLUMN IF NOT EXISTS tx_bias_ma NUMERIC(8,2);
   `);
 
   // Phase 3.3: bind OLT to WireGuard peer for tunnel-aware management/routing
@@ -666,6 +673,11 @@ export async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     ALTER TABLE payment_webhook_events ADD COLUMN IF NOT EXISTS dedupe_key TEXT;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS collector_name TEXT;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'APPROVED';
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS approval_note TEXT;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS payment_sms_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -733,6 +745,10 @@ export async function initDb() {
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS fup_exceeded BOOLEAN NOT NULL DEFAULT false`).catch(()=>{});
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS fup_applied_at TIMESTAMPTZ`).catch(()=>{});
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS fup_exempt BOOLEAN NOT NULL DEFAULT false`).catch(()=>{});
+  await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS price_override NUMERIC(12,2)`).catch(()=>{});
+  await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS custom_package_note TEXT`).catch(()=>{});
+  await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS extended_expiry BOOLEAN NOT NULL DEFAULT false`).catch(()=>{});
+  await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS branch_name TEXT`).catch(()=>{});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fup_enforcement_logs (
@@ -748,6 +764,25 @@ export async function initDb() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fup_logs_sub ON fup_enforcement_logs(subscriber_id, created_at DESC)`).catch(()=>{});
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reseller_share_entries (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      reseller_id UUID NOT NULL REFERENCES resellers(id) ON DELETE CASCADE,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      payment_ref TEXT,
+      wallet_transaction_id UUID,
+      retail_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      partner_share NUMERIC(12,2) NOT NULL DEFAULT 0,
+      isp_share NUMERIC(12,2) NOT NULL DEFAULT 0,
+      margin_percent NUMERIC(8,2) NOT NULL DEFAULT 0,
+      package_name TEXT,
+      period_month DATE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      metadata JSONB DEFAULT '{}'::jsonb
+    );
+  `).catch(()=>{});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_reseller_share_entries_reseller ON reseller_share_entries(reseller_id, created_at DESC)`).catch(()=>{});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS saved_payment_methods (
@@ -1245,6 +1280,152 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_journal_lines_entry ON finance_journal_lines(entry_id);
     CREATE INDEX IF NOT EXISTS idx_journal_lines_account ON finance_journal_lines(account_id);
   `).catch(e => console.error('[DB] Phase 7+ schema extension error', e.message));
+
+  // Phase 8: Subscriber Enhancement - Leads, Installation Orders, Equipment, Communication
+  await pool.query(`
+    -- Lead/Prospect Pipeline
+    CREATE TABLE IF NOT EXISTS leads (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      lead_no TEXT UNIQUE,
+      full_name TEXT NOT NULL,
+      phone TEXT,
+      email TEXT,
+      address TEXT,
+      latitude DOUBLE PRECISION,
+      longitude DOUBLE PRECISION,
+      area_id UUID REFERENCES areas(id) ON DELETE SET NULL,
+      zone_id UUID REFERENCES zones(id) ON DELETE SET NULL,
+      interested_package TEXT,
+      source TEXT, -- WALK_IN, CALL, WEBSITE, REFERRAL, SOCIAL_MEDIA, CAMPAIGN
+      status TEXT NOT NULL DEFAULT 'NEW', -- NEW, CONTACTED, QUALIFIED, PROPOSAL, WON, LOST
+      priority TEXT NOT NULL DEFAULT 'MEDIUM', -- LOW, MEDIUM, HIGH
+      assigned_to TEXT,
+      notes TEXT,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      converted_subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS lead_activities (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      activity_type TEXT NOT NULL, -- CALL, EMAIL, MEETING, WHATSAPP, SITE_VISIT, NOTE
+      subject TEXT,
+      description TEXT,
+      outcome TEXT, -- POSITIVE, NEUTRAL, NEGATIVE, SCHEDULED
+      scheduled_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Installation/Service Orders
+    CREATE TABLE IF NOT EXISTS installation_orders (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_no TEXT UNIQUE,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      lead_id UUID REFERENCES leads(id) ON DELETE SET NULL,
+      order_type TEXT NOT NULL DEFAULT 'INSTALLATION', -- INSTALLATION, REPAIR, RELOCATION, UPGRADE, DISCONNECTION, EQUIPMENT_SWAP
+      status TEXT NOT NULL DEFAULT 'PENDING', -- PENDING, SCHEDULED, ASSIGNED, IN_PROGRESS, COMPLETED, CANCELLED, ON_HOLD
+      priority TEXT NOT NULL DEFAULT 'NORMAL', -- LOW, NORMAL, HIGH, URGENT
+      scheduled_date DATE,
+      scheduled_time_start TIME,
+      scheduled_time_end TIME,
+      assigned_technician_id UUID REFERENCES hr_employees(id) ON DELETE SET NULL,
+      assigned_technician_name TEXT,
+      site_address TEXT,
+      site_latitude DOUBLE PRECISION,
+      site_longitude DOUBLE PRECISION,
+      site_contact_name TEXT,
+      site_contact_phone TEXT,
+      required_equipment JSONB DEFAULT '[]'::jsonb,
+      checklist JSONB DEFAULT '[]'::jsonb,
+      completion_notes TEXT,
+      completion_photos JSONB DEFAULT '[]'::jsonb,
+      actual_start_at TIMESTAMPTZ,
+      actual_end_at TIMESTAMPTZ,
+      sla_due_at TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS installation_checklist_items (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id UUID NOT NULL REFERENCES installation_orders(id) ON DELETE CASCADE,
+      item_text TEXT NOT NULL,
+      is_required BOOLEAN NOT NULL DEFAULT true,
+      is_completed BOOLEAN NOT NULL DEFAULT false,
+      completed_at TIMESTAMPTZ,
+      completed_by TEXT,
+      notes TEXT,
+      sort_order INT NOT NULL DEFAULT 0
+    );
+
+    -- Equipment/CPE Assignment
+    CREATE TABLE IF NOT EXISTS subscriber_equipment (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subscriber_id UUID NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+      equipment_type TEXT NOT NULL, -- ONU, ROUTER, SWITCH, AP, CPE, MODEM, SPLITTER, OTHER
+      serial_number TEXT NOT NULL,
+      mac_address TEXT,
+      inventory_serial_id UUID REFERENCES inventory_serials(id) ON DELETE SET NULL,
+      onu_id UUID REFERENCES onus(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'ASSIGNED', -- ASSIGNED, INSTALLED, FAULTY, RMA, RETURNED, RETIRED
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      installed_at TIMESTAMPTZ,
+      installed_by TEXT,
+      location_details TEXT, -- e.g., "Living room, wall mount"
+      firmware_version TEXT,
+      config_backup JSONB,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Subscriber Communication Log
+    CREATE TABLE IF NOT EXISTS subscriber_communications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subscriber_id UUID NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+      direction TEXT NOT NULL, -- INBOUND, OUTBOUND
+      channel TEXT NOT NULL, -- CALL, EMAIL, SMS, WHATSAPP, TELEGRAM, IN_PERSON, PORTAL, NOTE
+      subject TEXT,
+      body TEXT,
+      contact_person TEXT,
+      contact_phone TEXT,
+      contact_email TEXT,
+      related_type TEXT, -- INVOICE, PAYMENT, TICKET, ORDER, LEAD, COMPLAINT
+      related_id TEXT,
+      status TEXT NOT NULL DEFAULT 'COMPLETED', -- PENDING, SENT, DELIVERED, READ, FAILED, COMPLETED
+      provider_message_id TEXT,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- Indexes
+    CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
+    CREATE INDEX IF NOT EXISTS idx_leads_assigned ON leads(assigned_to);
+    CREATE INDEX IF NOT EXISTS idx_leads_area ON leads(area_id);
+    CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_lead_activities_lead ON lead_activities(lead_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_installation_orders_subscriber ON installation_orders(subscriber_id);
+    CREATE INDEX IF NOT EXISTS idx_installation_orders_technician ON installation_orders(assigned_technician_id);
+    CREATE INDEX IF NOT EXISTS idx_installation_orders_status ON installation_orders(status);
+    CREATE INDEX IF NOT EXISTS idx_installation_orders_scheduled ON installation_orders(scheduled_date);
+    CREATE INDEX IF NOT EXISTS idx_installation_checklist_order ON installation_checklist_items(order_id, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_subscriber_equipment_sub ON subscriber_equipment(subscriber_id);
+    CREATE INDEX IF NOT EXISTS idx_subscriber_equipment_serial ON subscriber_equipment(serial_number);
+    CREATE INDEX IF NOT EXISTS idx_subscriber_comms_sub ON subscriber_communications(subscriber_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_subscriber_comms_channel ON subscriber_communications(channel);
+  `).catch(e => console.error('[DB] Phase 8 subscriber enhancement error', e.message));
+
+  // Stable client-code sequence (UUID primary keys have no serial sequence).
+  // Seed it from the highest numeric suffix already present so new codes never collide.
+  await pool.query('CREATE SEQUENCE IF NOT EXISTS subscriber_client_code_seq').catch(() => {});
+  await pool.query(`SELECT setval('subscriber_client_code_seq', GREATEST(COALESCE((SELECT MAX((substring(client_code from '-([0-9]+)$'))::int) FROM subscribers), 0), 1), true)`).catch(() => {});
 }
 
 export { pool };

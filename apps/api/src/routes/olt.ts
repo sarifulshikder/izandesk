@@ -110,25 +110,31 @@ router.post('/olts/:id/discover', asyncHandler(async (req, res) => {
   for (const n of (result.onus || [])) {
     const rx = n.rx_power_dbm != null ? Number(n.rx_power_dbm) : null;
     const tx = n.tx_power_dbm != null ? Number(n.tx_power_dbm) : null;
+    const temp = n.temperature_c != null ? Number(n.temperature_c) : null;
+    const volt = n.voltage_v != null ? Number(n.voltage_v) : null;
+    const bias = n.tx_bias_ma != null ? Number(n.tx_bias_ma) : null;
     const mac = n.mac_address ? String(n.mac_address).toLowerCase() : null;
     const dist = n.distance_m != null ? Math.round(Number(n.distance_m)) : null;
     const lastDown = n.last_down_cause ? String(n.last_down_cause) : null;
     const status = ['ONLINE','OFFLINE','DISCOVERED','AUTHORIZED','LOS','DYING_GASP'].includes(String(n.status||'').toUpperCase()) ? String(n.status).toUpperCase() : 'DISCOVERED';
-    const r = await pool.query(`INSERT INTO onus(olt_id,pon_port,onu_id,serial_number,name,status,rx_power_dbm,tx_power_dbm,mac_address,distance_m,last_down_cause,last_seen_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
+    const r = await pool.query(`INSERT INTO onus(olt_id,pon_port,onu_id,serial_number,name,status,rx_power_dbm,tx_power_dbm,temperature_c,voltage_v,tx_bias_ma,mac_address,distance_m,last_down_cause,last_seen_at)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now())
       ON CONFLICT (olt_id, pon_port, serial_number) DO UPDATE SET
         name=COALESCE(NULLIF($5,''), onus.name),
         onu_id=COALESCE($3, onus.onu_id),
         rx_power_dbm=COALESCE($7,onus.rx_power_dbm),
         tx_power_dbm=COALESCE($8,onus.tx_power_dbm),
-        mac_address=COALESCE($9,onus.mac_address),
-        distance_m=COALESCE($10,onus.distance_m),
-        last_down_cause=COALESCE($11,onus.last_down_cause),
+        temperature_c=COALESCE($9,onus.temperature_c),
+        voltage_v=COALESCE($10,onus.voltage_v),
+        tx_bias_ma=COALESCE($11,onus.tx_bias_ma),
+        mac_address=COALESCE($12,onus.mac_address),
+        distance_m=COALESCE($13,onus.distance_m),
+        last_down_cause=COALESCE($14,onus.last_down_cause),
         last_seen_at=now(),
         status=CASE WHEN onus.status='AUTHORIZED' THEN onus.status ELSE $6 END,
         updated_at=now()
       RETURNING *`,
-      [olt.id, n.pon_port || '0/1/1', n.onu_id || null, n.serial_number, n.name || `ONU-${n.serial_number}`, status, rx, tx, mac, dist, lastDown]);
+      [olt.id, n.pon_port || '0/1/1', n.onu_id || null, n.serial_number, n.name || `ONU-${n.serial_number}`, status, rx, tx, temp, volt, bias, mac, dist, lastDown]);
     discovered.push({ ...r.rows[0], optical_status: opticalStatus(r.rows[0].rx_power_dbm != null ? Number(r.rows[0].rx_power_dbm) : null) });
   }
   if (result.ok) await pool.query('UPDATE olts SET status=\'ONLINE\', last_seen_at=now(), updated_at=now() WHERE id=$1',[olt.id]);
@@ -170,11 +176,14 @@ router.post('/onus/refresh-telemetry', asyncHandler(async (req, res) => {
     const t: any = (resTel.onus || [])[0] || { rx_power_dbm: -(17 + Math.random()*12), tx_power_dbm: +(0.5 + Math.random()*3.5), status: o.status };
     const rx = t.rx_power_dbm == null ? null : (+Number(t.rx_power_dbm).toFixed(2));
     const tx = t.tx_power_dbm == null ? null : (+Number(t.tx_power_dbm).toFixed(2));
+    const temp = t.temperature_c == null ? null : (+Number(t.temperature_c).toFixed(2));
+    const volt = t.voltage_v == null ? null : (+Number(t.voltage_v).toFixed(2));
+    const bias = t.tx_bias_ma == null ? null : (+Number(t.tx_bias_ma).toFixed(2));
     const mac = t.mac_address ? String(t.mac_address).toLowerCase() : null;
     const dist = t.distance_m == null ? null : Math.round(Number(t.distance_m));
     const lastDown = t.last_down_cause ? String(t.last_down_cause) : null;
     const st = (o.status === 'AUTHORIZED') ? 'AUTHORIZED' : (t.status || o.status || 'DISCOVERED');
-    await pool.query('UPDATE onus SET rx_power_dbm=COALESCE($1,rx_power_dbm), tx_power_dbm=COALESCE($2,tx_power_dbm), mac_address=COALESCE($5,mac_address), distance_m=COALESCE($6,distance_m), last_down_cause=COALESCE($7,last_down_cause), status=$4, last_seen_at=now(), updated_at=now() WHERE id=$3', [rx, tx, o.id, st, mac, dist, lastDown]);
+    await pool.query('UPDATE onus SET rx_power_dbm=COALESCE($1,rx_power_dbm), tx_power_dbm=COALESCE($2,tx_power_dbm), mac_address=COALESCE($5,mac_address), distance_m=COALESCE($6,distance_m), last_down_cause=COALESCE($7,last_down_cause), temperature_c=COALESCE($8,temperature_c), voltage_v=COALESCE($9,voltage_v), tx_bias_ma=COALESCE($10,tx_bias_ma), status=$4, last_seen_at=now(), updated_at=now() WHERE id=$3', [rx, tx, o.id, st, mac, dist, lastDown, temp, volt, bias]);
   }
   const r = await pool.query(`SELECT o.*, ol.name as olt_name, ol.vendor as olt_vendor, s.full_name as subscriber_name, s.client_code as subscriber_code
     FROM onus o JOIN olts ol ON ol.id=o.olt_id LEFT JOIN subscribers s ON s.id=o.subscriber_id ${olt_id ? 'WHERE o.olt_id=$1':''} ORDER BY o.updated_at DESC`, params);

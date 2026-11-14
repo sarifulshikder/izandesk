@@ -112,30 +112,57 @@ function parseDbm(val: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-async function vsolOpticalMap(host: string, community: string): Promise<Map<string, { rx: number|null, tx: number|null }>> {
-  const map = new Map<string, { rx: number|null, tx: number|null }>();
+function parseNumUnit(val: string): number | null {
+  const m = String(val || '').replace(/^"|"$/g, '').match(/(-?[0-9]+(?:\.[0-9]+)?)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+type VsolDiag = { rx: number|null; tx: number|null; temperature_c: number|null; voltage_v: number|null; tx_bias_ma: number|null };
+
+async function vsolDiagMap(host: string, community: string): Promise<Map<string, VsolDiag>> {
+  const map = new Map<string, VsolDiag>();
   try {
     // VSOL V1600D EPON ONU diag table: ...37950.1.1.5.12.2.1.8.1.<col>.<pon>.<onu>
-    // col 6: TX power "x mW (y dBm)", col 7: RX power "x mW (y dBm)"
-    const txLines = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.2.1.8.1.6', 6);
-    const rxLines = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.2.1.8.1.7', 6);
+    // col3 temp (C), col4 voltage (V), col5 bias (mA), col6 TX dBm, col7 RX dBm
+    const cols = [3,4,5,6,7];
+    const linesByCol = await Promise.all(cols.map(c => snmpWalk(host, community, `.1.3.6.1.4.1.37950.1.1.5.12.2.1.8.1.${c}`, 6).catch(()=>[] as string[])));
     const keyFromOid = (oid: string) => {
       const m = oid.match(/\.1\.3\.6\.1\.4\.1\.37950\.1\.1\.5\.12\.2\.1\.8\.1\.\d+\.(\d+)\.(\d+)/);
       return m ? `EPON0/${m[1]}|${String(Number(m[2]))}` : null;
     };
-    for (const line of txLines) {
-      const m = line.match(/^(\S+)\s+(.*)$/); if (!m) continue;
-      const k = keyFromOid(m[1]); if (!k) continue;
-      const cur = map.get(k) || { rx: null, tx: null };
-      cur.tx = parseDbm(m[2].replace(/^"|"$/g,''));
-      map.set(k, cur);
+    const ensure = (k: string): VsolDiag => {
+      if (!map.has(k)) map.set(k, { rx: null, tx: null, temperature_c: null, voltage_v: null, tx_bias_ma: null });
+      return map.get(k)!;
+    };
+    const [tL, vL, bL, txL, rxL] = linesByCol;
+    for (const line of txL) { const m = line.match(/^(\S+)\s+(.*)$/); if (!m) continue; const k = keyFromOid(m[1]); if (!k) continue; ensure(k).tx = parseDbm(m[2].replace(/^"|"$/g,'')); }
+    for (const line of rxL) { const m = line.match(/^(\S+)\s+(.*)$/); if (!m) continue; const k = keyFromOid(m[1]); if (!k) continue; ensure(k).rx = parseDbm(m[2].replace(/^"|"$/g,'')); }
+    for (const line of tL)  { const m = line.match(/^(\S+)\s+(.*)$/); if (!m) continue; const k = keyFromOid(m[1]); if (!k) continue; ensure(k).temperature_c = parseNumUnit(m[2]); }
+    for (const line of vL)  { const m = line.match(/^(\S+)\s+(.*)$/); if (!m) continue; const k = keyFromOid(m[1]); if (!k) continue; ensure(k).voltage_v = parseNumUnit(m[2]); }
+    for (const line of bL)  { const m = line.match(/^(\S+)\s+(.*)$/); if (!m) continue; const k = keyFromOid(m[1]); if (!k) continue; ensure(k).tx_bias_ma = parseNumUnit(m[2]); }
+  } catch {}
+  return map;
+}
+
+async function bdcomDiagMap(host: string, community: string): Promise<Map<number, { temperature_c: number|null; voltage_v: number|null; tx_bias_ma: number|null }>> {
+  const map = new Map<number, { temperature_c: number|null; voltage_v: number|null; tx_bias_ma: number|null }>();
+  try {
+    // BDCOM P3310C (observed, best-effort): ...3320.101.10.5.1.<col>.<ifIndex>
+    // c3 ~ temperature (milli-°C), c4 ~ TX bias (micro-A/milli-mA scaled) - units inferred
+    const c3 = await snmpWalk(host, community, '.1.3.6.1.4.1.3320.101.10.5.1.3', 6).catch(()=>[] as string[]);
+    const c4 = await snmpWalk(host, community, '.1.3.6.1.4.1.3320.101.10.5.1.4', 6).catch(()=>[] as string[]);
+    const ensure = (idx: number) => { if (!map.has(idx)) map.set(idx, { temperature_c: null, voltage_v: null, tx_bias_ma: null }); return map.get(idx)!; };
+    for (const line of c3) {
+      const m = line.match(/^\.1\.3\.6\.1\.4\.1\.3320\.101\.10\.5\.1\.3\.(\d+)\s+(-?\d+)/); if (!m) continue;
+      const v = Number(m[2]); if (!Number.isFinite(v)) continue;
+      const t = +(v / 1000).toFixed(2); if (t > -40 && t < 125) ensure(Number(m[1])).temperature_c = t;
     }
-    for (const line of rxLines) {
-      const m = line.match(/^(\S+)\s+(.*)$/); if (!m) continue;
-      const k = keyFromOid(m[1]); if (!k) continue;
-      const cur = map.get(k) || { rx: null, tx: null };
-      cur.rx = parseDbm(m[2].replace(/^"|"$/g,''));
-      map.set(k, cur);
+    for (const line of c4) {
+      const m = line.match(/^\.1\.3\.6\.1\.4\.1\.3320\.101\.10\.5\.1\.4\.(\d+)\s+(-?\d+)/); if (!m) continue;
+      const v = Number(m[2]); if (!Number.isFinite(v)) continue;
+      const b = +(v / 1000).toFixed(2); if (b >= 0 && b < 200) ensure(Number(m[1])).tx_bias_ma = b;
     }
   } catch {}
   return map;
@@ -482,18 +509,18 @@ export async function oltDiscoverOnus(olt: OltRow) {
       const isVsol = vendor.includes('VSOL') || modelU.includes('V1600') || String(olt.model||'').toLowerCase().includes('epon-olt');
       const isBdcom = vendor.includes('BDCOM') || modelU.includes('P3310') || modelU.includes('BDCOM');
       if (isVsol) {
-        const [optMap, macMap, distMap] = await Promise.all([vsolOpticalMap(host, community), vsolMacMap(host, community), vsolDistanceMap(host, community)]);
+        const [diagMap, macMap, distMap] = await Promise.all([vsolDiagMap(host, community), vsolMacMap(host, community), vsolDistanceMap(host, community)]);
         for (const o of onus) {
           const k = `${o.pon_port}|${o.onu_id}`;
-          const opt = optMap.get(k);
-          if (opt) { if (opt.rx != null) o.rx_power_dbm = opt.rx; if (opt.tx != null) o.tx_power_dbm = opt.tx; }
+          const d = diagMap.get(k);
+          if (d) { if (d.rx != null) o.rx_power_dbm = d.rx; if (d.tx != null) o.tx_power_dbm = d.tx; if (d.temperature_c != null) (o as any).temperature_c = d.temperature_c; if (d.voltage_v != null) (o as any).voltage_v = d.voltage_v; if (d.tx_bias_ma != null) (o as any).tx_bias_ma = d.tx_bias_ma; }
           const mac = macMap.get(k);
           if (mac) { o.mac_address = mac; }
           const dist = distMap.get(k);
           if (dist != null) (o as any).distance_m = dist;
         }
       } else if (isBdcom) {
-        const [macMap, rxMap, descMap, distMap, txMap, downMap] = await Promise.all([bdcomMacMap(host, community), bdcomOpticalRxMap(host, community), bdcomDescMap(host, community), bdcomDistanceMap(host, community), bdcomTxMap(host, community), bdcomLastDownMap(host, community)]);
+        const [macMap, rxMap, descMap, distMap, txMap, downMap, diagMap] = await Promise.all([bdcomMacMap(host, community), bdcomOpticalRxMap(host, community), bdcomDescMap(host, community), bdcomDistanceMap(host, community), bdcomTxMap(host, community), bdcomLastDownMap(host, community), bdcomDiagMap(host, community)]);
         for (const o of onus) {
           const idx = o.if_index;
           if (idx != null) {
@@ -505,6 +532,8 @@ export async function oltDiscoverOnus(olt: OltRow) {
             if (tx != null) o.tx_power_dbm = tx;
             const dist = distMap.get(Number(idx));
             if (dist != null) (o as any).distance_m = dist;
+            const dg = diagMap.get(Number(idx));
+            if (dg) { if (dg.temperature_c != null) (o as any).temperature_c = dg.temperature_c; if (dg.voltage_v != null) (o as any).voltage_v = dg.voltage_v; if (dg.tx_bias_ma != null) (o as any).tx_bias_ma = dg.tx_bias_ma; }
           }
           const k = `${o.pon_port}|${o.onu_id}`;
           const desc = descMap.get(k);
@@ -514,9 +543,9 @@ export async function oltDiscoverOnus(olt: OltRow) {
         }
       }
       const note = isVsol
-        ? 'Discovered via IF-MIB (EPON ONU interfaces) with VSOL optical/MAC enrichment (best-effort).'
+        ? 'Discovered via IF-MIB (EPON ONU interfaces) with VSOL optical/MAC/distance/diag enrichment (best-effort).'
         : isBdcom
-          ? 'Discovered via IF-MIB (EPON ONU interfaces) with BDCOM MAC/RX/TX/distance/name enrichment (best-effort, vendor MIB).'
+          ? 'Discovered via IF-MIB (EPON ONU interfaces) with BDCOM MAC/RX/TX/distance/diag/name enrichment (best-effort, vendor MIB).'
           : 'Discovered via IF-MIB (EPON ONU interfaces)';
       return { ok: true, mode: 'snmp', onus, note };
     }
@@ -572,27 +601,32 @@ export async function oltRefreshTelemetry(olt: OltRow, onus: any[]) {
     const modelU = String(olt.model||'').toUpperCase();
     const isVsol = vendor.includes('VSOL') || modelU.includes('V1600') || String(olt.model||'').toLowerCase().includes('epon-olt');
     const isBdcom = vendor.includes('BDCOM') || modelU.includes('P3310') || modelU.includes('BDCOM');
-    let optMap = new Map<string, { rx: number|null, tx: number|null }>();
+    let diagMap = new Map<string, VsolDiag>();
     let vsDist = new Map<string, number>();
     let bdRx = new Map<number, number>();
     let bdMac = new Map<number, string>();
-    if (isVsol) [optMap, vsDist] = await Promise.all([vsolOpticalMap(host, community), vsolDistanceMap(host, community)]);
+    let bdDiag = new Map<number, { temperature_c: number|null; voltage_v: number|null; tx_bias_ma: number|null }>();
+    if (isVsol) [diagMap, vsDist] = await Promise.all([vsolDiagMap(host, community), vsolDistanceMap(host, community)]);
     let bdDist = new Map<number, number>(); let bdTx = new Map<number, number>(); let bdDown = new Map<string, string>();
-    if (isBdcom) { [bdRx, bdMac, bdDist, bdTx, bdDown] = await Promise.all([bdcomOpticalRxMap(host, community), bdcomMacMap(host, community), bdcomDistanceMap(host, community), bdcomTxMap(host, community), bdcomLastDownMap(host, community)]); }
+    if (isBdcom) { [bdRx, bdMac, bdDist, bdTx, bdDown, bdDiag] = await Promise.all([bdcomOpticalRxMap(host, community), bdcomMacMap(host, community), bdcomDistanceMap(host, community), bdcomTxMap(host, community), bdcomLastDownMap(host, community), bdcomDiagMap(host, community)]); }
     return { ok: true, mode: 'snmp', onus: onus.map(o => {
       let status = nameToStatus.get(String(o.name||'')) || nameToStatus.get(String(o.serial_number||''));
       if (!status) {
         for (const [n,s] of nameToStatus.entries()) { if (n.replace(/\s+/g,'_') === String(o.serial_number||'')) { status = s; break; } }
       }
       const ifIdx = nameToIf.get(String(o.name||'')) ?? nameToIf.get(String(o.serial_number||'').replace(/_/g,' '));
-      const opt = optMap.get(`${o.pon_port}|${o.onu_id}`);
-      const rx = opt?.rx ?? (ifIdx != null ? bdRx.get(ifIdx) : undefined) ?? o.rx_power_dbm ?? null;
-      const tx = opt?.tx ?? (ifIdx != null ? bdTx.get(ifIdx) : undefined) ?? o.tx_power_dbm ?? null;
+      const d = diagMap.get(`${o.pon_port}|${o.onu_id}`);
+      const bdg = ifIdx != null ? bdDiag.get(ifIdx) : undefined;
+      const rx = d?.rx ?? (ifIdx != null ? bdRx.get(ifIdx) : undefined) ?? o.rx_power_dbm ?? null;
+      const tx = d?.tx ?? (ifIdx != null ? bdTx.get(ifIdx) : undefined) ?? o.tx_power_dbm ?? null;
       const mac = (o as any).mac_address ?? (ifIdx != null ? bdMac.get(ifIdx) : undefined) ?? null;
       const dist = vsDist.get(`${o.pon_port}|${o.onu_id}`) ?? (ifIdx != null ? bdDist.get(ifIdx) : undefined) ?? (o as any).distance_m ?? null;
       const ld = bdDown.get(`${o.pon_port}|${o.onu_id}`) ?? null;
       const lastDown = ld ? `Last down: ${ld}` : ((o as any).last_down_cause ?? null);
-      return { id: o.id, status: status || o.status, rx_power_dbm: rx, tx_power_dbm: tx, mac_address: mac, distance_m: dist, last_down_cause: lastDown };
+      const temperature_c = d?.temperature_c ?? bdg?.temperature_c ?? (o as any).temperature_c ?? null;
+      const voltage_v = d?.voltage_v ?? bdg?.voltage_v ?? (o as any).voltage_v ?? null;
+      const tx_bias_ma = d?.tx_bias_ma ?? bdg?.tx_bias_ma ?? (o as any).tx_bias_ma ?? null;
+      return { id: o.id, status: status || o.status, rx_power_dbm: rx, tx_power_dbm: tx, temperature_c, voltage_v, tx_bias_ma, mac_address: mac, distance_m: dist, last_down_cause: lastDown };
     }) };
   } catch (e: any) {
     return { ok: true, mode: 'simulated', reason: e.message, onus: onus.map(o => ({ id: o.id, status: o.status, rx_power_dbm: o.rx_power_dbm ?? -(17 + Math.random()*12), tx_power_dbm: o.tx_power_dbm ?? +(0.5 + Math.random()*3.5) })) };
