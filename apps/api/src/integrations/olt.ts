@@ -172,10 +172,13 @@ async function vsolDistanceMap(host: string, community: string): Promise<Map<str
   const map = new Map<string, number>();
   try {
     // VSOL EPON ONU info table (best-effort): ...37950.1.1.5.12.1.25.1.<col>.<pon>.<onu>
-    // col1=pon, col2=onu, col3=distance-like value (observed as meters)
+    // col1=pon, col2=onu. Distance fields vary by firmware/model: col17 observed as fiber distance in meters
+    // (e.g. ~2.7km), col12 as secondary candidate, col3 as fallback.
     const ponLines = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.1', 6);
     const onuLines = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.2', 6);
-    const distLines = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.3', 6);
+    const d3Lines  = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.3', 6).catch(()=>[] as string[]);
+    const d12Lines = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.12', 6).catch(()=>[] as string[]);
+    const d17Lines = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.17', 6).catch(()=>[] as string[]);
     const keyVal = (lines: string[], prefix: string) => {
       const m = new Map<string,string>();
       for (const line of lines) {
@@ -186,13 +189,23 @@ async function vsolDistanceMap(host: string, community: string): Promise<Map<str
     };
     const p = keyVal(ponLines, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.1');
     const o = keyVal(onuLines, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.2');
-    const d = keyVal(distLines, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.3');
+    const d3  = keyVal(d3Lines,  '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.3');
+    const d12 = keyVal(d12Lines, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.12');
+    const d17 = keyVal(d17Lines, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.17');
+    const pick = (k: string) => {
+      for (const dm of [d17, d12, d3]) {
+        const dv = dm.get(k);
+        if (dv == null) continue;
+        const n = Number(String(dv).replace(/[^\d.-]/g, ''));
+        if (!Number.isFinite(n) || n < 0) continue;
+        return Math.round(n);
+      }
+      return null;
+    };
     for (const [k, pon] of p.entries()) {
-      const onu = o.get(k); const dv = d.get(k);
-      if (!onu || dv == null) continue;
-      const n = Number(String(dv).replace(/[^\d.-]/g, ''));
-      if (!Number.isFinite(n) || n < 0) continue;
-      map.set(`EPON0/${String(Number(pon))}|${String(Number(onu))}`, Math.round(n));
+      const onu = o.get(k); if (!onu) continue;
+      const dist = pick(k);
+      if (dist != null) map.set(`EPON0/${String(Number(pon))}|${String(Number(onu))}`, dist);
     }
   } catch {}
   return map;
