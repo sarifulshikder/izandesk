@@ -56,6 +56,7 @@ export default function OltsPage() {
   const testOlt = async (id: string) => { if (!token) return; try { const r = await apiFetch<any>(`/api/olt/olts/${id}/test`, { method: 'POST' }, token); setMsg(r.message); load(); } catch(e:any){ setError(e.message);} };
   const discover = async (id: string) => { if (!token) return; try { const r = await apiFetch<any>(`/api/olt/olts/${id}/discover`, { method: 'POST' }, token); setMsg(`Discovered ${r.discovered} ONU(s).`); await load(); } catch(e:any){ setError(e.message);} };
   const refreshTelemetry = async () => { if (!token) return; try { const r = await apiFetch<any>('/api/olt/onus/refresh-telemetry', { method: 'POST', body: JSON.stringify({ olt_id: selectedOlt || undefined }) }, token); setMsg(`Refreshed optical telemetry for ${r.updated} ONU(s).`); setOnus(r.data || []); } catch(e:any){ setError(e.message);} };
+  const autoLink = async () => { if (!token) return; try { const r = await apiFetch<any>('/api/olt/auto-link', { method: 'POST', body: JSON.stringify({ allowFdb: true, limit: 500 }) }, token); setMsg(`Auto-link checked ${r.checked || 0} subscriber(s), linked ${r.linked?.length || 0} ONU(s).`); await load(); } catch(e:any){ setError(e.message);} };
   const authorize = async () => { if (!token || !authModal) return; try { const r = await apiFetch<any>(`/api/olt/onus/${authModal.id}/authorize`, { method: 'POST', body: JSON.stringify({ subscriber_id: authSub || null, name: authModal.name || authModal.serial_number }) }, token); setMsg(r.message); setAuthModal(null); setAuthSub(''); await load(); } catch(e:any){ setError(e.message);} };
 
   const discovered = onus.filter(o => o.status === 'DISCOVERED');
@@ -71,6 +72,7 @@ export default function OltsPage() {
         <div className="flex gap-2 flex-wrap">
           <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4" />Refresh</button>
           <button onClick={refreshTelemetry} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Radio className="w-4 h-4" />Refresh Telemetry</button>
+          <button onClick={autoLink} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Wifi className="w-4 h-4" />Auto-Link ONUs</button>
           <button onClick={()=>{setForm({name:'',vendor:'HUAWEI',model:'',host:'',ssh_port:23,snmp_port:161,username:'admin',password:'',snmp_community:'public',site:'',wg_peer_id:'',is_enabled:true}); setModal('new');}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4" />Add OLT</button>
         </div>
       </div>
@@ -113,7 +115,13 @@ export default function OltsPage() {
                 <div key={o.id} className="p-3 rounded-xl border border-amber-500/20 bg-amber-500/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="text-sm">
                     <div className="font-semibold font-mono">{o.serial_number || 'N/A'} <span className="text-muted-foreground font-sans font-normal">• {o.olt_name} • PON {o.pon_port}</span></div>
-                    <div className="text-xs text-muted-foreground mt-1">Rx {o.rx_power_dbm ?? '-'} dBm / Tx {o.tx_power_dbm ?? '-'} dBm <span className={`ml-2 px-2 py-0.5 rounded-full border ${opticalTone(o.optical_status)}`}>{o.optical_status}</span></div>
+                    <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                      <span>Rx <b className={o.rx_power_dbm!=null?'text-foreground':'text-muted-foreground'}>{o.rx_power_dbm ?? '-'} dBm</b></span>
+                      <span>Tx <b className="text-foreground">{o.tx_power_dbm ?? '-'} dBm</b></span>
+                      <span>Dist <b className="text-foreground">{o.distance_m != null ? `${o.distance_m} m` : '-'}</b></span>
+                      <span>Temp <b className="text-foreground">{o.temperature_c != null ? `${Number(o.temperature_c).toFixed(1)} °C` : '-'}</b></span>
+                      <span className={`px-2 py-0.5 rounded-full border ${opticalTone(o.optical_status)}`}>{o.optical_status}</span>
+                    </div>
                   </div>
                   <button onClick={()=>{setAuthModal(o); setAuthSub('');}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><CheckCircle2 className="w-4 h-4" />1-Click Authorize</button>
                 </div>
@@ -123,21 +131,38 @@ export default function OltsPage() {
           </div>
 
           <div className="rounded-2xl border border-border bg-card overflow-hidden">
-            <div className="px-4 py-3 border-b border-border font-semibold">ONUs & Optical Telemetry</div>
+            <div className="px-4 py-3 border-b border-border font-semibold flex items-center justify-between gap-2"><span>ONUs & Optical Telemetry</span><span className="text-xs font-normal text-muted-foreground">{activeOnus.length} ONU(s)</span></div>
             <div className="overflow-auto max-h-[520px]">
               <table className="w-full text-xs">
-                <thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-2">ONU / Port</th><th className="text-left px-4 py-2">OLT</th><th className="text-left px-4 py-2">Subscriber</th><th className="text-left px-4 py-2">Rx / Tx (dBm)</th><th className="text-left px-4 py-2">Status</th></tr></thead>
+                <thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr>
+                  <th className="text-left px-4 py-2">ONU / Port</th>
+                  <th className="text-left px-4 py-2">OLT</th>
+                  <th className="text-left px-4 py-2">Subscriber</th>
+                  <th className="text-left px-4 py-2">Rx / Tx (dBm)</th>
+                  <th className="text-left px-4 py-2">Distance</th>
+                  <th className="text-left px-4 py-2">Temp / Volt / Bias</th>
+                  <th className="text-left px-4 py-2">Status</th>
+                </tr></thead>
                 <tbody>
                   {activeOnus.map(o => (
                     <tr key={o.id} className="border-t border-border/70">
-                      <td className="px-4 py-2"><div className="font-semibold">{o.name || o.serial_number}</div><div className="text-muted-foreground font-mono">{o.serial_number} • PON {o.pon_port}</div></td>
+                      <td className="px-4 py-2"><div className="font-semibold">{o.name || o.serial_number}</div><div className="text-muted-foreground font-mono">{o.serial_number} • PON {o.pon_port}{o.mac_address ? ` • ${o.mac_address}`:''}</div></td>
                       <td className="px-4 py-2">{o.olt_name}<div className="text-muted-foreground">{o.olt_vendor}</div></td>
                       <td className="px-4 py-2">{o.subscriber_name ? <><div>{o.subscriber_name}</div><div className="text-muted-foreground">{o.subscriber_code||''}</div></> : <span className="text-muted-foreground">Unlinked</span>}</td>
-                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full border mr-1 ${opticalTone(o.optical_status)}`}>Rx {o.rx_power_dbm ?? '-'}</span><span className="text-muted-foreground">Tx {o.tx_power_dbm ?? '-'}</span><div className="mt-1 text-[10px] text-muted-foreground">Thresholds: NORMAL ≥ -27 dBm, WARNING &lt; -27 dBm, CRITICAL ≤ -30 or ≥ -8 dBm</div></td>
-                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full border font-semibold ${o.status==='AUTHORIZED'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':o.status==='OFFLINE'?'bg-red-500/10 text-red-400 border-red-500/20':'bg-muted text-muted-foreground border-border'}`}>{o.status}</span><div className={`text-[10px] mt-1 font-semibold ${o.optical_status==='CRITICAL'?'text-red-400':o.optical_status==='WARNING'?'text-amber-400':'text-emerald-400'}`}>{o.optical_status}</div></td>
+                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full border mr-1 ${opticalTone(o.optical_status)}`}>Rx {o.rx_power_dbm ?? '-'}</span><span className="text-muted-foreground">Tx {o.tx_power_dbm ?? '-'}</span></td>
+                      <td className="px-4 py-2">{o.distance_m != null ? `${o.distance_m} m` : <span className="text-muted-foreground">-</span>}</td>
+                      <td className="px-4 py-2 text-muted-foreground">
+                        <div>{o.temperature_c != null ? `${Number(o.temperature_c).toFixed(1)} °C` : '-'}{o.voltage_v != null ? ` • ${Number(o.voltage_v).toFixed(2)} V` : ''}</div>
+                        <div>Bias: {o.tx_bias_ma != null ? `${Number(o.tx_bias_ma).toFixed(1)} mA` : '-'}</div>
+                      </td>
+                      <td className="px-4 py-2">
+                        <span className={`px-2 py-0.5 rounded-full border font-semibold ${o.status==='AUTHORIZED'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':o.status==='OFFLINE'?'bg-red-500/10 text-red-400 border-red-500/20':o.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-muted text-muted-foreground border-border'}`}>{o.status}</span>
+                        <div className={`text-[10px] mt-1 font-semibold ${o.optical_status==='CRITICAL'?'text-red-400':o.optical_status==='WARNING'?'text-amber-400':'text-emerald-400'}`}>{o.optical_status}</div>
+                        {o.last_seen_at && <div className="text-[10px] text-muted-foreground mt-0.5">{new Date(o.last_seen_at).toLocaleString()}</div>}
+                      </td>
                     </tr>
                   ))}
-                  {!activeOnus.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No ONUs yet. Discover and authorize ONUs to see telemetry.</td></tr>}
+                  {!activeOnus.length && <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No ONUs yet. Discover and authorize ONUs to see telemetry.</td></tr>}
                 </tbody>
               </table>
             </div>
