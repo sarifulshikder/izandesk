@@ -37,7 +37,6 @@ export default function OltsPage() {
   const [form, setForm] = useState<any>({});
   const [authModal, setAuthModal] = useState<any>(null);
   const [authSub, setAuthSub] = useState('');
-  const [q, setQ] = useState('');
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -73,12 +72,6 @@ export default function OltsPage() {
   const authorize = async () => { if (!token || !authModal) return; try { const r = await apiFetch<any>(`/api/olt/onus/${authModal.id}/authorize`, { method: 'POST', body: JSON.stringify({ subscriber_id: authSub || null, name: authModal.name || authModal.serial_number }) }, token); setMsg(r.message); setAuthModal(null); setAuthSub(''); await load(); } catch(e:any){ setError(e.message);} };
 
   const discovered = onus.filter(o => o.status === 'DISCOVERED');
-  const filteredActive = useMemo(() => {
-    const base = onus.filter(o => o.status !== 'DISCOVERED');
-    const term = q.trim().toLowerCase();
-    if (!term) return base;
-    return base.filter(o => [o.serial_number,o.name,o.pon_port,o.olt_name,o.subscriber_name,o.subscriber_code,o.mac_address,o.status].some(v => String(v||'').toLowerCase().includes(term)));
-  }, [onus, q]);
 
   const stats = useMemo(() => {
     const onlineOlts = olts.filter(o => o.status === 'ONLINE').length;
@@ -188,44 +181,12 @@ export default function OltsPage() {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-border bg-card overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <span className="font-semibold flex items-center gap-2"><Activity className="w-4 h-4 text-primary" />ONUs & Optical Telemetry <span className="text-xs font-normal text-muted-foreground">({filteredActive.length}{q ? ` / ${onus.filter(o=>o.status!=='DISCOVERED').length}` : ''})</span></span>
-              <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search ONU, serial, PON, subscriber, MAC..." className="w-full sm:w-72 px-3 py-2 rounded-xl border border-border bg-background text-sm" />
-            </div>
-            <div className="overflow-auto max-h-[520px]">
-              <table className="w-full text-xs">
-                <thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr>
-                  <th className="text-left px-4 py-2">ONU / Port</th>
-                  <th className="text-left px-4 py-2">OLT</th>
-                  <th className="text-left px-4 py-2">Subscriber</th>
-                  <th className="text-left px-4 py-2">Rx / Tx (dBm)</th>
-                  <th className="text-left px-4 py-2">Distance</th>
-                  <th className="text-left px-4 py-2">Temp / Volt / Bias</th>
-                  <th className="text-left px-4 py-2">Status</th>
-                </tr></thead>
-                <tbody>
-                  {filteredActive.map(o => (
-                    <tr key={o.id} className="border-t border-border/70">
-                      <td className="px-4 py-2"><div className="font-semibold">{o.name || o.serial_number}</div><div className="text-muted-foreground font-mono">{o.serial_number} • PON {o.pon_port}{o.mac_address ? ` • ${o.mac_address}`:''}</div></td>
-                      <td className="px-4 py-2">{o.olt_name}<div className="text-muted-foreground">{o.olt_vendor}</div></td>
-                      <td className="px-4 py-2">{o.subscriber_name ? <><div>{o.subscriber_name}</div><div className="text-muted-foreground">{o.subscriber_code||''}</div></> : <span className="text-muted-foreground">Unlinked</span>}</td>
-                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full border mr-1 ${opticalTone(o.optical_status)}`}>Rx {o.rx_power_dbm ?? '-'}</span><span className="text-muted-foreground">Tx {o.tx_power_dbm ?? '-'}</span></td>
-                      <td className="px-4 py-2">{o.distance_m != null ? `${o.distance_m} m` : <span className="text-muted-foreground">-</span>}</td>
-                      <td className="px-4 py-2 text-muted-foreground">
-                        <div>{o.temperature_c != null ? `${Number(o.temperature_c).toFixed(1)} °C` : '-'}{o.voltage_v != null ? ` • ${Number(o.voltage_v).toFixed(2)} V` : ''}</div>
-                        <div>Bias: {o.tx_bias_ma != null ? `${Number(o.tx_bias_ma).toFixed(1)} mA` : '-'}</div>
-                      </td>
-                      <td className="px-4 py-2">
-                        <span className={`px-2 py-0.5 rounded-full border font-semibold ${o.status==='AUTHORIZED'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':o.status==='OFFLINE'?'bg-red-500/10 text-red-400 border-red-500/20':o.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-muted text-muted-foreground border-border'}`}>{o.status}</span>
-                        <div className={`text-[10px] mt-1 font-semibold ${o.optical_status==='CRITICAL'?'text-red-400':o.optical_status==='WARNING'?'text-amber-400':'text-emerald-400'}`}>{o.optical_status}</div>
-                        {o.last_seen_at && <div className="text-[10px] text-muted-foreground mt-0.5">{new Date(o.last_seen_at).toLocaleString()}</div>}
-                      </td>
-                    </tr>
-                  ))}
-                  {!filteredActive.length && <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">{q ? 'No ONUs match your search.' : 'No ONUs yet. Discover and authorize ONUs to see telemetry.'}</td></tr>}
-                </tbody>
-              </table>
+          <div className="rounded-2xl border border-dashed border-border bg-card/40 p-5 text-sm text-muted-foreground flex items-start gap-3">
+            <Activity className="w-4 h-4 mt-0.5 text-primary" />
+            <div>
+              <div className="font-medium text-foreground">ONU & optical telemetry details</div>
+              <div className="mt-0.5">Open a specific OLT’s dedicated page to view and search its full ONU list, optical levels, distance, temperature/voltage/bias, and status.</div>
+              {selectedOlt && <Link href={`/olts/${selectedOlt}`} className="inline-flex items-center gap-1 text-primary hover:underline mt-2">Open selected OLT page <ExternalLink className="w-3.5 h-3.5" /></Link>}
             </div>
           </div>
         </div>
