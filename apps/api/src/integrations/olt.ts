@@ -168,6 +168,36 @@ async function vsolMacMap(host: string, community: string): Promise<Map<string, 
   return map;
 }
 
+async function vsolDistanceMap(host: string, community: string): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  try {
+    // VSOL EPON ONU info table (best-effort): ...37950.1.1.5.12.1.25.1.<col>.<pon>.<onu>
+    // col1=pon, col2=onu, col3=distance-like value (observed as meters)
+    const ponLines = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.1', 6);
+    const onuLines = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.2', 6);
+    const distLines = await snmpWalk(host, community, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.3', 6);
+    const keyVal = (lines: string[], prefix: string) => {
+      const m = new Map<string,string>();
+      for (const line of lines) {
+        const mm = line.match(new RegExp('^' + prefix.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\.(.+?)\\s+(.*)$'));
+        if (mm) m.set(mm[1], mm[2].replace(/^"|"$/g,'').trim());
+      }
+      return m;
+    };
+    const p = keyVal(ponLines, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.1');
+    const o = keyVal(onuLines, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.2');
+    const d = keyVal(distLines, '.1.3.6.1.4.1.37950.1.1.5.12.1.25.1.3');
+    for (const [k, pon] of p.entries()) {
+      const onu = o.get(k); const dv = d.get(k);
+      if (!onu || dv == null) continue;
+      const n = Number(String(dv).replace(/[^\d.-]/g, ''));
+      if (!Number.isFinite(n) || n < 0) continue;
+      map.set(`EPON0/${String(Number(pon))}|${String(Number(onu))}`, Math.round(n));
+    }
+  } catch {}
+  return map;
+}
+
 function parseHexMac(val: string): string | null {
   const s = String(val || '').replace(/^"|"$/g,'').trim();
   // Hex-STRING: A0 7E 07 01 B9 59  OR A0:7E:...
@@ -439,13 +469,15 @@ export async function oltDiscoverOnus(olt: OltRow) {
       const isVsol = vendor.includes('VSOL') || modelU.includes('V1600') || String(olt.model||'').toLowerCase().includes('epon-olt');
       const isBdcom = vendor.includes('BDCOM') || modelU.includes('P3310') || modelU.includes('BDCOM');
       if (isVsol) {
-        const [optMap, macMap] = await Promise.all([vsolOpticalMap(host, community), vsolMacMap(host, community)]);
+        const [optMap, macMap, distMap] = await Promise.all([vsolOpticalMap(host, community), vsolMacMap(host, community), vsolDistanceMap(host, community)]);
         for (const o of onus) {
           const k = `${o.pon_port}|${o.onu_id}`;
           const opt = optMap.get(k);
           if (opt) { if (opt.rx != null) o.rx_power_dbm = opt.rx; if (opt.tx != null) o.tx_power_dbm = opt.tx; }
           const mac = macMap.get(k);
           if (mac) { o.mac_address = mac; }
+          const dist = distMap.get(k);
+          if (dist != null) (o as any).distance_m = dist;
         }
       } else if (isBdcom) {
         const [macMap, rxMap, descMap, distMap, txMap, downMap] = await Promise.all([bdcomMacMap(host, community), bdcomOpticalRxMap(host, community), bdcomDescMap(host, community), bdcomDistanceMap(host, community), bdcomTxMap(host, community), bdcomLastDownMap(host, community)]);
@@ -528,9 +560,10 @@ export async function oltRefreshTelemetry(olt: OltRow, onus: any[]) {
     const isVsol = vendor.includes('VSOL') || modelU.includes('V1600') || String(olt.model||'').toLowerCase().includes('epon-olt');
     const isBdcom = vendor.includes('BDCOM') || modelU.includes('P3310') || modelU.includes('BDCOM');
     let optMap = new Map<string, { rx: number|null, tx: number|null }>();
+    let vsDist = new Map<string, number>();
     let bdRx = new Map<number, number>();
     let bdMac = new Map<number, string>();
-    if (isVsol) optMap = await vsolOpticalMap(host, community);
+    if (isVsol) [optMap, vsDist] = await Promise.all([vsolOpticalMap(host, community), vsolDistanceMap(host, community)]);
     let bdDist = new Map<number, number>(); let bdTx = new Map<number, number>(); let bdDown = new Map<string, string>();
     if (isBdcom) { [bdRx, bdMac, bdDist, bdTx, bdDown] = await Promise.all([bdcomOpticalRxMap(host, community), bdcomMacMap(host, community), bdcomDistanceMap(host, community), bdcomTxMap(host, community), bdcomLastDownMap(host, community)]); }
     return { ok: true, mode: 'snmp', onus: onus.map(o => {
@@ -543,7 +576,7 @@ export async function oltRefreshTelemetry(olt: OltRow, onus: any[]) {
       const rx = opt?.rx ?? (ifIdx != null ? bdRx.get(ifIdx) : undefined) ?? o.rx_power_dbm ?? null;
       const tx = opt?.tx ?? (ifIdx != null ? bdTx.get(ifIdx) : undefined) ?? o.tx_power_dbm ?? null;
       const mac = (o as any).mac_address ?? (ifIdx != null ? bdMac.get(ifIdx) : undefined) ?? null;
-      const dist = (ifIdx != null ? bdDist.get(ifIdx) : undefined) ?? (o as any).distance_m ?? null;
+      const dist = vsDist.get(`${o.pon_port}|${o.onu_id}`) ?? (ifIdx != null ? bdDist.get(ifIdx) : undefined) ?? (o as any).distance_m ?? null;
       const ld = bdDown.get(`${o.pon_port}|${o.onu_id}`) ?? null;
       const lastDown = ld ? `Last down: ${ld}` : ((o as any).last_down_cause ?? null);
       return { id: o.id, status: status || o.status, rx_power_dbm: rx, tx_power_dbm: tx, mac_address: mac, distance_m: dist, last_down_cause: lastDown };
