@@ -1,43 +1,21 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React from 'react';
 import Link from 'next/link';
-import { Users, CheckCircle2, AlertTriangle, RefreshCw, ExternalLink } from 'lucide-react';
-import { useAuth } from '@/lib/auth-context';
-import { apiFetch } from '@/lib/api';
+import { Users, CheckCircle2, AlertTriangle, ExternalLink } from 'lucide-react';
 
-export function RecentSubscribersTable() {
-  const { token } = useAuth();
-  const [subscribers, setSubscribers] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  const load = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    try {
-      const res = await apiFetch<any>('/api/subscribers?limit=8', {}, token);
-      setSubscribers(res.data || []);
-    } catch {
-      setSubscribers([]);
-    } finally { setLoading(false); }
-  }, [token]);
-
-  useEffect(() => { load(); }, [load]);
-
+export function RecentSubscribersTable({ subscribers }: { subscribers: any[] }) {
   return (
-    <div className="p-5 rounded-2xl bg-card border border-border/80 shadow-sm flex flex-col justify-between">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+    <div className="p-5 rounded-2xl bg-card border border-border/80 shadow-sm flex flex-col h-full">
+      <div className="flex items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="p-2 rounded-xl bg-primary/10 border border-primary/20 text-primary shrink-0"><Users className="w-4 h-4" /></div>
           <div className="min-w-0">
             <h3 className="text-sm font-bold text-foreground tracking-tight">Recent Subscribers</h3>
-            <p className="text-[11px] text-muted-foreground">Latest clients, provisioning, billing and status</p>
+            <p className="text-[11px] text-muted-foreground">Latest onboarded clients</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={load} className="p-2 rounded-lg border border-border hover:bg-muted" title="Refresh"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`} /></button>
-          <Link href="/subscribers" className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-muted inline-flex items-center gap-1">View All <ExternalLink className="w-3 h-3"/></Link>
-        </div>
+        <Link href="/subscribers" className="text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-muted inline-flex items-center gap-1 shrink-0">View All <ExternalLink className="w-3 h-3"/></Link>
       </div>
 
       <div className="overflow-x-auto">
@@ -82,7 +60,7 @@ export function RecentSubscribersTable() {
                 </tr>
               );
             })}
-            {!subscribers.length && <tr><td colSpan={5} className="py-8 text-center text-muted-foreground">{loading ? 'Loading subscribers...' : 'No subscribers found.'}</td></tr>}
+            {!subscribers.length && <tr><td colSpan={5} className="py-8 text-center text-muted-foreground">No subscribers found.</td></tr>}
           </tbody>
         </table>
       </div>

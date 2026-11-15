@@ -491,22 +491,26 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
 }
 
 export async function getBillingMetrics() {
-  const [counts, invAgg, payAgg] = await Promise.all([
+  const [counts, invAgg, payAgg, invCounts] = await Promise.all([
     pool.query(`SELECT
       COUNT(*) FILTER (WHERE status='ACTIVE')::int as active,
       COUNT(*) FILTER (WHERE status='SUSPENDED' OR suspension_stage IN ('ISOLATED','SUSPENDED'))::int as suspended,
       COUNT(*) FILTER (WHERE status='EXPIRED')::int as expired
       FROM subscribers`),
     pool.query(`SELECT COALESCE(SUM(total_amount),0)::numeric(12,2) as monthly_generated, COALESCE(SUM(due_amount),0)::numeric(12,2) as total_due FROM invoices WHERE to_char(COALESCE(issue_date, CURRENT_DATE),'YYYY-MM') = to_char(CURRENT_DATE,'YYYY-MM')`),
-    pool.query(`SELECT COALESCE(SUM(amount) FILTER (WHERE created_at::date = CURRENT_DATE),0)::numeric(12,2) as today, COALESCE(SUM(amount) FILTER (WHERE to_char(created_at,'YYYY-MM') = to_char(CURRENT_DATE,'YYYY-MM')),0)::numeric(12,2) as month FROM payments WHERE status='COMPLETED'`)
+    pool.query(`SELECT COALESCE(SUM(amount) FILTER (WHERE created_at::date = CURRENT_DATE),0)::numeric(12,2) as today, COALESCE(SUM(amount) FILTER (WHERE to_char(created_at,'YYYY-MM') = to_char(CURRENT_DATE,'YYYY-MM')),0)::numeric(12,2) as month FROM payments WHERE status='COMPLETED'`),
+    pool.query(`SELECT COUNT(*) FILTER (WHERE status='OVERDUE')::int as overdue, COUNT(*) FILTER (WHERE status IN ('UNPAID','PARTIAL','OVERDUE'))::int as unpaid FROM invoices`),
   ]);
   return {
+    activeSubscribers: Number(counts.rows[0]?.active || 0),
     suspendedDue: Number(counts.rows[0]?.suspended || 0),
     expiredThisMonth: Number(counts.rows[0]?.expired || 0),
     monthlyBillGenerated: Number(invAgg.rows[0]?.monthly_generated || 0),
     totalDueOutstanding: Number((await pool.query("SELECT COALESCE(SUM(due_amount),0)::numeric(12,2) as d FROM invoices WHERE status IN ('UNPAID','PARTIAL','OVERDUE')")).rows[0]?.d || 0),
     todayCollections: Number(payAgg.rows[0]?.today || 0),
     thisMonthCollections: Number(payAgg.rows[0]?.month || 0),
+    overdueInvoices: Number(invCounts.rows[0]?.overdue || 0),
+    unpaidInvoices: Number(invCounts.rows[0]?.unpaid || 0),
   };
 }
 

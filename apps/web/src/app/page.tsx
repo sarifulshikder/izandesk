@@ -1,50 +1,87 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { MetricsGrid } from '@/components/dashboard/metrics-grid';
 import { LiveTrafficChart } from '@/components/dashboard/live-traffic-chart';
-import { RouterTelemetryCard } from '@/components/dashboard/router-telemetry-card';
-import { OltTelemetryCard } from '@/components/dashboard/olt-telemetry-card';
-import { HotReloadPluginCard } from '@/components/dashboard/hot-reload-plugin-card';
+import { NetworkHealthCard } from '@/components/dashboard/network-health-card';
+import { SystemStatusCard } from '@/components/dashboard/system-status-card';
+import { AttentionBar } from '@/components/dashboard/attention-bar';
 import { RecentSubscribersTable } from '@/components/dashboard/recent-subscribers-table';
-import { UserPlus, Users, Activity, CreditCard, Router, ShieldCheck, Plug, MapPin, AlertTriangle, FileText, ArrowRight, Wifi } from 'lucide-react';
+import {
+  UserPlus, Activity, CreditCard, Wifi, AlertTriangle, BellRing,
+  Radio, Network as NetworkIcon, Receipt, HardDrive,
+} from 'lucide-react';
 
-const quickActions = [
-  { title: 'Add Subscriber', href: '/subscribers?new=1', icon: UserPlus, desc: 'Onboard & provision', color: 'text-cyan-400' },
-  { title: 'All Subscribers', href: '/subscribers', icon: Users, desc: 'Client list & profiles', color: 'text-blue-400' },
-  { title: 'Live Sessions', href: '/subscribers/live', icon: Activity, desc: 'Online PPPoE/RADIUS', color: 'text-emerald-400' },
-  { title: 'Billing & Invoices', href: '/billing', icon: CreditCard, desc: 'Collections & dues', color: 'text-amber-400' },
-  { title: 'Routers & NAS', href: '/routers', icon: Router, desc: 'MikroTik & RADIUS', color: 'text-indigo-400' },
-  { title: 'RADIUS & AAA', href: '/radius', icon: ShieldCheck, desc: 'Auth, acct, CoA', color: 'text-violet-400' },
-  { title: 'Plugins', href: '/plugins', icon: Plug, desc: 'Gateways & drivers', color: 'text-fuchsia-400' },
-  { title: 'Fiber GIS Map', href: '/gis', icon: MapPin, desc: 'Topology & coverage', color: 'text-rose-400' },
-];
+function money(v: any) {
+  return `৳${Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
 
 export default function DashboardPage() {
   const { user, activeRole, token } = useAuth();
-  const [snap, setSnap] = useState<any>({ billing: null, online: 0 });
+  const [d, setD] = useState<any>(null);
 
-  const loadSnap = useCallback(async () => {
+  const load = useCallback(async () => {
     if (!token) return;
     try {
-      const [b, s] = await Promise.all([
-        apiFetch<any>('/api/billing/metrics', {}, token).catch(() => ({ metrics: null })),
-        apiFetch<any>('/api/network/sessions', {}, token).catch(() => ({ summary: { online: 0 } })),
+      const [sum, subs, sessions, billing, routers, olts, onus, health, apiHealth, diag, general] = await Promise.all([
+        apiFetch<any>('/api/subscribers/summary', {}, token).catch(() => null),
+        apiFetch<any>('/api/subscribers?limit=6', {}, token).catch(() => null),
+        apiFetch<any>('/api/network/sessions', {}, token).catch(() => null),
+        apiFetch<any>('/api/billing/metrics', {}, token).catch(() => null),
+        apiFetch<any>('/api/network/routers', {}, token).catch(() => null),
+        apiFetch<any>('/api/olt/olts', {}, token).catch(() => null),
+        apiFetch<any>('/api/olt/onus', {}, token).catch(() => null),
+        fetch(`${getApiBaseUrl()}/api/system/health`).then((r) => r.json()).catch(() => null),
+        fetch(`${getApiBaseUrl()}/api/health`).then((r) => r.json()).catch(() => null),
+        apiFetch<any>('/api/system/diagnostics', {}, token).catch(() => null),
+        apiFetch<any>('/api/settings/general', {}, token).catch(() => null),
       ]);
-      setSnap({ billing: b?.metrics || null, online: s?.summary?.online || 0 });
+      setD({
+        summary: sum?.summary || {},
+        recent: subs?.data || [],
+        total: subs?.total ?? sum?.summary?.total ?? 0,
+        sessions: sessions?.summary || { online: 0, aggRxBps: 0, aggTxBps: 0 },
+        billing: billing?.metrics || {},
+        routers: routers?.data || [],
+        olts: olts?.data || [],
+        onus: onus?.data || [],
+        health, apiHealth, diag,
+        company: general?.data?.company_name || 'IzanDesk',
+      });
     } catch {}
   }, [token]);
 
-  useEffect(() => { loadSnap(); const t = setInterval(loadSnap, 20000); return () => clearInterval(t); }, [loadSnap]);
+  useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
+
+  const alerts = useMemo(() => {
+    if (!d) return [];
+    const a: any[] = [];
+    const sum = d.summary || {};
+    if (Number(sum.suspended || 0) > 0) a.push({ icon: AlertTriangle, label: 'Suspended subscribers', count: sum.suspended, href: '/subscribers?status=SUSPENDED', cls: 'text-red-400 border-red-500/30 bg-red-500/10' });
+    if (Number(d.billing?.overdueInvoices || 0) > 0) a.push({ icon: Receipt, label: 'Overdue invoices', count: d.billing.overdueInvoices, href: '/billing', cls: 'text-amber-400 border-amber-500/30 bg-amber-500/10' });
+    if (Number(sum.overdue || 0) > 0) a.push({ icon: AlertTriangle, label: 'Subscribers with due', count: sum.overdue, href: '/subscribers', cls: 'text-amber-400 border-amber-500/30 bg-amber-500/10' });
+    const onuCritical = d.onus.filter((u: any) => String(u.optical_status).toUpperCase() === 'CRITICAL' || String(u.status).toUpperCase() === 'LOS');
+    if (onuCritical.length > 0) a.push({ icon: Radio, label: 'Critical / LOS ONUs', count: onuCritical.length, href: '/olts', cls: 'text-red-400 border-red-500/30 bg-red-500/10' });
+    const rOff = d.routers.filter((r: any) => String(r.status).toUpperCase() !== 'ONLINE');
+    if (rOff.length > 0) a.push({ icon: NetworkIcon, label: 'Routers offline', count: rOff.length, href: '/routers', cls: 'text-red-400 border-red-500/30 bg-red-500/10' });
+    const oOff = d.olts.filter((o: any) => String(o.status).toUpperCase() !== 'ONLINE');
+    if (oOff.length > 0) a.push({ icon: Radio, label: 'OLTs offline', count: oOff.length, href: '/olts', cls: 'text-red-400 border-red-500/30 bg-red-500/10' });
+    if (Number(sum.expiring_soon || 0) > 0) a.push({ icon: BellRing, label: 'Expiring in 7 days', count: sum.expiring_soon, href: '/subscribers', cls: 'text-cyan-400 border-cyan-500/30 bg-cyan-500/10' });
+    const disk = d.health?.checks?.disk;
+    if (disk && Number(disk.usedPercent || 0) > 90) a.push({ icon: HardDrive, label: `Disk ${disk.usedPercent}% full`, href: '/system/health', cls: 'text-amber-400 border-amber-500/30 bg-amber-500/10' });
+    return a;
+  }, [d]);
 
   if (!user || !activeRole) return null;
-  const b = snap.billing || {};
+  const b = d?.billing || {};
+  const s = d?.sessions || { online: 0, aggRxBps: 0, aggTxBps: 0 };
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
+    <div className="space-y-5 animate-in fade-in duration-300">
+      {/* Hero */}
       <div className="relative overflow-hidden rounded-2xl border border-border/80 bg-gradient-to-r from-card via-card to-primary/10 p-5 sm:p-6 shadow-sm">
         <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary/10 blur-3xl" />
         <div className="relative flex flex-col xl:flex-row xl:items-center justify-between gap-4">
@@ -56,79 +93,55 @@ export default function DashboardPage() {
               </span>
             </div>
             <p className="text-sm text-muted-foreground">
-              Welcome, <span className="text-foreground font-semibold">{user.name}</span> • <span className="text-primary font-semibold">{activeRole.replace(/_/g, ' ')}</span> • IzanDesk NOC & BSS
+              Welcome, <span className="text-foreground font-semibold">{user.name}</span> • <span className="text-primary font-semibold">{activeRole.replace(/_/g, ' ')}</span> • {d?.company || 'IzanDesk'}
             </p>
             <div className="flex flex-wrap gap-2 mt-3 text-xs">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-card/70"><Wifi className="w-3.5 h-3.5 text-emerald-400"/><b className="text-foreground">{Number(snap.online || 0)}</b> sessions online</span>
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-card/70"><AlertTriangle className="w-3.5 h-3.5 text-amber-400"/><b className="text-foreground">৳{Number(b.totalDueOutstanding || 0).toLocaleString()}</b> outstanding</span>
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-card/70"><FileText className="w-3.5 h-3.5 text-cyan-400"/><b className="text-foreground">{Number(b.suspendedDue || 0)}</b> suspended/isolated</span>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-card/70"><Wifi className="w-3.5 h-3.5 text-emerald-400"/><b className="text-foreground">{Number(s.online || 0)}</b> online</span>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-card/70"><AlertTriangle className="w-3.5 h-3.5 text-amber-400"/><b className="text-foreground">{money(b.totalDueOutstanding)}</b> outstanding</span>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-card/70"><BellRing className={`w-3.5 h-3.5 ${alerts.length ? 'text-red-400' : 'text-emerald-400'}`}/><b className="text-foreground">{alerts.length}</b> alerts</span>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <Link href="/subscribers/live" className="px-3.5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2 shadow-sm shadow-primary/20"><Activity className="w-4 h-4"/>Live Sessions</Link>
-            <Link href="/subscribers?new=1" className="px-3.5 py-2.5 rounded-xl border border-border bg-card text-sm font-semibold inline-flex items-center gap-2 hover:bg-muted/50"><UserPlus className="w-4 h-4"/>Add Subscriber</Link>
+            <Link href="/subscribers?new=1" className="px-3.5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2 shadow-sm shadow-primary/20"><UserPlus className="w-4 h-4"/>Add Subscriber</Link>
+            <Link href="/subscribers/live" className="px-3.5 py-2.5 rounded-xl border border-border bg-card text-sm font-semibold inline-flex items-center gap-2 hover:bg-muted/50"><Activity className="w-4 h-4"/>Live Sessions</Link>
             <Link href="/billing" className="px-3.5 py-2.5 rounded-xl border border-border bg-card text-sm font-semibold inline-flex items-center gap-2 hover:bg-muted/50"><CreditCard className="w-4 h-4"/>Billing</Link>
           </div>
         </div>
       </div>
 
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold tracking-tight">Quick Actions</h2>
-          <span className="text-xs text-muted-foreground">Common operations & shortcuts</span>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-2.5">
-          {quickActions.map((a) => (
-            <Link key={a.href} href={a.href} className="group p-3.5 rounded-xl border border-border/80 bg-card hover:bg-muted/30 hover:border-primary/30 transition-all shadow-sm">
-              <div className={`w-8 h-8 rounded-lg bg-muted/50 border border-border/60 flex items-center justify-center mb-2.5 group-hover:scale-105 transition-transform ${a.color}`}>
-                <a.icon className="w-4 h-4" />
-              </div>
-              <div className="text-xs font-semibold leading-tight text-foreground">{a.title}</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{a.desc}</div>
-            </Link>
-          ))}
-        </div>
-      </section>
+      {/* Needs attention */}
+      {d && <AttentionBar alerts={alerts} />}
 
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold tracking-tight">Key Metrics</h2>
-          <span className="text-xs text-muted-foreground">Subscribers, collections, dues & throughput</span>
-        </div>
-        <MetricsGrid />
-      </section>
+      {/* Key metrics */}
+      {d && (
+        <MetricsGrid
+          total={Number(d.total || 0)}
+          online={Number(s.online || 0)}
+          billing={b}
+          rx={Number(s.aggRxBps || 0)}
+          tx={Number(s.aggTxBps || 0)}
+        />
+      )}
 
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold tracking-tight">Network Operations</h2>
-          <Link href="/routers" className="text-xs text-primary inline-flex items-center gap-1 hover:underline">Open network views <ArrowRight className="w-3 h-3"/></Link>
-        </div>
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          <LiveTrafficChart />
-          <div className="grid grid-cols-1 gap-5">
-            <RouterTelemetryCard />
-            <OltTelemetryCard />
-          </div>
-        </div>
-      </section>
-
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold tracking-tight">Subscribers & System</h2>
-          <div className="flex items-center gap-3 text-xs">
-            <Link href="/subscribers" className="text-primary hover:underline">Subscribers</Link>
-            <Link href="/plugins" className="text-primary hover:underline">Plugins</Link>
-          </div>
-        </div>
+      {/* Network: live throughput + health */}
+      {d && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
           <div className="xl:col-span-2">
-            <RecentSubscribersTable />
+            <LiveTrafficChart rx={Number(s.aggRxBps || 0)} tx={Number(s.aggTxBps || 0)} online={Number(s.online || 0)} />
           </div>
-          <div>
-            <HotReloadPluginCard />
-          </div>
+          <NetworkHealthCard routers={d.routers} olts={d.olts} onus={d.onus} />
         </div>
-      </section>
+      )}
+
+      {/* Subscribers + system */}
+      {d && (
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+          <div className="xl:col-span-2">
+            <RecentSubscribersTable subscribers={d.recent} />
+          </div>
+          <SystemStatusCard health={d.health} apiHealth={d.apiHealth} diag={d.diag} />
+        </div>
+      )}
     </div>
   );
 }
