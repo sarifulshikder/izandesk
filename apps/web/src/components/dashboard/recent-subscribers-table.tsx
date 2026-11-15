@@ -70,7 +70,7 @@ export function RecentSubscribersTable() {
                     <div className={`text-[10px] ${Number(sub.current_due||0) > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'}`}>{sub.monthly_bill ? `৳${Number(sub.monthly_bill).toLocaleString()}` : ''} {Number(sub.current_due||0) > 0 ? `• Due ৳${Number(sub.current_due).toLocaleString()}` : '• No due'}</div>
                   </td>
                   <td className="py-3 px-3">
-                    <div className="text-foreground">{[sub.zone_name, sub.area_name_db, sub.district].filter(Boolean).join(', ') || '-'}</div>
+                    <div className="text-foreground">{[sub.zone_name, sub.area_name, sub.district].filter(Boolean).join(', ') || '-'}</div>
                     <div className="text-[10px] text-muted-foreground">{sub.distribution_box_name || sub.distribution_box_code || ''}</div>
                   </td>
                   <td className="py-3 px-3">

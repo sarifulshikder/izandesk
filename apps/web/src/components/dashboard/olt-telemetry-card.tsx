@@ -17,8 +17,8 @@ export function OltTelemetryCard() {
     setLoading(true);
     try {
       const [oRes, uRes] = await Promise.all([
-        apiFetch<any>('/api/olts', {}, token).catch(() => ({ data: [] })),
-        apiFetch<any>('/api/onus', {}, token).catch(() => ({ data: [] })),
+        apiFetch<any>('/api/olt/olts', {}, token).catch(() => ({ data: [] })),
+        apiFetch<any>('/api/olt/onus?limit=500', {}, token).catch(() => ({ data: [] })),
       ]);
       setOlts((oRes.data || []).slice(0, 4));
       setOnus(uRes.data || []);
