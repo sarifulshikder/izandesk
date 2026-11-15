@@ -1202,6 +1202,16 @@ export async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- Settings & Security: schema-driven key/value store (key = "<category>.<field>")
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      value JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_settings_category ON settings(category);
+
     CREATE INDEX IF NOT EXISTS idx_fin_txn_date ON finance_transactions(txn_date DESC);
     CREATE INDEX IF NOT EXISTS idx_fin_txn_type ON finance_transactions(txn_type);
     CREATE INDEX IF NOT EXISTS idx_fin_txn_account ON finance_transactions(account_id);

@@ -2,12 +2,15 @@ import 'dotenv/config';
 import express = require('express');
 import cors = require('cors');
 import jwt = require('jsonwebtoken');
+import bcrypt = require('bcrypt');
 import path = require('path');
 import http = require('http');
 import { WebSocketServer } from 'ws';
 import { PluginKernel } from './kernel/plugin-manager';
 import { setKernel } from './kernel/kernel-instance';
 import { initDb, pool } from './db';
+import { getCached, getSetting, validatePasswordPolicy, invalidateCache } from './integrations/settings';
+import { auditLog } from './integrations/audit';
 import { LoginRequest, LoginResponse, UserRole, UserSession } from '@izandesk/shared-types';
 import subscribersRouter from './routes/subscribers';
 import topologyRouter from './routes/topology';
@@ -35,6 +38,7 @@ import leadsRouter from './routes/leads';
 import installationOrdersRouter from './routes/installation-orders';
 import subscriberEquipmentRouter from './routes/subscriber-equipment';
 import subscriberCommunicationsRouter from './routes/subscriber-communications';
+import settingsRouter from './routes/settings';
 import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
@@ -44,7 +48,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
 const WEB_ORIGIN = process.env.WEB_ORIGIN || '';
 const ALLOW_LAN_ORIGINS = (process.env.ALLOW_LAN_ORIGINS || 'true').toLowerCase() !== 'false';
 
-interface AuthUser extends UserSession { password: string; }
+interface AuthUser extends UserSession { password: string; password_hash?: string; }
 
 const users: AuthUser[] = [
   { id: 'usr-admin-01', name: 'Izan Rahman (CEO)', email: 'admin@izandesk.com', password: 'admin123', role: 'SUPER_ADMIN', tenantId: 'tnt-primary-01', permissions: ['ALL'], avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80' },
@@ -54,22 +58,43 @@ const users: AuthUser[] = [
   { id: 'usr-reseller-05', name: 'Shahriar Kabir (CyberNet Reseller)', email: 'reseller@cybernet.bd', password: 'reseller123', role: 'RESELLER', tenantId: 'tnt-primary-01', resellerId: 'RES-CYBERNET', permissions: ['RESELLER_CLIENTS_ALL','WALLET_RECHARGE'], avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&auto=format&fit=crop&q=80' },
 ];
 
-function toSession(u: AuthUser): UserSession { const { password, ...rest } = u; return rest; }
-function issueToken(user: UserSession) { return jwt.sign({ sub: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: '12h' }); }
+function toSession(u: AuthUser): UserSession { const { password, password_hash, ...rest } = u as any; return rest; }
+function issueToken(user: UserSession, minutes = 720) { return jwt.sign({ sub: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: `${Math.max(5, minutes)}m` }); }
+
+async function checkPassword(user: AuthUser, pw: string): Promise<boolean> {
+  if (user.password_hash) { try { return await bcrypt.compare(pw, user.password_hash); } catch { return false; } }
+  return pw === user.password;
+}
+
+// in-memory login lockout (per email), limits come from settings
+interface LoginAttempt { fails: number; lockedUntil: number }
+const loginAttempts = new Map<string, LoginAttempt>();
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) return res.status(401).json({ message: 'Missing bearer token' });
-  try {
-    const token = header.slice(7);
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; role: UserRole };
+  (async () => {
+    const header = req.headers.authorization;
+    if (!header?.startsWith('Bearer ')) { res.status(401).json({ message: 'Missing bearer token' }); return; }
+    let payload: { sub: string; role: UserRole };
+    try {
+      payload = jwt.verify(header.slice(7), JWT_SECRET) as { sub: string; role: UserRole };
+    } catch {
+      res.status(401).json({ message: 'Invalid or expired token' }); return;
+    }
     const user = users.find((u) => u.id === payload.sub);
-    if (!user) return res.status(401).json({ message: 'Invalid session' });
+    if (!user) { res.status(401).json({ message: 'Invalid session' }); return; }
+    // maintenance mode: only SUPER_ADMIN passes while enabled
+    try {
+      if (await getCached('security.maintenance_mode', false)) {
+        if (user.role !== 'SUPER_ADMIN') {
+          const msg = String(await getCached('security.maintenance_message', 'IzanDesk is under maintenance. Please try again later.') || 'Under maintenance');
+          res.status(503).json({ message: msg, maintenance: true });
+          return;
+        }
+      }
+    } catch {}
     (req as any).user = toSession(user);
     next();
-  } catch {
-    return res.status(401).json({ message: 'Invalid or expired token' });
-  }
+  })().catch(() => { try { res.status(500).json({ message: 'Auth error' }); } catch {} });
 }
 
 async function bootstrap() {
@@ -96,6 +121,15 @@ async function bootstrap() {
     console.error('[DB] Initialization failed:', e);
   }
 
+  // Apply persisted password overrides (from Settings & Security) onto the in-memory users
+  try {
+    const overrides = (await getSetting('security.password_overrides', {})) || {};
+    for (const u of users) if (overrides[u.id]) u.password_hash = String(overrides[u.id]);
+    console.log(`[Auth] users: ${users.length}, password overrides applied: ${Object.keys(overrides).length}`);
+  } catch (e) {
+    console.error('[Auth] failed to load password overrides:', e);
+  }
+
   const kernel = new PluginKernel();
   await kernel.init();
   setKernel(kernel);
@@ -106,15 +140,72 @@ async function bootstrap() {
   app.use('/api/branding', brandingRouter);
   app.use('/api/portal', portalRouter);
   app.use('/api/system', (req, res, next) => { const h = req.headers.authorization; if (h?.startsWith('Bearer ')) return authMiddleware(req, res, next); return next(); }, systemRouter);
+  app.use('/api/settings', authMiddleware, settingsRouter);
   app.use('/api/acs', authMiddleware, acsRouter);
 
-  app.post('/api/auth/login', (req, res) => {
-    const body = req.body as LoginRequest;
-    const user = users.find((u) => u.email.toLowerCase() === String(body.email || '').toLowerCase() && u.password === body.password);
-    if (!user) return res.status(401).json({ message: 'Invalid email or password' });
-    const session = toSession(user);
-    res.json({ token: issueToken(session), user: session } as LoginResponse);
+  app.post('/api/auth/login', async (req, res) => {
+    try {
+      const body = req.body as LoginRequest;
+      const email = String(body.email || '').toLowerCase();
+      const pw = String(body.password || '');
+      const now = Date.now();
+      const maxAttempts = Number(await getCached('security.login_max_attempts', 5)) || 5;
+      const lockMinutes = Number(await getCached('security.login_lockout_minutes', 15)) || 15;
+      const att = loginAttempts.get(email);
+      if (att && att.lockedUntil > now) {
+        return res.status(429).json({ message: `Too many failed attempts. Locked — try again in ${Math.ceil((att.lockedUntil - now) / 60000)} min.` });
+      }
+      const user = users.find((u) => u.email.toLowerCase() === email);
+      const ok = user ? await checkPassword(user, pw) : false;
+      if (!user || !ok) {
+        const a = loginAttempts.get(email) || { fails: 0, lockedUntil: 0 };
+        a.fails += 1;
+        if (a.fails >= maxAttempts) {
+          a.lockedUntil = now + lockMinutes * 60000; a.fails = 0;
+          loginAttempts.set(email, a);
+          await auditLog({ action: 'auth.lockout', entity_type: 'auth', entity_id: email, details: { lockout_minutes: lockMinutes, max_attempts: maxAttempts }, ip_address: req.ip });
+          return res.status(429).json({ message: `Too many failed attempts. Account locked for ${lockMinutes} min.` });
+        }
+        loginAttempts.set(email, a);
+        return res.status(401).json({ message: 'Invalid email or password' });
+      }
+      loginAttempts.delete(email);
+      const session = toSession(user);
+      const sessionMinutes = Number(await getCached('security.session_timeout_minutes', 720)) || 720;
+      await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.login', entity_type: 'auth', ip_address: req.ip });
+      res.json({ token: issueToken(session, sessionMinutes), user: session } as LoginResponse);
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || 'Login failed' });
+    }
   });
+
+  // Change own password — enforced against the Security password policy, persisted hashed
+  app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
+    try {
+      const session = (req as any).user as UserSession;
+      const user = users.find((u) => u.id === session?.id);
+      if (!user) return res.status(401).json({ message: 'Invalid session' });
+      const { old_password, new_password } = (req.body || {}) as any;
+      if (!(await checkPassword(user, String(old_password || '')))) return res.status(400).json({ message: 'Current password is incorrect' });
+      const pwErr = await validatePasswordPolicy(String(new_password || ''));
+      if (pwErr) return res.status(400).json({ message: pwErr });
+      const hash = await bcrypt.hash(String(new_password), 10);
+      user.password_hash = hash;
+      const overrides = (await getSetting('security.password_overrides', {})) || {};
+      overrides[user.id] = hash;
+      await pool.query(
+        `INSERT INTO settings(key, category, value, updated_by) VALUES('security.password_overrides','security',$1::jsonb,$2)
+         ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`,
+        [JSON.stringify(overrides), user.name]
+      );
+      invalidateCache();
+      await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.change_password', entity_type: 'auth', entity_id: user.id, details: { via: 'settings-security' }, ip_address: req.ip });
+      res.json({ ok: true, message: 'Password updated and stored hashed (survives restarts).' });
+    } catch (e: any) {
+      res.status(500).json({ message: e.message || 'Failed to change password' });
+    }
+  });
+
   app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: (req as any).user as UserSession }));
   app.get('/api/auth/roles', (_req, res) => res.json({ roles: [
     { role: 'SUPER_ADMIN', label: 'Super Admin', desc: 'Full ISP ownership & ledger' },

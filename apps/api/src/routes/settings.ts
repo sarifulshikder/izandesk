@@ -1,0 +1,128 @@
+import { Router } from 'express';
+import net from 'net';
+import { pool } from '../db';
+import { asyncHandler, ValidationError } from './helpers';
+import { reqActor } from '../integrations/audit';
+import {
+  SETTINGS_SCHEMA, SETTINGS_CATEGORIES, defFor,
+  getAllSettings, setCategory, resetCategory, maskedView,
+} from '../integrations/settings';
+
+const router: Router = Router();
+
+function requireAdmin(req: any, res: any) {
+  if (!['SUPER_ADMIN'].includes(String(req.user?.role || ''))) {
+    res.status(403).json({ message: 'Settings changes require SUPER_ADMIN' });
+    return false;
+  }
+  return true;
+}
+
+// Schema (categories, fields, types, defaults, labels) — drives the UI
+router.get('/schema', asyncHandler(async (_req, res) => {
+  res.json({
+    ok: true,
+    categories: SETTINGS_CATEGORIES,
+    fields: SETTINGS_SCHEMA.filter((d) => !d.hidden).map((d) => ({
+      key: d.key, category: d.category, field: d.key.slice(d.category.length + 1),
+      label: d.label, type: d.type, options: d.options, min: d.min, max: d.max,
+      default: d.default, description: d.description, secret: !!d.secret,
+    })),
+  });
+}));
+
+// All settings grouped by category, secrets masked
+router.get('/', asyncHandler(async (_req, res) => {
+  const all = await getAllSettings();
+  const masked = maskedView(all);
+  const grouped: Record<string, any> = {};
+  for (const cat of Object.keys(SETTINGS_CATEGORIES)) grouped[cat] = {};
+  for (const k of Object.keys(masked)) {
+    const cat = k.split('.')[0];
+    const field = k.slice(cat.length + 1);
+    (grouped[cat] = grouped[cat] || {})[field] = masked[k];
+  }
+  res.json({ ok: true, data: grouped, raw: masked });
+}));
+
+router.get('/:category', asyncHandler(async (req, res) => {
+  const cat = String(req.params.category || '').toLowerCase();
+  if (!SETTINGS_CATEGORIES[cat]) throw new ValidationError(`Unknown category: ${cat}`);
+  const all = maskedView(await getAllSettings());
+  const out: Record<string, any> = {};
+  for (const def of SETTINGS_SCHEMA.filter((d) => d.category === cat && !d.hidden)) {
+    out[def.key.slice(cat.length + 1)] = all[def.key];
+  }
+  res.json({ ok: true, category: cat, data: out });
+}));
+
+// Update a category: body { values: { field: value } } — secret fields blank = keep
+router.put('/:category', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const cat = String(req.params.category || '').toLowerCase();
+  if (!SETTINGS_CATEGORIES[cat]) throw new ValidationError(`Unknown category: ${cat}`);
+  const values = (req.body as any)?.values || {};
+  // reject unknown fields
+  const allowed = new Set(SETTINGS_SCHEMA.filter((d) => d.category === cat).map((d) => d.key.slice(cat.length + 1)));
+  for (const k of Object.keys(values)) if (!allowed.has(k)) throw new ValidationError(`Unknown field for ${cat}: ${k}`);
+  try {
+    const result = await setCategory(cat, values, reqActor(req));
+    res.json({ ok: true, ...result });
+  } catch (e: any) {
+    throw new ValidationError(e.message || 'Invalid setting value');
+  }
+}));
+
+// Reset a category to defaults
+router.post('/reset/:category', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const cat = String(req.params.category || '').toLowerCase();
+  if (!SETTINGS_CATEGORIES[cat]) throw new ValidationError(`Unknown category: ${cat}`);
+  const result = await resetCategory(cat, reqActor(req));
+  res.json({ ok: true, ...result });
+}));
+
+// Minimal SMTP connectivity test (connect + banner + EHLO), no nodemailer needed
+router.post('/test-smtp', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const b = req.body || {};
+  const host = String(b.host || '');
+  const port = Number(b.port || 587);
+  if (!host) throw new ValidationError('host is required');
+  const result = await new Promise<{ ok: boolean; detail: string }>((resolve) => {
+    const sock = new net.Socket();
+    let stage = 'connect';
+    let buf = '';
+    const done = (ok: boolean, detail: string) => { try { sock.destroy(); } catch {} resolve({ ok, detail }); };
+    sock.setTimeout(8000);
+    sock.on('timeout', () => done(false, 'timeout during ' + stage));
+    sock.on('error', (e) => done(false, `${stage}: ${e.message}`));
+    sock.connect(port, host, () => {
+      stage = 'banner';
+      sock.write('EHLO izandesk-test\r\n');
+    });
+    sock.on('data', (d) => {
+      buf += d.toString();
+      if (stage === 'banner') {
+        if (buf.includes('220')) { stage = 'ehlo'; buf = ''; }
+        else if (/^\d{3}/.test(buf) && !buf.startsWith('220')) done(false, 'unexpected banner: ' + buf.trim().split('\r\n')[0]);
+      } else if (stage === 'ehlo') {
+        if (buf.includes('250')) done(true, `SMTP ${host}:${port} reachable (EHLO 250 OK)`);
+        else if (/^[45]\d{2}/m.test(buf)) done(false, 'EHLO rejected: ' + buf.trim().split('\r\n')[0]);
+      }
+    });
+  });
+  await (await import('../integrations/audit')).auditLog({ ...reqActor(req), action: 'settings.test_smtp', entity_type: 'settings', entity_id: 'notifications.smtp', details: { host, port, ok: result.ok } });
+  res.json({ ok: result.ok, ...result });
+}));
+
+// Who changed what lately (settings audit trail)
+router.get('/audit/recent', asyncHandler(async (req, res) => {
+  const limit = Math.min(100, Number((req.query as any)?.limit || 25));
+  const r = await pool.query(
+    `SELECT * FROM audit_logs WHERE entity_type='settings' ORDER BY created_at DESC LIMIT $1`, [limit]
+  );
+  res.json({ ok: true, data: r.rows });
+}));
+
+export default router;

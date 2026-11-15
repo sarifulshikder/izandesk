@@ -79,6 +79,11 @@ All complete architectural blueprints, database schemas, and feature catalogs ar
   - **Omnichannel messaging engine:** channel/config/template/log models and APIs for Local BD SMS (GreenWeb), Twilio SMS, WhatsApp Business API (invoice delivery/PDF link support hooks), and Telegram Bot (NOC alerts/daily revenue summary hooks), plus built-in **Gateway Tester** for test dispatch (`/api/messaging`, `/messaging`).
   - *Notes:* Live external delivery requires provider credentials/tokens and API-specific integration setup (Twilio/GreenWeb/Meta WhatsApp Cloud/Telegram). White-label subdomain/custom-domain routing requires DNS and reverse-proxy host mapping in deployment.
 - **Phase 6:** Customer Self-Care Portal & 1-Click Plug-and-Play Packaging *(Implemented foundation)*
+- **Phase 7:** Settings & Security module *(Implemented)*
+  - Schema-driven settings store (`settings` table, key=`<category>.<field>` JSONB) with categories **General** (company profile, timezone/currency/date format/language, invoice prefix + sequence), **Security**, **Notifications**, **Branding**, **Billing**, **Network**; seeded defaults, per-category reset, secrets masked on read (`••••••••`, blank = keep on write)
+  - APIs: `GET /api/settings` (+`/schema`, `/:category`), `PUT /api/settings/:category` (SUPER_ADMIN, validated + coerced + audited), `POST /api/settings/reset/:category`, `POST /api/settings/test-smtp` (live SMTP EHLO test), `GET /api/settings/audit/recent` (`/api/settings`, `/settings`)
+  - **Live enforcement from settings:** session timeout on issued JWTs (`security.session_timeout_minutes`), login lockout (`login_max_attempts`/`login_lockout_minutes` → 429 + audit), maintenance mode (non-SUPER_ADMIN API → 503 with message), password policy on `POST /api/auth/change-password` (bcrypt-hashed overrides persisted in `security.password_overrides`, re-applied at boot), invoice numbering uses `general.invoice_prefix`/`invoice_next_number`
+  - **UI:** `/settings` — tabbed editor per category (auto-rendered from schema), save/reset per tab, SMTP test button, change-password card, maintenance banner, recent-changes audit feed
 
 ## ▶️ Local Run
 

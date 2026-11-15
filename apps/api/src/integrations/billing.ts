@@ -3,6 +3,7 @@ import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGar
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
 import { auditLog } from './audit';
+import { getCached } from './settings';
 
 type AnyObj = Record<string, any>;
 
@@ -52,9 +53,12 @@ function computeProratedAmount(monthly: number, from: Date, to: Date) {
 async function nextInvoiceNumber() {
   const now = new Date();
   const ym = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-  const r = await pool.query(`SELECT COUNT(*)::int as c FROM invoices WHERE invoice_number LIKE $1`, [`INV-${ym}-%`]);
-  const n = (r.rows[0]?.c || 0) + 1;
-  return `INV-${ym}-${String(n).padStart(5, '0')}`;
+  // prefix + base sequence come from Settings & Security (general.*)
+  const prefix = String(await getCached('general.invoice_prefix', 'INV')).replace(/[^A-Za-z0-9-]/g, '') || 'INV';
+  const base = Math.max(1, Number(await getCached('general.invoice_next_number', 1)) || 1);
+  const r = await pool.query(`SELECT COUNT(*)::int as c FROM invoices WHERE invoice_number LIKE $1`, [`${prefix}-${ym}-%`]);
+  const n = Math.max(base, (r.rows[0]?.c || 0) + 1);
+  return `${prefix}-${ym}-${String(n).padStart(5, '0')}`;
 }
 
 export async function generateInvoiceForSubscriber(sub: AnyObj, opts: { cycleDate?: Date; force?: boolean } = {}) {
