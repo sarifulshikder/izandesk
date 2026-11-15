@@ -28,7 +28,6 @@ export default function SettingsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [audit, setAudit] = useState<any[]>([]);
   // change-password
   const [pw, setPw] = useState({ old: '', next: '', confirm: '' });
   const [pwMsg, setPwMsg] = useState<string | null>(null);
@@ -38,14 +37,12 @@ export default function SettingsPage() {
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      const [s, v, a] = await Promise.all([
+      const [s, v] = await Promise.all([
         apiFetch<any>('/api/settings/schema', {}, token),
         apiFetch<any>('/api/settings', {}, token),
-        apiFetch<any>('/api/settings/audit/recent?limit=12', {}, token).catch(() => ({ data: [] })),
       ]);
       setSchema({ categories: s.categories, fields: s.fields });
       setValues(v.data || {});
-      setAudit(a.data || []);
       const cat = Object.keys(v.data || {})[0] || 'general';
       setTab((t) => (v.data[t] ? t : cat));
     } catch (e: any) { setErr(e.message); }
@@ -233,22 +230,6 @@ export default function SettingsPage() {
         </div>
       )}
 
-      <div className="p-5 rounded-2xl bg-card border border-border/80">
-        <div className="text-xs uppercase font-bold text-muted-foreground tracking-wider mb-2">Recent changes (audit)</div>
-        {audit.length === 0 ? <div className="text-sm text-muted-foreground">No settings changes yet.</div> : (
-          <div className="space-y-1.5">
-            {audit.map((a) => (
-              <div key={a.id} className="flex flex-wrap items-center gap-2 text-xs border-b border-border/50 pb-1.5">
-                <span className="font-mono text-muted-foreground">{new Date(a.created_at).toLocaleString()}</span>
-                <span className="px-2 py-0.5 rounded-full border border-border bg-muted/40">{a.action}</span>
-                <b>{a.entity_id}</b>
-                <span className="text-muted-foreground">by {a.actor_name} ({a.actor_role})</span>
-                <span className="text-muted-foreground font-mono">{JSON.stringify(a.details)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
