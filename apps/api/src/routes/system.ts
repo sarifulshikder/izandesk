@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { execFile } from 'child_process';
+import { createClient } from 'redis';
 import fs = require('fs');
 import path = require('path');
 import { pool } from '../db';
@@ -57,7 +58,8 @@ export async function runDbBackup(trigger: 'manual'|'scheduled' = 'manual') {
   const dir = backupsDir();
   const ts = new Date().toISOString().replace(/[:.]/g,'-');
   const file = path.join(dir, `izandesk-${ts}.sql`);
-  const dbUrl = process.env.DATABASE_URL || `postgresql://${process.env.PGUSER||'izandesk_user'}:${process.env.PGPASSWORD||'izandesk_secret_password'}@${process.env.PGHOST||'localhost'}:${process.env.PGPORT||'5432'}/${process.env.PGDATABASE||'izandesk'}`;
+  // Prefer explicit DATABASE_URL, then PG* vars, then the same DB_* vars the pool uses (container env)
+  const dbUrl = process.env.DATABASE_URL || `postgresql://${encodeURIComponent(process.env.PGUSER||process.env.DB_USER||'izandesk_user')}:${encodeURIComponent(process.env.PGPASSWORD||process.env.DB_PASSWORD||'izandesk_secret_password')}@${process.env.PGHOST||process.env.DB_HOST||'localhost'}:${process.env.PGPORT||process.env.DB_PORT||'5432'}/${process.env.PGDATABASE||process.env.DB_NAME||'izandesk'}`;
   const r = await run('pg_dump', [dbUrl, '-f', file], 120000);
   if (!r.ok) {
     try { if (fs.existsSync(file) && fs.statSync(file).size === 0) fs.unlinkSync(file); } catch {}
@@ -96,6 +98,36 @@ export function startBackupScheduler() {
   setInterval(runOnce, intervalMs);
 }
 
+// Redis health via the official client (no redis-cli binary needed in the container)
+async function redisPing(): Promise<{ ok: boolean; detail?: string; version?: string }> {
+  const client = createClient({
+    socket: {
+      host: process.env.REDIS_HOST || '127.0.0.1',
+      port: Number(process.env.REDIS_PORT || 6379),
+      connectTimeout: 2000,
+      reconnectStrategy: () => false,
+    },
+    ...(process.env.REDIS_PASSWORD ? { password: process.env.REDIS_PASSWORD } : {}),
+  });
+  client.on('error', () => {});
+  try {
+    await client.connect();
+    const pong = await Promise.race([
+      client.ping(),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('redis ping timeout')), 3000)),
+    ]);
+    let version: string | undefined;
+    try {
+      const info = await client.info('server');
+      const m = info.match(/redis_version:([^\r\n]+)/);
+      if (m) version = m[1];
+    } catch {}
+    return pong === 'PONG' ? { ok: true, ...(version ? { version } : {}) } : { ok: false, detail: String(pong) };
+  } finally {
+    try { await client.quit(); } catch { try { client.disconnect(); } catch {} }
+  }
+}
+
 router.get('/health', asyncHandler(async (_req, res) => {
   const checks: any = { api: { ok: true }, db: { ok: false }, redis: { ok: null }, disk: { ok: null }, memory: { ok: true }, time: new Date().toISOString() };
   try { await pool.query('SELECT 1'); checks.db = { ok: true }; } catch (e:any) { checks.db = { ok: false, error: e.message }; }
@@ -104,8 +136,7 @@ router.get('/health', asyncHandler(async (_req, res) => {
     checks.memory = { ok: true, rss: mu.rss, heapUsed: mu.heapUsed, heapTotal: mu.heapTotal };
   } catch {}
   try {
-    const r = await run('redis-cli', ['-h', process.env.REDIS_HOST || '127.0.0.1', 'ping']);
-    checks.redis = r.stdout.trim() === 'PONG' ? { ok: true } : { ok: false, detail: r.stderr || r.stdout };
+    checks.redis = await redisPing();
   } catch (e:any) { checks.redis = { ok: false, error: e.message }; }
   try {
     if (typeof (fs as any).statfsSync === 'function') {
