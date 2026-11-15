@@ -9,23 +9,53 @@ function normMac(v: any): string | null {
 
 export type AutoLinkResult = { subscriber_id: string; onu_id: string; method: 'name' | 'fdb_mac' };
 
+function nameTokens(sub: { username?: string | null; client_code?: string | null }): string[] {
+  const base = [String(sub.username || '').trim(), String(sub.client_code || '').trim()].filter((x) => x.length >= 3);
+  // extract word tokens from the username, splitting on separators AND letter/digit boundaries,
+  // e.g. "Ac025Amina" -> "amina", "idc022@nazmul" -> "nazmul", "mostafiz9513" -> "mostafiz"
+  // so ONU descriptions like "Amina" / "Nazmul" still match; min length 4 to avoid noisy short tokens
+  const words = String(sub.username || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+|(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])/)
+    .filter((w) => w.length >= 4);
+  return Array.from(new Set([...base, ...words]));
+}
+
 async function findByName(sub: { id: string; username?: string | null; client_code?: string | null }): Promise<string | null> {
-  const tokens = Array.from(new Set([sub.username, sub.client_code].map((x: any) => String(x || '').trim()).filter(x => x.length >= 3)));
+  const tokens = nameTokens(sub);
   if (!tokens.length) return null;
   const ors = tokens.map((_, i) => `(o.name ILIKE $${i + 2} OR o.serial_number ILIKE $${i + 2})`).join(' OR ');
-  const params: any[] = [sub.id, ...tokens.map(t => `%${t}%`)];
+  const params: any[] = [sub.id, ...tokens.map((t) => `%${t}%`)];
   const cand = await pool.query(
-    `SELECT o.id, o.subscriber_id FROM onus o WHERE (o.subscriber_id IS NULL OR o.subscriber_id = $1) AND (${ors}) ORDER BY CASE WHEN o.subscriber_id = $1 THEN 0 ELSE 1 END, o.updated_at DESC NULLS LAST LIMIT 5`,
+    `SELECT o.id, o.name, o.serial_number, o.status, o.subscriber_id FROM onus o
+     WHERE (o.subscriber_id IS NULL OR o.subscriber_id = $1) AND (${ors})
+     ORDER BY o.updated_at DESC NULLS LAST LIMIT 20`,
     params
   );
   if (!cand.rows.length) return null;
-  // prefer already-linked-to-self, else accept if unique unlinked candidate
-  if (cand.rows[0].subscriber_id === sub.id) return cand.rows[0].id;
+  // already linked to this subscriber -> keep
+  const self = cand.rows.find((r: any) => r.subscriber_id === sub.id);
+  if (self) return self.id;
   const unlinked = cand.rows.filter((r: any) => !r.subscriber_id);
-  if (unlinked.length === 1) return unlinked[0].id;
-  // if multiple but exactly one exact-token match in name/serial, pick it
-  const exact = unlinked.filter((r: any) => true); // already filtered by ILIKE; keep conservative
-  if (exact.length === 1) return exact[0].id;
+  if (!unlinked.length) return null;
+  // score: exact name/serial match (100) > substring match (50), +10 if ONU is ONLINE
+  const scored = unlinked
+    .map((r: any) => {
+      const name = String(r.name || '').trim().toLowerCase();
+      const serial = String(r.serial_number || '').trim().toLowerCase();
+      let score = 0;
+      for (const t of tokens) {
+        const tl = t.toLowerCase();
+        if (name === tl || serial === tl.replace(/\s+/g, '_')) score += 100;
+        else if (name.includes(tl) || serial.includes(tl)) score += 50;
+      }
+      if (String(r.status || '').toUpperCase() === 'ONLINE') score += 10;
+      return { id: r.id, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  // ambiguous if tie at the top; require a real match (>= 50)
+  if (scored.length >= 2 && scored[0].score === scored[1].score) return null;
+  if (scored[0].score >= 50) return scored[0].id;
   return null;
 }
 
