@@ -21,7 +21,7 @@ services:
       [
         "sh",
         "-lc",
-        "apk update >/dev/null 2>&1 || true; apk add --no-cache docker-cli iproute2 $(apk search -q 'postgresql[0-9]*-client' | sort -V | tail -1) >/dev/null 2>&1 || true; GW=$$(getent hosts izandesk-wg-hub wg-hub 2>/dev/null | awk '{print $$1; exit}'); if [ -n \"$$GW\" ]; then ip route replace 10.77.0.0/16 via $$GW 2>/dev/null || true; ip route replace 10.5.0.0/24 via $$GW 2>/dev/null || true; fi; corepack enable >/dev/null 2>&1 || true; corepack prepare pnpm@12.18.0 --activate >/dev/null 2>&1 || true; pnpm install --frozen-lockfile=false; pnpm --filter @izandesk/shared-types build; pnpm --filter api build; pnpm --filter api dev & node --watch --watch-path apps/api/dist apps/api/dist/main.js"
+        "apk update >/dev/null 2>&1 || true; apk add --no-cache docker-cli iproute2 net-snmp-tools $(apk search -q 'postgresql[0-9]*-client' | sort -V | tail -1) >/dev/null 2>&1 || true; GW=$$(getent hosts izandesk-wg-hub wg-hub 2>/dev/null | awk '{print $$1; exit}'); if [ -n \"$$GW\" ]; then ip route replace 10.77.0.0/16 via $$GW 2>/dev/null || true; ip route replace 10.5.0.0/24 via $$GW 2>/dev/null || true; fi; corepack enable >/dev/null 2>&1 || true; corepack prepare pnpm@12.18.0 --activate >/dev/null 2>&1 || true; pnpm install --frozen-lockfile=false; pnpm --filter @izandesk/shared-types build; pnpm --filter api build; pnpm --filter api dev & node --watch --watch-path apps/api/dist apps/api/dist/main.js"
       ]
 
   web:
