@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler } from './helpers';
+import { asyncHandler, sanitizeOlt, sanitizeOlts } from './helpers';
 import { oltTest, oltDiscoverOnus, oltRefreshTelemetry } from '../integrations/olt';
 import { autoLinkOnusBulk } from '../integrations/onu-autolink';
+import { syncOnuToInventory, syncAllLinkedOnusToInventory } from '../integrations/onu-inventory-sync';
 
 const router: Router = Router();
 
@@ -16,7 +17,7 @@ function opticalStatus(rx: number | null) {
 router.get('/olts', asyncHandler(async (_req, res) => {
   const r = await pool.query(`SELECT o.*, p.name as wg_peer_name, p.tunnel_ip as wg_peer_tunnel_ip, p.site_name as wg_peer_site
     FROM olts o LEFT JOIN wg_peers p ON p.id=o.wg_peer_id ORDER BY o.created_at DESC`);
-  res.json({ data: r.rows });
+  res.json({ data: sanitizeOlts(r.rows) });
 }));
 
 router.get('/olts/:id', asyncHandler(async (req, res) => {
@@ -33,7 +34,7 @@ router.get('/olts/:id', asyncHandler(async (req, res) => {
       COUNT(*) FILTER (WHERE subscriber_id IS NOT NULL)::int AS linked_onus,
       AVG(rx_power_dbm)::float AS avg_rx_power_dbm
     FROM onus WHERE olt_id=$1`, [req.params.id]);
-  res.json({ ...olt, stats: stats.rows[0] || {} });
+  res.json({ ...sanitizeOlt(olt), stats: stats.rows[0] || {} });
 }));
 
 router.post('/olts', asyncHandler(async (req, res) => {
@@ -59,7 +60,7 @@ router.post('/olts', asyncHandler(async (req, res) => {
       }
     } catch {}
   }
-  res.status(201).json(row);
+  res.status(201).json(sanitizeOlt(row));
 }));
 
 router.put('/olts/:id', asyncHandler(async (req, res) => {
@@ -67,8 +68,9 @@ router.put('/olts/:id', asyncHandler(async (req, res) => {
   const c = (await pool.query('SELECT * FROM olts WHERE id=$1',[req.params.id])).rows[0];
   if (!c) return res.status(404).json({ message: 'OLT not found' });
   const wg_peer_id = (b.wg_peer_id !== undefined) ? (b.wg_peer_id || null) : c.wg_peer_id;
+  const snmpCommunity = (b.snmp_community === undefined || b.snmp_community === '') ? c.snmp_community : b.snmp_community;
   const r = await pool.query(`UPDATE olts SET name=$1,vendor=$2,model=$3,host=$4,ssh_port=$5,snmp_port=$6,username=$7,password=COALESCE(NULLIF($8,''),password),snmp_community=$9,site=$10,wg_peer_id=$11,is_enabled=$12,updated_at=now() WHERE id=$13 RETURNING *`,
-    [b.name??c.name,b.vendor??c.vendor,b.model??c.model,b.host??c.host,b.ssh_port??c.ssh_port,b.snmp_port??c.snmp_port,b.username??c.username,b.password??'',b.snmp_community??c.snmp_community,b.site??c.site,wg_peer_id,b.is_enabled??c.is_enabled,req.params.id]);
+    [b.name??c.name,b.vendor??c.vendor,b.model??c.model,b.host??c.host,b.ssh_port??c.ssh_port,b.snmp_port??c.snmp_port,b.username??c.username,b.password??'',snmpCommunity,b.site??c.site,wg_peer_id,b.is_enabled??c.is_enabled,req.params.id]);
   const row = r.rows[0];
   if (row && row.wg_peer_id && row.host) {
     try {
@@ -84,7 +86,7 @@ router.put('/olts/:id', asyncHandler(async (req, res) => {
       }
     } catch {}
   }
-  res.json(row);
+  res.json(sanitizeOlt(row));
 }));
 
 router.delete('/olts/:id', asyncHandler(async (req, res) => {
@@ -98,10 +100,10 @@ router.post('/olts/:id/test', asyncHandler(async (req, res) => {
   const result = await oltTest(olt);
   if (result.ok) {
     const r = await pool.query('UPDATE olts SET status=\'ONLINE\', last_seen_at=now(), updated_at=now(), model=COALESCE($2,model) WHERE id=$1 RETURNING *',[req.params.id, result.sysName || null]);
-    return res.json({ ok: true, mode: result.mode, message: `OLT reachable via SNMP${result.sysName ? ` (${result.sysName})` : ''}.`, sysDescr: result.sysDescr, sysName: result.sysName, uptime: result.uptime, olt: r.rows[0] });
+    return res.json({ ok: true, mode: result.mode, message: `OLT reachable via SNMP${result.sysName ? ` (${result.sysName})` : ''}.`, sysDescr: result.sysDescr, sysName: result.sysName, uptime: result.uptime, olt: sanitizeOlt(r.rows[0]) });
   }
   const r = await pool.query('UPDATE olts SET status=\'OFFLINE\', updated_at=now() WHERE id=$1 RETURNING *',[req.params.id]);
-  return res.json({ ok: false, mode: result.mode, message: `SNMP test failed/unavailable: ${result.error}. Configure SNMP access and ensure SNMP tools are available for real polling.`, olt: r.rows[0] });
+  return res.json({ ok: false, mode: result.mode, message: `SNMP test failed/unavailable: ${result.error}. Configure SNMP access and ensure SNMP tools are available for real polling.`, olt: sanitizeOlt(r.rows[0]) });
 }));
 
 // ONUs list
@@ -168,6 +170,20 @@ router.post('/auto-link', asyncHandler(async (req, res) => {
   res.json({ ok: true, ...result });
 }));
 
+// Trick: import all subscriber-linked ONUs into inventory & serial tracking
+router.post('/sync-inventory', asyncHandler(async (req, res) => {
+  const limit = Math.max(1, Math.min(Number(req.body?.limit || 500), 2000));
+  const result = await syncAllLinkedOnusToInventory({ limit });
+  res.json({ ok: true, ...result, note: 'Linked ONUs imported into inventory_items (category ONU) + inventory_serials (ASSIGNED) + subscriber_equipment (type ONU).' });
+}));
+
+// Trick: sync a single ONU to inventory (when linked/authorized manually)
+router.post('/onus/:id/sync-inventory', asyncHandler(async (req, res) => {
+  const r = await syncOnuToInventory(req.params.id);
+  if (!r) return res.status(400).json({ ok: false, message: 'ONU not found or not linked to a subscriber' });
+  res.json({ ok: true, ...r });
+}));
+
 // Authorize ONU (1-click)
 router.post('/onus/:id/authorize', asyncHandler(async (req, res) => {
   const b = req.body || {};
@@ -177,7 +193,10 @@ router.post('/onus/:id/authorize', asyncHandler(async (req, res) => {
   const name = b.name || onu.name || onu.serial_number;
   const r = await pool.query(`UPDATE onus SET status='AUTHORIZED', name=$1, subscriber_id=$2, authorized_at=COALESCE(authorized_at,now()), last_seen_at=now(), updated_at=now() WHERE id=$3 RETURNING *`,
     [name, subId, req.params.id]);
-  res.json({ ok: true, message: 'ONU authorized successfully (simulated OLT provisioning).', onu: { ...r.rows[0], optical_status: opticalStatus(r.rows[0].rx_power_dbm != null ? Number(r.rows[0].rx_power_dbm) : null) } });
+  // trick: auto-import authorized+linked ONU into inventory & serial tracking
+  let invSync: any = null;
+  if (subId) { try { invSync = await syncOnuToInventory(req.params.id); } catch {} }
+  res.json({ ok: true, message: 'ONU authorized successfully (simulated OLT provisioning).', inventory_sync: invSync, onu: { ...r.rows[0], optical_status: opticalStatus(r.rows[0].rx_power_dbm != null ? Number(r.rows[0].rx_power_dbm) : null) } });
 }));
 
 // Refresh telemetry (SNMP-capable adapter with fallback)

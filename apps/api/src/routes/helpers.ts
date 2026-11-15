@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 
-export function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<any>) {
+export function asyncHandler(fn: (req: any, res: Response, next: NextFunction) => Promise<any>) {
   return (req: Request, res: Response, next: NextFunction) => fn(req, res, next).catch(next);
 }
 
@@ -9,4 +9,56 @@ export function getPagination(req: Request) {
   const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '20'), 10) || 20));
   const offset = (page - 1) * limit;
   return { page, limit, offset };
+}
+
+/** Error that maps to a 400 response with the given message. */
+export class ValidationError extends Error {
+  status = 400;
+}
+
+/** Error that maps to a 409 response with the given message. */
+export class ConflictError extends Error {
+  status = 409;
+}
+
+/** Remove sensitive/internal fields before returning a subscriber to clients. */
+export function sanitizeSubscriber<T = any>(row: T): T {
+  if (!row || typeof row !== 'object') return row;
+  const { password, ...safe } = row as any;
+  return safe;
+}
+
+/** Strip sensitive fields from a list of rows. */
+export function sanitizeSubscribers<T = any>(rows: T[]): T[] {
+  return (rows || []).map((r) => sanitizeSubscriber(r));
+}
+
+/** Remove sensitive device credentials before returning a router/NAS to clients. */
+export function sanitizeRouter<T = any>(row: T): T {
+  if (!row || typeof row !== 'object') return row;
+  const { password, radius_secret, ...safe } = row as any;
+  return {
+    ...safe,
+    has_password: !!(row as any).password,
+    has_radius_secret: !!(row as any).radius_secret,
+  } as T;
+}
+
+export function sanitizeRouters<T = any>(rows: T[]): T[] {
+  return (rows || []).map((r) => sanitizeRouter(r));
+}
+
+/** Remove sensitive device credentials before returning an OLT to clients. */
+export function sanitizeOlt<T = any>(row: T): T {
+  if (!row || typeof row !== 'object') return row;
+  const { password, snmp_community, ...safe } = row as any;
+  return {
+    ...safe,
+    has_password: !!(row as any).password,
+    has_snmp_community: !!(row as any).snmp_community,
+  } as T;
+}
+
+export function sanitizeOlts<T = any>(rows: T[]): T[] {
+  return (rows || []).map((r) => sanitizeOlt(r));
 }

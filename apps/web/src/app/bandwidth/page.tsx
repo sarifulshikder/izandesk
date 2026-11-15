@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { Plus, Pencil, Trash2, RefreshCw, Zap, Router, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, RefreshCw, Zap, Router, X, Download } from 'lucide-react';
 
 export default function BandwidthPage() {
   const { token } = useAuth();
@@ -16,6 +16,16 @@ export default function BandwidthPage() {
   const [form, setForm] = useState<any>({});
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+
+  // MikroTik profile/package import
+  const [showImport, setShowImport] = useState(false);
+  const [importRouterId, setImportRouterId] = useState('');
+  const [importType, setImportType] = useState<'ppp-profiles' | 'hotspot-profiles'>('ppp-profiles');
+  const [importItems, setImportItems] = useState<any[]>([]);
+  const [importSelected, setImportSelected] = useState<Record<string, boolean>>({});
+  const [importLoading, setImportLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -47,6 +57,35 @@ export default function BandwidthPage() {
     catch(e:any){ setError(e.message); } finally { setSyncing(false); }
   };
 
+  const fetchImportPreview = async () => {
+    if (!token || !importRouterId) { setError('Select a router first'); return; }
+    setImportLoading(true); setError(null); setImportMsg(null);
+    try {
+      const r = await apiFetch<any>(`/api/network/routers/${importRouterId}/mikrotik/import-preview?type=${encodeURIComponent(importType)}`, {}, token);
+      const items = r.items || [];
+      setImportItems(items);
+      const sel: Record<string, boolean> = {};
+      for (const it of items) { if (!it.exists) sel[it.name] = true; }
+      setImportSelected(sel);
+      setImportMsg(`Fetched ${items.length} profile(s). ${items.filter((x:any)=>x.exists).length} already exist (unchecked by default).`);
+    } catch (e: any) { setError(e.message); }
+    finally { setImportLoading(false); }
+  };
+  const runImport = async () => {
+    if (!token || !importRouterId) return;
+    const selected = importItems.map(i => i.name).filter(n => importSelected[n]);
+    if (!selected.length) { setError('Select at least one profile to import'); return; }
+    if (!confirm(`Import ${selected.length} selected profile(s) as bandwidth packages?`)) return;
+    setImporting(true); setError(null); setImportMsg(null);
+    try {
+      const r = await apiFetch<any>(`/api/network/routers/${importRouterId}/mikrotik/import`, { method: 'POST', body: JSON.stringify({ type: importType, selected, options: { skip_existing: true } }) }, token);
+      setImportMsg(`Import complete: ${r.imported || 0} imported, ${r.skipped || 0} skipped, ${r.failed || 0} failed.`);
+      await fetchImportPreview();
+      await load();
+    } catch (e: any) { setError(e.message); }
+    finally { setImporting(false); }
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -56,6 +95,7 @@ export default function BandwidthPage() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
+          <button onClick={()=>{ setShowImport(true); setImportItems([]); setImportSelected({}); setImportMsg(null); setError(null); }} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Download className="w-4 h-4"/>Import from Router</button>
           <button onClick={sync} disabled={syncing} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><Router className="w-4 h-4"/>{syncing?'Syncing...':'Sync to Routers'}</button>
           <button onClick={()=>{setForm({name:'',profile_name:'',download_mbps:20,upload_mbps:20,burst_download_mbps:'',burst_upload_mbps:'',burst_threshold_download_mbps:'',burst_threshold_upload_mbps:'',burst_time_sec:'',priority:8,queue_type:'SIMPLE',price:0,description:'',is_active:true,data_cap_gb:'',fup_speed_mbps:''}); setModal('new');}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Package</button>
         </div>
@@ -100,6 +140,75 @@ export default function BandwidthPage() {
           </div>
         </div>
       </div>
+
+      {showImport && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-4xl bg-card border border-border rounded-2xl shadow-2xl my-8">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+            <div>
+              <h2 className="font-bold">Import Packages/Profiles from Router</h2>
+              <div className="text-xs text-muted-foreground mt-0.5">Fetch PPP/Hotspot profiles from a MikroTik router and import as bandwidth packages</div>
+            </div>
+            <button onClick={()=>setShowImport(false)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button>
+          </div>
+          <div className="p-5 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">Router (API/REST)</div>
+                <select className="inp" value={importRouterId} onChange={e=>{ setImportRouterId(e.target.value); setImportItems([]); setImportSelected({}); setImportMsg(null); }}>
+                  <option value="">Select router</option>
+                  {routers.filter((r:any)=>['API','REST'].includes(String(r.integration_mode||'').toUpperCase())).map((r:any)=> <option key={r.id} value={r.id}>{r.name} ({r.host})</option>)}
+                </select>
+              </label>
+              <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">Profile Type</div>
+                <select className="inp" value={importType} onChange={e=>{ setImportType(e.target.value as any); setImportItems([]); setImportSelected({}); setImportMsg(null); }}>
+                  <option value="ppp-profiles">PPPoE Profiles (PPP)</option>
+                  <option value="hotspot-profiles">Hotspot User Profiles</option>
+                </select>
+              </label>
+              <div className="flex items-end gap-2">
+                <button onClick={fetchImportPreview} disabled={importLoading || !importRouterId} className="px-4 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${importLoading?'animate-spin':''}`}/>{importLoading?'Fetching...':'Fetch Profiles'}</button>
+                <button onClick={runImport} disabled={importing || !importItems.length} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Download className="w-4 h-4"/>{importing?'Importing...':'Import Selected'}</button>
+              </div>
+            </div>
+            {importMsg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{importMsg}</div>}
+            <div className="text-xs text-muted-foreground">Fetched profiles can be imported as bandwidth packages (name/profile_name taken from MikroTik profile, speed parsed from rate-limit). Existing packages are detected and unchecked by default.</div>
+            <div className="rounded-xl border border-border overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 bg-muted/30 border-b border-border text-xs">
+                <label className="inline-flex items-center gap-2"><input type="checkbox" checked={importItems.length>0 && importItems.every(i=>importSelected[i.name])} onChange={e=>{ const checked=e.target.checked; const sel:Record<string,boolean>={}; for(const it of importItems) sel[it.name]=checked; setImportSelected(sel); }} /> Select all</label>
+                <span className="text-muted-foreground">{Object.values(importSelected).filter(Boolean).length} selected / {importItems.length} fetched</span>
+              </div>
+              <div className="max-h-[420px] overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-card text-muted-foreground uppercase border-b border-border"><tr>
+                    <th className="text-left py-2 px-3 w-10"></th>
+                    <th className="text-left py-2 px-3">Profile Name</th>
+                    <th className="text-left py-2 px-3">Rate Limit</th>
+                    <th className="text-left py-2 px-3">Details</th>
+                    <th className="text-left py-2 px-3">State</th>
+                  </tr></thead>
+                  <tbody>
+                    {importItems.map((it:any)=> (
+                      <tr key={it.name} className="border-b border-border/50 hover:bg-muted/20">
+                        <td className="py-2 px-3"><input type="checkbox" checked={!!importSelected[it.name]} onChange={()=>setImportSelected(s=>({...s,[it.name]:!s[it.name]}))} /></td>
+                        <td className="py-2 px-3"><div className="font-mono font-medium text-foreground">{it.name}</div>{it.comment ? <div className="text-muted-foreground truncate max-w-[260px]">{it.comment}</div> : null}</td>
+                        <td className="py-2 px-3"><div className="text-cyan-400">{it.rate_limit || '-'}</div><div className="text-muted-foreground">{(it.download_mbps||it.upload_mbps) ? `~${Math.max(it.download_mbps||0,it.upload_mbps||0)} Mbps` : ''}</div></td>
+                        <td className="py-2 px-3 text-muted-foreground">
+                          {it.local_address ? <div>local: {it.local_address}</div> : null}
+                          {it.remote_address ? <div>remote: {it.remote_address}</div> : null}
+                          {it.address_pool ? <div>pool: {it.address_pool}</div> : null}
+                          {it.session_timeout || it.idle_timeout ? <div>timeouts: {it.session_timeout||'-'} / {it.idle_timeout||'-'}</div> : null}
+                        </td>
+                        <td className="py-2 px-3">{it.exists ? <span className="px-2 py-0.5 rounded-full border bg-blue-500/10 text-blue-400 border-blue-500/20">exists</span> : <span className="px-2 py-0.5 rounded-full border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">new</span>}</td>
+                      </tr>
+                    ))}
+                    {!importItems.length && <tr><td colSpan={5} className="py-10 text-center text-muted-foreground">{importLoading ? 'Fetching from MikroTik...' : 'Select a router and click "Fetch Profiles".'}</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setShowImport(false)} className="px-4 py-2 rounded-xl border border-border">Close</button></div>
+        </div></div>
+      )}
 
       {modal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-3xl bg-card border border-border rounded-2xl shadow-2xl my-8">

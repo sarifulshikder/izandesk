@@ -1,5 +1,6 @@
 import { pool } from '../db';
 import { oltFindOnuByClientMac } from './olt';
+import { syncOnuToInventory } from './onu-inventory-sync';
 
 function normMac(v: any): string | null {
   const m = String(v || '').toLowerCase().replace(/[^0-9a-f]/g, '');
@@ -64,7 +65,11 @@ export async function autoLinkOnuForSubscriber(subscriberId: string, opts?: { ma
   const byName = await findByName(sub);
   if (byName) {
     const ok = await pool.query("UPDATE onus SET subscriber_id=$1, updated_at=now() WHERE id=$2 AND subscriber_id IS NULL RETURNING id", [subscriberId, byName]);
-    if (ok.rows[0]) return { subscriber_id: subscriberId, onu_id: byName, method: 'name' };
+    if (ok.rows[0]) {
+      // trick: auto-import linked ONU into inventory & serial tracking
+      try { await syncOnuToInventory(byName); } catch {}
+      return { subscriber_id: subscriberId, onu_id: byName, method: 'name' };
+    }
   }
 
   // 2) FDB MAC correlation
@@ -84,8 +89,12 @@ export async function autoLinkOnuForSubscriber(subscriberId: string, opts?: { ma
         const cur = chk.rows[0];
         if (cur && !cur.subscriber_id) {
           await pool.query("UPDATE onus SET subscriber_id=$1, updated_at=now() WHERE id=$2 AND subscriber_id IS NULL", [subscriberId, byMac]);
+          // trick: auto-import linked ONU into inventory & serial tracking
+          try { await syncOnuToInventory(byMac); } catch {}
           return { subscriber_id: subscriberId, onu_id: byMac, method: 'fdb_mac' };
         } else if (cur && cur.subscriber_id === subscriberId) {
+          // already linked — ensure inventory import exists
+          try { await syncOnuToInventory(byMac); } catch {}
           return { subscriber_id: subscriberId, onu_id: byMac, method: 'fdb_mac' };
         }
       }

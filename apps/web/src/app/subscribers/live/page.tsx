@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import { RefreshCw, Activity, Wifi, ArrowDown, ArrowUp, Search, Router } from 'lucide-react';
@@ -12,6 +13,14 @@ function fmtBps(bps: number) {
   if (n > 1e9) return `${(n / 1e9).toFixed(2)} Gbps`;
   if (n > 1e6) return `${(n / 1e6).toFixed(2)} Mbps`;
   return `${(n / 1e3).toFixed(1)} Kbps`;
+}
+function fmtUptime(sec: any) {
+  const s = Math.max(0, Number(sec || 0));
+  if (!s) return '-';
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
 export default function LiveSubscribersPage() {
@@ -86,10 +95,24 @@ export default function LiveSubscribersPage() {
             <thead className="bg-muted/40 text-xs uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-3">Subscriber</th><th className="text-left px-4 py-3">Router / NAS</th><th className="text-left px-4 py-3">Session / IP</th><th className="text-left px-4 py-3">Throughput</th><th className="text-left px-4 py-3">Status</th></tr></thead>
             <tbody>
               {filtered.map((s: AnyObj, i: number) => (
-                <tr key={s.id || s.username || i} className="border-t border-border/70">
-                  <td className="px-4 py-3"><div className="font-semibold">{s.full_name || s.username || '-'}</div><div className="text-xs text-muted-foreground font-mono">{s.username || ''} {s.client_code ? `• ${s.client_code}` : ''}</div><div className="text-[10px] text-muted-foreground mt-0.5">{s.provisioning_mode || ''}</div></td>
+                <tr key={s.id || s.username || i} className="border-t border-border/70 hover:bg-muted/20">
+                  <td className="px-4 py-3">
+                    {s.subscriber_id ? (
+                      <Link href={`/subscribers/${s.subscriber_id}/live`} className="block group">
+                        <div className="font-semibold text-foreground group-hover:text-primary group-hover:underline underline-offset-2">{s.full_name || s.username || '-'}</div>
+                        <div className="text-xs text-muted-foreground font-mono">{s.username || ''} {s.client_code ? `• ${s.client_code}` : ''}</div>
+                        <div className="text-[10px] text-primary/80 mt-0.5">Open live dashboard →</div>
+                      </Link>
+                    ) : (
+                      <>
+                        <div className="font-semibold">{s.full_name || s.username || '-'}</div>
+                        <div className="text-xs text-muted-foreground font-mono">{s.username || ''} {s.client_code ? `• ${s.client_code}` : ''}</div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">{s.provisioning_mode || ''}</div>
+                      </>
+                    )}
+                  </td>
                   <td className="px-4 py-3"><div className="flex items-center gap-2"><Router className="w-3.5 h-3.5 text-muted-foreground"/><span>{s.router_name || '-'}</span></div><div className="text-xs text-muted-foreground">{s.integration_mode || ''}</div></td>
-                  <td className="px-4 py-3 text-xs"><div className="font-mono">{s.ip_address || '-'}</div><div className="text-muted-foreground">Uptime: {s.uptime || '-'}</div></td>
+                  <td className="px-4 py-3 text-xs"><div className="font-mono">{s.ip_address || '-'}</div><div className="text-muted-foreground">Uptime: {s.uptime || fmtUptime(s.uptime_sec)}</div></td>
                   <td className="px-4 py-3 text-xs"><div className="text-cyan-400">↓ RX {fmtBps(Number(s.rx_bps || 0))}</div><div className="text-indigo-400">↑ TX {fmtBps(Number(s.tx_bps || 0))}</div></td>
                   <td className="px-4 py-3"><span className={`text-xs px-2 py-0.5 rounded-full border ${String(s.status).toUpperCase()==='ONLINE' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-muted text-muted-foreground border-border'}`}>{s.status || 'UNKNOWN'}</span></td>
                 </tr>

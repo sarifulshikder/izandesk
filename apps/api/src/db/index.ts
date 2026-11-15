@@ -438,6 +438,14 @@ export async function initDb() {
     ALTER TABLE onus ADD COLUMN IF NOT EXISTS tx_bias_ma NUMERIC(8,2);
   `);
 
+  // ONU → Inventory auto-import ("the trick"): back-reference on ONU + source tag on serials
+  await pool.query(`
+    ALTER TABLE onus ADD COLUMN IF NOT EXISTS inventory_serial_id UUID REFERENCES inventory_serials(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_onus_inventory_serial ON onus(inventory_serial_id);
+    ALTER TABLE inventory_serials ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'MANUAL';
+    CREATE INDEX IF NOT EXISTS idx_inventory_serials_source ON inventory_serials(source);
+  `);
+
   // Phase 3.3: bind OLT to WireGuard peer for tunnel-aware management/routing
   await pool.query(`
     ALTER TABLE olts ADD COLUMN IF NOT EXISTS wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL;

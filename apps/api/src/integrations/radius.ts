@@ -74,6 +74,17 @@ export async function syncSubscriberToRadiusDb(sub: any, opts: { walledGarden?: 
   return { ok: true, username, profile, walled_garden: walled && !suspended, suspended: suspended && !walled, fup_applied: !!fup, fup_rate_limit: fup };
 }
 
+/** Remove all RADIUS artifacts for a username (used when a subscriber is deleted or renamed). */
+export async function removeSubscriberFromRadiusDb(username: string) {
+  const u = String(username || '').trim();
+  if (!u) return { ok: true, skipped: true, reason: 'no username' };
+  await pool.query('DELETE FROM radcheck WHERE username=$1', [u]);
+  await pool.query('DELETE FROM radreply WHERE username=$1', [u]);
+  await pool.query('DELETE FROM radusergroup WHERE username=$1', [u]);
+  await pool.query('DELETE FROM radius_users WHERE username=$1', [u]).catch(() => {});
+  return { ok: true, username: u };
+}
+
 function encodeAttr(type: number, value: Buffer) {
   const b = Buffer.alloc(2 + value.length);
   b[0] = type; b[1] = b.length; value.copy(b, 2); return b;

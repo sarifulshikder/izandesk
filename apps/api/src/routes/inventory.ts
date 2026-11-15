@@ -62,24 +62,49 @@ router.delete('/items/:id', asyncHandler(async (req, res) => {
 
 // Serials
 router.get('/serials', asyncHandler(async (req, res) => {
-  const { item_id, warehouse_id, status, q } = req.query as any;
+  const { item_id, warehouse_id, status, q, source } = req.query as any;
   const where: string[] = [];
   const params: any[] = [];
   if (item_id) { params.push(item_id); where.push(`s.item_id=$${params.length}`); }
   if (warehouse_id) { params.push(warehouse_id); where.push(`s.warehouse_id=$${params.length}`); }
   if (status) { params.push(status); where.push(`s.status=$${params.length}`); }
+  if (source) { params.push(source); where.push(`s.source=$${params.length}`); }
   if (q) { params.push(`%${String(q).toLowerCase()}%`); where.push(`(lower(s.serial_number) LIKE $${params.length} OR lower(COALESCE(s.mac_address,'')) LIKE $${params.length})`); }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const r = await pool.query(`
     SELECT s.*, i.name as item_name, i.category as item_category, i.brand, i.model, w.name as warehouse_name,
-           sub.full_name as subscriber_name, sub.client_code as subscriber_code
+           sub.full_name as subscriber_name, sub.client_code as subscriber_code,
+           eq.id as equipment_id, eq.onu_id, o.pon_port as onu_pon_port, o.status as onu_status,
+           ol.name as olt_name, ol.vendor as olt_vendor
     FROM inventory_serials s
     JOIN inventory_items i ON i.id=s.item_id
     LEFT JOIN inventory_warehouses w ON w.id=s.warehouse_id
     LEFT JOIN subscribers sub ON sub.id=s.assigned_subscriber_id
+    LEFT JOIN subscriber_equipment eq ON eq.inventory_serial_id = s.id
+    LEFT JOIN onus o ON o.id = eq.onu_id
+    LEFT JOIN olts ol ON ol.id = o.olt_id
     ${whereSql}
     ORDER BY s.created_at DESC`, params);
   res.json({ data: r.rows });
+}));
+
+// ONU-imported serials summary (the trick overview)
+router.get('/serials/onu-import/summary', asyncHandler(async (_req, res) => {
+  const r = await pool.query(`
+    SELECT
+      COUNT(*)::int AS total_onu_serials,
+      COUNT(*) FILTER (WHERE s.status='ASSIGNED')::int AS assigned,
+      COUNT(*) FILTER (WHERE s.status='IN_STOCK')::int AS in_stock,
+      COUNT(*) FILTER (WHERE s.status='FAULTY')::int AS faulty,
+      COUNT(*) FILTER (WHERE s.status='RMA')::int AS rma,
+      COUNT(DISTINCT s.item_id)::int AS onu_item_types,
+      COUNT(DISTINCT s.assigned_subscriber_id)::int AS subscribers_with_onu
+    FROM inventory_serials s WHERE s.source='ONU_IMPORT'`);
+  const byVendor = await pool.query(`
+    SELECT i.brand AS vendor, COUNT(*)::int AS count
+    FROM inventory_serials s JOIN inventory_items i ON i.id=s.item_id
+    WHERE s.source='ONU_IMPORT' GROUP BY i.brand ORDER BY count DESC`);
+  res.json({ data: { ...r.rows[0], by_vendor: byVendor.rows } });
 }));
 router.post('/serials', asyncHandler(async (req, res) => {
   const b = req.body || {};

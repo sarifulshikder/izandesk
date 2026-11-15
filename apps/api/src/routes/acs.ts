@@ -26,8 +26,13 @@ router.get('/status', asyncHandler(async (_req, res) => {
 
 router.get('/devices', asyncHandler(async (req, res) => {
   if (!ACS_BASE) return res.json({ ok: true, configured: false, data: [], message: 'GenieACS not configured' });
+  let queryObj: any = {};
+  if (req.query.query) {
+    try { queryObj = JSON.parse(String(req.query.query)); }
+    catch { return res.status(400).json({ ok: false, configured: true, message: 'Invalid query JSON' }); }
+  }
   try {
-    const q = encodeURIComponent(JSON.stringify(req.query.query ? JSON.parse(String(req.query.query)) : {}));
+    const q = encodeURIComponent(JSON.stringify(queryObj));
     const data = await acsFetch(`/devices/?query=${q}&limit=100`);
     res.json({ ok: true, configured: true, data });
   } catch (e:any) { res.status(502).json({ ok: false, configured: true, message: e.message }); }

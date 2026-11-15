@@ -232,36 +232,41 @@ export async function evaluateDuePolicies() {
   const actions: any[] = [];
   for (const s of subs) {
     await recalcSubscriberDue(s.id);
-    const due = toDate(s.earliest_due || s.due_date || s.expiry_date);
-    const currentDue = Number(s.current_due || 0);
-    if (!due || !(currentDue > 0)) {
-      // no dues: if previously warned/grace/walled but not manually suspended, clear stage
-      if (['WARNING','GRACE','WALLED_GARDEN'].includes(String(s.suspension_stage)) && s.status !== 'SUSPENDED') {
+    const ref = (await pool.query('SELECT id, username, status, suspension_stage, walled_garden, expiry_date, due_date, grace_until, suspension_reason, current_due FROM subscribers WHERE id=$1', [s.id])).rows[0] || s;
+    const due = toDate(s.earliest_due || ref.due_date || ref.expiry_date || s.due_date || s.expiry_date);
+    const currentDue = Number(ref.current_due ?? s.current_due ?? 0);
+    const daysOverdue = due ? diffDays(new Date(today), due) : 0; // positive if past due
+    const validityExpired = daysOverdue > 0;
+    if (!due || (!(currentDue > 0) && !validityExpired)) {
+      // no dues and validity not expired: if previously warned/grace/walled but not manually suspended, clear stage
+      if (!validityExpired && ['WARNING','GRACE','WALLED_GARDEN'].includes(String(ref.suspension_stage || 'NONE')) && !['SUSPENDED', 'EXPIRED'].includes(String(ref.status || ''))) {
         await pool.query(`UPDATE subscribers SET suspension_stage='NONE', grace_until=NULL, walled_garden=false, suspension_reason=NULL, updated_at=now() WHERE id=$1`, [s.id]);
         actions.push({ subscriber_id: s.id, action: 'CLEARED', stage: 'NONE' });
       }
       continue;
     }
-    const daysOverdue = diffDays(new Date(today), due); // positive if past due
-    const daysToDue = diffDays(due, new Date(today));
-    let targetStage = String(s.suspension_stage || 'NONE');
-    let targetStatus = s.status;
-    let walled = !!s.walled_garden;
-    let graceUntil: Date | null = toDate(s.grace_until);
-    let reason: string | null = s.suspension_reason || null;
+    const daysToDue = due ? diffDays(due, new Date(today)) : 0;
+    let targetStage = String(ref.suspension_stage || s.suspension_stage || 'NONE');
+    let targetStatus = String(ref.status || s.status || 'ACTIVE');
+    let walled = !!(ref.walled_garden ?? s.walled_garden);
+    let graceUntil: Date | null = toDate(ref.grace_until || s.grace_until);
+    let reason: string | null = (ref.suspension_reason ?? s.suspension_reason) || null;
 
     if (daysToDue <= warnBefore && daysToDue >= 0) {
-      if (!['GRACE','ISOLATED','SUSPENDED'].includes(targetStage)) { targetStage = SUSPENSION_STAGES.WARNING; reason = `Invoice due in ${daysToDue} day(s)`; }
+      if (!['GRACE','ISOLATED','SUSPENDED','WALLED_GARDEN'].includes(targetStage)) {
+        targetStage = SUSPENSION_STAGES.WARNING;
+        reason = `Invoice/validity due in ${daysToDue} day(s)`;
+      }
     }
     if (daysOverdue > 0) {
-      // overdue: grace -> walled garden/isolation -> suspended
-      if (!graceUntil) graceUntil = addDays(due, graceDays);
+      // overdue/validity expired: grace -> walled garden/isolation -> expired
+      if (!graceUntil) graceUntil = addDays(due as Date, graceDays);
       if (daysOverdue <= graceDays) {
         if (!['ISOLATED','SUSPENDED','WALLED_GARDEN'].includes(targetStage)) {
           targetStage = policy.enable_walled_garden ? SUSPENSION_STAGES.WALLED_GARDEN : SUSPENSION_STAGES.GRACE;
           walled = !!policy.enable_walled_garden;
-          targetStatus = policy.enable_walled_garden ? 'ACTIVE' : s.status; // keep auth but restrict when walled garden
-          reason = `Overdue: grace period until ${ymd(graceUntil)}${walled ? ' (walled garden)' : ''}`;
+          targetStatus = policy.enable_walled_garden ? 'ACTIVE' : targetStatus; // keep auth but restrict when walled garden
+          reason = `${currentDue > 0 ? 'Overdue' : 'Validity expired'}: grace period until ${ymd(graceUntil)}${walled ? ' (walled garden)' : ''}`;
         }
       } else {
         // beyond grace
@@ -270,36 +275,36 @@ export async function evaluateDuePolicies() {
             targetStage = SUSPENSION_STAGES.WALLED_GARDEN;
             targetStatus = 'ACTIVE'; // restricted access (walled garden) rather than hard reject
             walled = true;
-            reason = 'Overdue beyond grace: walled garden isolation active';
+            reason = `${currentDue > 0 ? 'Overdue' : 'Validity expired'} beyond grace: walled garden isolation active`;
           } else if (policy.isolate_on_suspend) {
             targetStage = SUSPENSION_STAGES.ISOLATED;
-            targetStatus = 'SUSPENDED';
+            targetStatus = 'EXPIRED';
             walled = false;
-            reason = 'Overdue beyond grace: router isolated/suspended';
+            reason = `${currentDue > 0 ? 'Overdue' : 'Validity expired'} beyond grace: isolated/expired`;
           } else {
             targetStage = SUSPENSION_STAGES.SUSPENDED;
-            targetStatus = 'SUSPENDED';
+            targetStatus = 'EXPIRED';
             walled = false;
-            reason = 'Overdue beyond grace: suspended';
+            reason = `${currentDue > 0 ? 'Overdue' : 'Validity expired'} beyond grace: expired`;
           }
         }
       }
     }
 
-    const stageChanged = targetStage !== String(s.suspension_stage || 'NONE');
-    const statusChanged = targetStatus !== s.status;
-    const walledChanged = walled !== !!s.walled_garden;
+    const stageChanged = targetStage !== String(ref.suspension_stage || 'NONE');
+    const statusChanged = targetStatus !== String(ref.status || s.status);
+    const walledChanged = walled !== !!(ref.walled_garden ?? s.walled_garden);
     if (stageChanged || statusChanged || walledChanged) {
       await pool.query(`UPDATE subscribers SET suspension_stage=$2, status=$3, walled_garden=$4, grace_until=$5, suspension_reason=$6, updated_at=now() WHERE id=$1`,
         [s.id, targetStage, targetStatus, walled, graceUntil ? graceUntil.toISOString() : null, reason]);
       await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,$2,$3,$4,$5::jsonb,$6)`,
-        [s.id, statusChanged ? 'STATUS_CHANGE' : 'STAGE_CHANGE', targetStage, reason, JSON.stringify({ daysOverdue, daysToDue, currentDue, due: ymd(due), walled }), 'policy_engine']);
+        [s.id, statusChanged ? 'STATUS_CHANGE' : 'STAGE_CHANGE', targetStage, reason, JSON.stringify({ daysOverdue, daysToDue, currentDue, due: due ? ymd(due) : null, walled, validityExpired }), 'policy_engine']);
 
       // apply network enforcement (including walled-garden restriction profile/address-list/CoA)
       if (stageChanged || statusChanged || walledChanged) {
         try {
           const profileOverride = walled ? (policy.walled_garden_profile || 'izn-walled-garden') : undefined;
-          const coaAction: 'DISCONNECT'|'COA' = (targetStatus === 'SUSPENDED' && !walled) ? 'DISCONNECT' : 'COA';
+          const coaAction: 'DISCONNECT'|'COA' = ((targetStatus === 'SUSPENDED' || targetStatus === 'EXPIRED') && !walled) ? 'DISCONNECT' : 'COA';
           await applyProvisioningState(s.id, { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction, profileOverride, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? 'izn-walled-garden' : undefined });
         } catch (e:any) {
           await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'ENFORCEMENT_ERROR',$2,$3,$4::jsonb,'policy_engine')`, [s.id, targetStage, e.message, JSON.stringify({})]);

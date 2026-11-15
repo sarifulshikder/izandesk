@@ -54,6 +54,12 @@ router.post('/templates', asyncHandler(async (req, res) => {
   res.json({ data: r.rows[0] });
 }));
 
+router.delete('/templates/:id', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req,res)) return;
+  await pool.query('DELETE FROM message_templates WHERE id=$1', [req.params.id]);
+  res.json({ ok: true });
+}));
+
 router.get('/logs', asyncHandler(async (req, res) => {
   if (!requireMessagingRole(req,res)) return;
   const limit = Math.min(500, Math.max(1, Number(req.query.limit || 200)));

@@ -191,6 +191,156 @@ export async function mikrotikActiveSessions(r: RouterRow) {
   } finally { try { api.close(); } catch {} }
 }
 
+function toBool(v: any): boolean {
+  if (v === true) return true;
+  const s = String(v ?? '').toLowerCase();
+  return s === 'yes' || s === 'true' || s === '1';
+}
+
+function parseRateLimitMbps(v: any): number {
+  const s = String(v || '').trim();
+  if (!s) return 0;
+  // RouterOS rate-limit: rx/tx ... or variants like 10M/10M, 10M/10M 20M/20M ...
+  const first = s.split(/\s+/)[0] || s;
+  const parts = first.split('/');
+  const pick = (x: string) => {
+    const m = String(x || '').trim().match(/^([\d.]+)\s*([kKmMgG])?/);
+    if (!m) return 0;
+    const n = Number(m[1]);
+    if (!Number.isFinite(n)) return 0;
+    const u = (m[2] || '').toLowerCase();
+    if (u === 'g') return Math.round(n * 1000);
+    if (u === 'k') return Math.max(1, Math.round(n / 1000));
+    return Math.round(n);
+  };
+  const a = pick(parts[0] || '');
+  const b = pick(parts[1] || parts[0] || '');
+  return Math.max(a, b) || a || b || 0;
+}
+
+export async function mikrotikListPppSecrets(r: RouterRow) {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    const arr: any[] = await restFetch(o, '/ppp/secret').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/ppp/secret'); throw e; }) as any;
+    return (Array.isArray(arr) ? arr : []).map((x: any) => ({
+      name: String(x.name || ''),
+      password: String(x.password || ''),
+      profile: String(x.profile || 'default'),
+      service: String(x.service || 'any'),
+      comment: String(x.comment || ''),
+      disabled: toBool(x.disabled),
+      remote_address: String(x['remote-address'] || x.remote_address || ''),
+      local_address: String(x['local-address'] || x.local_address || ''),
+      caller_id: String(x['caller-id'] || x.caller_id || ''),
+    })).filter((x) => x.name);
+  }
+  const o = rosOpts(r, 'API') as any;
+  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  try {
+    await api.connect();
+    const arr: any[] = await api.write('/ppp/secret/print').catch(() => []) as any;
+    return (arr || []).map((x: any) => ({
+      name: String(x.name || ''),
+      password: String(x.password || ''),
+      profile: String(x.profile || 'default'),
+      service: String(x.service || 'any'),
+      comment: String(x.comment || ''),
+      disabled: toBool(x.disabled),
+      remote_address: String(x['remote-address'] || ''),
+      local_address: String(x['local-address'] || ''),
+      caller_id: String(x['caller-id'] || ''),
+    })).filter((x) => x.name);
+  } finally { try { api.close(); } catch {} }
+}
+
+export async function mikrotikListPppProfiles(r: RouterRow) {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  const mapItem = (x: any) => {
+    const rateLimit = String(x['rate-limit'] || x.rate_limit || '');
+    const mbps = parseRateLimitMbps(rateLimit);
+    return {
+      name: String(x.name || ''),
+      rate_limit: rateLimit,
+      local_address: String(x['local-address'] || x.local_address || ''),
+      remote_address: String(x['remote-address'] || x.remote_address || ''),
+      comment: String(x.comment || ''),
+      download_mbps: mbps,
+      upload_mbps: mbps,
+    };
+  };
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    const arr: any[] = await restFetch(o, '/ppp/profile').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/ppp/profile'); throw e; }) as any;
+    return (Array.isArray(arr) ? arr : []).map(mapItem).filter((x) => x.name);
+  }
+  const o = rosOpts(r, 'API') as any;
+  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  try {
+    await api.connect();
+    const arr: any[] = await api.write('/ppp/profile/print').catch(() => []) as any;
+    return (arr || []).map(mapItem).filter((x) => x.name);
+  } finally { try { api.close(); } catch {} }
+}
+
+export async function mikrotikListHotspotUsers(r: RouterRow) {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  const mapItem = (x: any) => ({
+    name: String(x.name || ''),
+    password: String(x.password || ''),
+    profile: String(x.profile || 'default'),
+    comment: String(x.comment || ''),
+    disabled: toBool(x.disabled),
+    limit_uptime: String(x['limit-uptime'] || x.limit_uptime || ''),
+    limit_bytes_total: String(x['limit-bytes-total'] || x.limit_bytes_total || ''),
+    mac_address: String(x['mac-address'] || x.mac_address || ''),
+    server: String(x.server || ''),
+  });
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    const arr: any[] = await restFetch(o, '/ip/hotspot/user').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/ip/hotspot/user'); throw e; }) as any;
+    return (Array.isArray(arr) ? arr : []).map(mapItem).filter((x) => x.name);
+  }
+  const o = rosOpts(r, 'API') as any;
+  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  try {
+    await api.connect();
+    const arr: any[] = await api.write('/ip/hotspot/user/print').catch(() => []) as any;
+    return (arr || []).map(mapItem).filter((x) => x.name);
+  } finally { try { api.close(); } catch {} }
+}
+
+export async function mikrotikListHotspotProfiles(r: RouterRow) {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  const mapItem = (x: any) => {
+    const rateLimit = String(x['rate-limit'] || x.rate_limit || '');
+    const mbps = parseRateLimitMbps(rateLimit);
+    return {
+      name: String(x.name || ''),
+      rate_limit: rateLimit,
+      shared_users: String(x['shared-users'] || x.shared_users || ''),
+      session_timeout: String(x['session-timeout'] || x.session_timeout || ''),
+      idle_timeout: String(x['idle-timeout'] || x.idle_timeout || ''),
+      address_pool: String(x['address-pool'] || x.address_pool || ''),
+      comment: String(x.comment || ''),
+      download_mbps: mbps,
+      upload_mbps: mbps,
+    };
+  };
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    const arr: any[] = await restFetch(o, '/ip/hotspot/user/profile').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/ip/hotspot/user/profile'); throw e; }) as any;
+    return (Array.isArray(arr) ? arr : []).map(mapItem).filter((x) => x.name);
+  }
+  const o = rosOpts(r, 'API') as any;
+  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  try {
+    await api.connect();
+    const arr: any[] = await api.write('/ip/hotspot/user/profile/print').catch(() => []) as any;
+    return (arr || []).map(mapItem).filter((x) => x.name);
+  } finally { try { api.close(); } catch {} }
+}
+
 function pkgRateLimit(p: any) {
   const up = Number(p.upload_mbps || p.download_mbps || 1);
   const down = Number(p.download_mbps || p.upload_mbps || 1);

@@ -17,3 +17,8 @@ docker/wg-hub/config/wg0.conf
 docker/wg-hub/config/status.json
 apps/docker/wg-hub/config/wg0.conf
 tsconfig.tsbuildinfo
+
+# container/dev build artifacts
+apps/web/.next-audit/
+apps/web/.next-from-container/
+apps/web/tmp/

@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { Plus, Pencil, Trash2, RefreshCw, Warehouse, Package, Barcode, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, RefreshCw, Warehouse, Package, Barcode, X, Radio } from 'lucide-react';
 
 type Tab = 'warehouses' | 'items' | 'serials';
 
@@ -18,19 +18,22 @@ export default function InventoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<{type: Tab|'edit-warehouse'|'edit-item'|'edit-serial', data?: any} | null>(null);
   const [form, setForm] = useState<any>({});
-  const [serialFilter, setSerialFilter] = useState({ q: '', status: '', item_id: '', warehouse_id: '' });
+  const [serialFilter, setSerialFilter] = useState({ q: '', status: '', item_id: '', warehouse_id: '', source: '' });
+  const [onuSummary, setOnuSummary] = useState<any>(null);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
     setLoading(true); setError(null);
     try {
-      const [w, i, s, subs] = await Promise.all([
+      const [w, i, s, subs, onuSum] = await Promise.all([
         apiFetch<{data:any[]}>('/api/inventory/warehouses', {}, token),
         apiFetch<{data:any[]}>('/api/inventory/items', {}, token),
         apiFetch<{data:any[]}>(`/api/inventory/serials?${new URLSearchParams(Object.entries(serialFilter).filter(([,v])=>v) as any)}`, {}, token),
         apiFetch<{data:any[]}>('/api/subscribers?limit=200', {}, token),
+        apiFetch<{data:any}>('/api/inventory/serials/onu-import/summary', {}, token).catch(() => ({ data: null })),
       ]);
-      setWarehouses(w.data||[]); setItems(i.data||[]); setSerials(s.data||[]); setSubscribers(subs.data||[]);
+      setWarehouses(w.data||[]); setItems(i.data||[]); setSerials(s.data||[]); setSubscribers(subs.data||[]); setOnuSummary(onuSum?.data || null);
     } catch(e:any){ setError(e.message); } finally { setLoading(false); }
   }, [token, serialFilter]);
 
@@ -53,6 +56,17 @@ export default function InventoryPage() {
     if (!token || !confirm('Delete this record?')) return;
     await apiFetch(path, { method:'DELETE' }, token);
     await load();
+  };
+
+  // The trick: import subscriber-linked ONUs from OLTs into inventory serials
+  const syncOnus = async () => {
+    if (!token) return;
+    setSyncMsg(null);
+    try {
+      const r = await apiFetch<any>('/api/olt/sync-inventory', { method: 'POST', body: JSON.stringify({ limit: 500 }) }, token);
+      setSyncMsg(`✅ Imported ${r.synced?.length || 0} linked ONUs into inventory (${r.checked || 0} checked).`);
+      await load();
+    } catch (e: any) { setSyncMsg(`❌ ${e.message}`); }
   };
 
   const openNew = (type: Tab) => {
@@ -101,7 +115,7 @@ export default function InventoryPage() {
 
       {tab === 'serials' && (
         <div className="space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
             <input value={serialFilter.q} onChange={e=>setSerialFilter({...serialFilter,q:e.target.value})} placeholder="Search serial/MAC..." className="px-3 py-2 rounded-xl bg-card border border-border text-sm"/>
             <select value={serialFilter.status} onChange={e=>setSerialFilter({...serialFilter,status:e.target.value})} className="px-3 py-2 rounded-xl bg-card border border-border text-sm">
               <option value="">All statuses</option>{['IN_STOCK','ASSIGNED','FAULTY','RMA','RETIRED'].map(s=><option key={s} value={s}>{s}</option>)}
@@ -112,10 +126,29 @@ export default function InventoryPage() {
             <select value={serialFilter.warehouse_id} onChange={e=>setSerialFilter({...serialFilter,warehouse_id:e.target.value})} className="px-3 py-2 rounded-xl bg-card border border-border text-sm">
               <option value="">All warehouses</option>{warehouses.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
+            <select value={serialFilter.source} onChange={e=>setSerialFilter({...serialFilter,source:e.target.value})} className="px-3 py-2 rounded-xl bg-card border border-border text-sm">
+              <option value="">All sources</option>
+              <option value="MANUAL">Manual entry</option>
+              <option value="ONU_IMPORT">ONU (auto-imported from OLT)</option>
+            </select>
           </div>
-          <CardTable loading={loading} headers={['Serial / MAC','Item','Warehouse','Status','Assigned To','Actions']} rows={serials.map(s => [
+          {onuSummary && Number(onuSummary.total_onu_serials) > 0 && (
+            <div className="flex flex-wrap items-center gap-2 p-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 text-sm">
+              <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-300"><Radio className="w-4 h-4"/>ONU auto-import</span>
+              <span className="text-emerald-200/80">{onuSummary.total_onu_serials} linked ONUs in inventory • {onuSummary.assigned} assigned • {onuSummary.subscribers_with_onu} subscribers</span>
+              {(onuSummary.by_vendor||[]).map((v:any)=>(<span key={v.vendor} className="text-[11px] px-2 py-0.5 rounded-full border border-emerald-500/40 text-emerald-200">{v.vendor}: {v.count}</span>))}
+            </div>
+          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={syncOnus} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Radio className="w-4 h-4"/>Sync ONUs from OLT</button>
+            {syncMsg && <span className="text-xs text-muted-foreground">{syncMsg}</span>}
+          </div>
+          <CardTable loading={loading} headers={['Serial / MAC','Item','Source','Warehouse','Status','Assigned To','Actions']} rows={serials.map(s => [
             <div key="n"><div className="font-mono text-xs font-semibold">{s.serial_number}</div><div className="text-xs text-muted-foreground">{s.mac_address||'-'}</div></div>,
             <div key="i"><div>{s.item_name}</div><div className="text-xs text-muted-foreground">{s.item_category} {s.brand?`• ${s.brand}`:''}</div></div>,
+            s.source === 'ONU_IMPORT'
+              ? <span key="src" title={s.olt_vendor ? `OLT vendor: ${s.olt_vendor}` : ''} className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 whitespace-nowrap"><Radio className="w-3 h-3"/>{s.olt_name ? `${s.olt_name}${s.onu_pon_port ? ' • ' + s.onu_pon_port : ''}` : 'ONU import'}</span>
+              : <span key="src" className="text-[11px] px-2 py-1 rounded-full border border-border text-muted-foreground">MANUAL</span>,
             s.warehouse_name||'-', <span key="st" className="text-[11px] px-2 py-1 rounded-full border border-border">{s.status}</span>,
             s.subscriber_name ? `${s.subscriber_name} (${s.subscriber_code})` : '-',
             <Actions key="a" onEdit={()=>openEdit('serials',s)} onDelete={()=>del(`/api/inventory/serials/${s.id}`)} />

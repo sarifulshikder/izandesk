@@ -31,6 +31,10 @@ import procurementRouter from './routes/procurement';
 import hotspotRouter from './routes/hotspot';
 import reportsRouter from './routes/reports';
 import auditRouter from './routes/audit';
+import leadsRouter from './routes/leads';
+import installationOrdersRouter from './routes/installation-orders';
+import subscriberEquipmentRouter from './routes/subscriber-equipment';
+import subscriberCommunicationsRouter from './routes/subscriber-communications';
 import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
@@ -102,7 +106,7 @@ async function bootstrap() {
   app.use('/api/branding', brandingRouter);
   app.use('/api/portal', portalRouter);
   app.use('/api/system', (req, res, next) => { const h = req.headers.authorization; if (h?.startsWith('Bearer ')) return authMiddleware(req, res, next); return next(); }, systemRouter);
-  app.use('/api/acs', acsRouter);
+  app.use('/api/acs', authMiddleware, acsRouter);
 
   app.post('/api/auth/login', (req, res) => {
     const body = req.body as LoginRequest;
@@ -206,6 +210,12 @@ async function bootstrap() {
   app.use('/api/tickets', authMiddleware, ticketsRouter);
   app.use('/api/messaging', authMiddleware, messagingRouter);
 
+  // Phase 8: Subscriber Enhancement - Leads, Installation, Equipment, Communications
+  app.use('/api/leads', authMiddleware, leadsRouter);
+  app.use('/api/installation-orders', authMiddleware, installationOrdersRouter);
+  app.use('/api/subscriber-equipment', authMiddleware, subscriberEquipmentRouter);
+  app.use('/api/subscriber-communications', authMiddleware, subscriberCommunicationsRouter);
+
   // Phase 7: Finance, HRM, Procurement/Assets, Hotspot, Reports, Audit & Field workflows
   app.use('/api/finance', authMiddleware, financeRouter);
   app.use('/api/hr', authMiddleware, hrRouter);
@@ -215,8 +225,9 @@ async function bootstrap() {
   app.use('/api/audit', authMiddleware, auditRouter);
 
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error(err);
-    res.status(500).json({ message: err?.message || 'Internal server error' });
+    const status = err?.status || (err?.name === 'MulterError' ? 400 : 500);
+    if (status >= 500) console.error(err);
+    res.status(status).json({ message: err?.message || 'Internal server error' });
   });
 
   const server = http.createServer(app);

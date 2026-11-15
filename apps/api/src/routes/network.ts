@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler } from './helpers';
+import { asyncHandler, sanitizeRouter, sanitizeRouters } from './helpers';
 import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret } from '../integrations/mikrotik';
 import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas } from '../integrations/radius';
 import { autoLinkOnusBulk } from '../integrations/onu-autolink';
@@ -38,7 +38,7 @@ router.get('/routers', asyncHandler(async (req, res) => {
       [merged.cpu_load ?? row.cpu_load ?? null, merged.memory_used_mb ?? row.memory_used_mb ?? null, merged.memory_total_mb ?? row.memory_total_mb ?? null, merged.rx_bps ?? row.rx_bps ?? 0, merged.tx_bps ?? row.tx_bps ?? 0, merged.uptime_seconds ?? row.uptime_seconds ?? null, merged.status || row.status, merged.last_seen_at || null, merged.identity || null, merged.board_name || null, row.id]);
     rows.push(merged);
   }
-  res.json({ data: rows });
+  res.json({ data: sanitizeRouters(rows) });
 }));
 
 router.get('/routers/:id', asyncHandler(async (req, res) => {
@@ -54,7 +54,7 @@ router.get('/routers/:id', asyncHandler(async (req, res) => {
       FROM subscriber_sessions WHERE router_id=$1`, [req.params.id]),
     pool.query(`SELECT COUNT(*)::int AS assigned_subscribers FROM subscribers WHERE router_id=$1`, [req.params.id]).catch(()=>({ rows:[{ assigned_subscribers: 0 }] } as any)),
   ]);
-  res.json({ ...row, stats: { ...(sess.rows[0] || {}), ...(subs.rows[0] || {}) } });
+  res.json({ ...sanitizeRouter(row), stats: { ...(sess.rows[0] || {}), ...(subs.rows[0] || {}) } });
 }));
 
 router.post('/routers', asyncHandler(async (req, res) => {
@@ -83,7 +83,7 @@ router.post('/routers', asyncHandler(async (req, res) => {
       b.nas_identifier || null,
     ]);
   try { await syncNasForRouter(r.rows[0]); } catch {}
-  res.status(201).json(r.rows[0]);
+  res.status(201).json(sanitizeRouter(r.rows[0]));
 }));
 
 router.put('/routers/:id', asyncHandler(async (req, res) => {
@@ -106,7 +106,7 @@ router.put('/routers/:id', asyncHandler(async (req, res) => {
       mode, b.radius_secret ?? '', Number(b.coa_port ?? c.coa_port ?? 3799), b.nas_identifier ?? c.nas_identifier, req.params.id
     ]);
   try { await syncNasForRouter(r.rows[0], c.host); } catch {}
-  res.json(r.rows[0]);
+  res.json(sanitizeRouter(r.rows[0]));
 }));
 
 router.delete('/routers/:id', asyncHandler(async (req, res) => {

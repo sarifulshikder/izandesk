@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler } from './helpers';
+import { asyncHandler, sanitizeSubscriber } from './helpers';
 
 const router: Router = Router();
 
@@ -65,7 +65,7 @@ router.get('/trace/subscriber/:id', asyncHandler(async (req, res) => {
     const r = await pool.query(`SELECT f.*, ST_AsGeoJSON(f.path::geometry) as path_geojson FROM fiber_routes f WHERE f.from_box_id=$1 OR f.to_box_id=$1`, [sub.box_id]);
     routes = r.rows;
   }
-  res.json({ subscriber: sub, routes });
+  res.json({ subscriber: sanitizeSubscriber(sub), routes });
 }));
 
 export default router;

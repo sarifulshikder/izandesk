@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
+import { ResellerPortal } from '@/components/resellers/reseller-portal';
 import { RefreshCw, Wallet, Users, Building2, Plus, ChevronRight } from 'lucide-react';
 
 type AnyObj = Record<string, any>;
@@ -14,6 +15,7 @@ export default function ResellersOverviewPage() {
   const [resellers, setResellers] = useState<AnyObj[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const isResellerUser = user?.role === 'RESELLER';
   const canManage = ['SUPER_ADMIN', 'BILLING_OPERATOR'].includes(String(user?.role));
 
   const load = useCallback(async () => {
@@ -28,12 +30,19 @@ export default function ResellersOverviewPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  if (isResellerUser) {
+    if (loading && !resellers.length) return <div className="p-6 text-sm text-muted-foreground">Loading reseller portal...</div>;
+    if (err) return <div className="p-4 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>;
+    if (resellers[0]?.id) return <ResellerPortal resellerId={resellers[0].id} />;
+    return <div className="p-6 rounded-2xl border border-dashed border-border text-muted-foreground">No reseller account is linked to this login. Please contact the administrator.</div>;
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">All Resellers</h1>
-          <p className="text-sm text-muted-foreground">Reseller overview. Open a reseller to view subscriber counts, status breakdown, and details.</p>
+          <h1 className="text-2xl font-black tracking-tight">Reseller Portal</h1>
+          <p className="text-sm text-muted-foreground">Open a reseller to access the full partner portal: dashboard, users, online sessions, balance/sharing reports, payments, and ONU list.</p>
         </div>
         <div className="flex items-center gap-2">
           {canManage && <Link href="/resellers/add" className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4" />Add Reseller</Link>}
@@ -61,7 +70,7 @@ export default function ResellersOverviewPage() {
             </div>
             <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
               <span className="truncate">{r.subdomain ? `${r.subdomain}.` : 'No subdomain'} • {r.status}</span>
-              <span className="inline-flex items-center gap-1 text-primary group-hover:underline">View <ChevronRight className="w-3.5 h-3.5" /></span>
+              <span className="inline-flex items-center gap-1 text-primary group-hover:underline">Open Portal <ChevronRight className="w-3.5 h-3.5" /></span>
             </div>
           </Link>
         ))}
