@@ -541,9 +541,15 @@ h1.text-2xl.font-black {
   .card-body, .table td { overflow-wrap: anywhere; }
   .btn { max-width: 100%; }
   .dash-stat { min-height: 78px; }
-  .topbar { gap: .5rem; padding: .5rem .75rem; overflow-x: hidden; }
+  .topbar { gap: .5rem; padding: .5rem .75rem; }
   .topbar-search { max-width: none; min-width: 0; }
   .topbar-chip { padding: 0 .4rem; }
+  /* Keep topbar dropdowns above page content: never let the sticky bar become a
+     56px scroll container (overflow-x:hidden forces overflow-y:auto and clips them). */
+  .topbar .dropdown-menu {
+    position: fixed; top: 3.5rem; right: .5rem;
+    max-width: calc(100vw - 1rem);
+  }
   .table thead th { white-space: nowrap; }
 }
 
