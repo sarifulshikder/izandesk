@@ -46,6 +46,191 @@ async function acsFetch(p: string, init: any = {}) {
   return data;
 }
 
+function pv(v: any): any {
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    if ('_value' in v) return (v as any)._value;
+  }
+  return v;
+}
+function pmeta(v: any) {
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const o = v as any;
+    return { value: pv(v), type: o._type, timestamp: o._timestamp, object: o._object, writable: o._writable };
+  }
+  return { value: v };
+}
+
+function flattenParams(node: any, prefix = '', out: Array<{ path: string; value: any; type?: string; timestamp?: string; writable?: boolean; object?: boolean }> = [], depth = 0): any[] {
+  if (!node || typeof node !== 'object' || depth > 20) return out;
+  for (const [k, v] of Object.entries(node)) {
+    if (k.startsWith('_')) continue;
+    const path = prefix ? `${prefix}${k}` : k;
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      const o = v as any;
+      const hasValue = '_value' in o;
+      const isObj = o._object === true || (!hasValue && Object.keys(o).some(x => !x.startsWith('_')));
+      if (hasValue || o._type || o._timestamp) {
+        out.push({ path, value: pv(v), type: o._type, timestamp: o._timestamp, writable: o._writable, object: o._object });
+      }
+      if (isObj) {
+        const nextPrefix = path.endsWith('.') ? path : path + '.';
+        flattenParams(v, nextPrefix, out, depth + 1);
+      }
+    } else {
+      out.push({ path, value: v });
+    }
+  }
+  return out;
+}
+
+function getPath(obj: any, path: string): any {
+  if (!obj) return undefined;
+  const parts = path.replace(/\.$/, '').split('.').filter(Boolean);
+  let cur = obj;
+  for (const p of parts) {
+    if (cur == null) return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
+function collectInstances(parent: any): Array<{ key: string; node: any }> {
+  if (!parent || typeof parent !== 'object') return [];
+  return Object.entries(parent)
+    .filter(([k, v]) => /^\d+$/.test(k) && v && typeof v === 'object')
+    .map(([k, v]) => ({ key: k, node: v }));
+}
+
+function bytesHuman(n: any) {
+  const x = Number(n || 0);
+  if (!Number.isFinite(x)) return String(n ?? '-');
+  const units = ['B','KB','MB','GB','TB'];
+  let i = 0, v = Math.abs(x);
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v >= 10 || i === 0 ? v.toFixed(0) : v.toFixed(2)} ${units[i]}`;
+}
+
+function buildDiagnostics(device: any) {
+  const flat = flattenParams(device);
+  const hosts: any[] = [];
+  const hostPaths = ['InternetGatewayDevice.LANDevice.1.Hosts.Host', 'Device.Hosts.Host'];
+  for (const hp of hostPaths) {
+    for (const { key, node } of collectInstances(getPath(device, hp))) {
+      const row = {
+        index: key,
+        hostname: pv(node?.HostName) ?? pv(node?.PhysAddress) ?? null,
+        ip: pv(node?.IPAddress) ?? null,
+        mac: pv(node?.MACAddress) ?? pv(node?.PhysAddress) ?? null,
+        interface: pv(node?.InterfaceType) ?? pv(node?.Layer1Interface) ?? null,
+        active: pv(node?.Active),
+        address_source: pv(node?.AddressSource) ?? null,
+        source_path: hp,
+      };
+      if (row.ip || row.mac || row.hostname) hosts.push(row);
+    }
+  }
+
+  const wifiAssociations: any[] = [];
+  const wlanRoots = ['InternetGatewayDevice.LANDevice.1.WLANConfiguration', 'Device.WiFi.AccessPoint'];
+  // TR-098 AssociatedDevice under each WLANConfiguration instance
+  for (const { key, node } of collectInstances(getPath(device, 'InternetGatewayDevice.LANDevice.1.WLANConfiguration'))) {
+    const ssid = pv(node?.SSID);
+    const enabled = pv(node?.Enable);
+    for (const { key: ak, node: an } of collectInstances(node?.AssociatedDevice)) {
+      wifiAssociations.push({
+        wlan_index: key, ssid, radio_enabled: enabled,
+        mac: pv(an?.AssociatedDeviceMACAddress) ?? pv(an?.MACAddress) ?? null,
+        ip: pv(an?.AssociatedDeviceIPAddress) ?? null,
+        authenticated: pv(an?.AssociatedDeviceAuthenticationState),
+        signal_strength: pv(an?.X_TP_RSSI) ?? pv(an?.SignalStrength) ?? pv(an?.RSSI) ?? null,
+        tx_rate: pv(an?.LastDataTransmitRate) ?? pv(an?.X_TP_LastDataTransmitRate) ?? null,
+        rx_rate: pv(an?.LastDataDownlinkRate) ?? null,
+        source_path: `InternetGatewayDevice.LANDevice.1.WLANConfiguration.${key}.AssociatedDevice.${ak}`,
+      });
+    }
+  }
+  // TR-181-ish fallback
+  for (const { key, node } of collectInstances(getPath(device, 'Device.WiFi.AccessPoint'))) {
+    const ssid = pv(node?.SSIDReference) ?? pv(node?.SSID);
+    for (const { key: ak, node: an } of collectInstances(node?.AssociatedDevice)) {
+      wifiAssociations.push({ ap_index: key, ssid, mac: pv(an?.MACAddress), signal_strength: pv(an?.SignalStrength), tx_rate: pv(an?.LastDataDownlinkRate), rx_rate: pv(an?.LastDataUplinkRate), source_path: `Device.WiFi.AccessPoint.${key}.AssociatedDevice.${ak}` });
+    }
+  }
+
+  const interfaces: any[] = [];
+  const wanPpp = getPath(device, 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1');
+  const wanIp = getPath(device, 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1');
+  const wanCommon = getPath(device, 'InternetGatewayDevice.WANDevice.1.WANCommonInterfaceConfig');
+  const pickStats = (node: any, name: string, source_path: string) => {
+    if (!node) return;
+    const stats = node.Stats || node;
+    const row = {
+      name,
+      source_path,
+      connection_status: pv(node.ConnectionStatus) ?? pv(node.Status) ?? null,
+      external_ip: pv(node.ExternalIPAddress) ?? null,
+      uptime: pv(node.Uptime) ?? null,
+      bytes_sent: pv(stats.BytesSent) ?? pv(stats.X_TP_BytesSent) ?? pv(stats.EthernetBytesSent) ?? null,
+      bytes_received: pv(stats.BytesReceived) ?? pv(stats.X_TP_BytesReceived) ?? pv(stats.EthernetBytesReceived) ?? null,
+      packets_sent: pv(stats.PacketsSent) ?? pv(stats.EthernetPacketsSent) ?? null,
+      packets_received: pv(stats.PacketsReceived) ?? pv(stats.EthernetPacketsReceived) ?? null,
+      errors_sent: pv(stats.X_TP_ErrorsSent) ?? pv(stats.ErrorsSent) ?? null,
+      errors_received: pv(stats.X_TP_ErrorsReceived) ?? pv(stats.ErrorsReceived) ?? null,
+      timestamp: (stats.BytesSent?._timestamp || stats.BytesReceived?._timestamp || node.ConnectionStatus?._timestamp || null),
+    };
+    if (row.bytes_sent != null || row.bytes_received != null || row.connection_status || row.external_ip) interfaces.push(row);
+  };
+  pickStats(wanPpp, 'WAN PPP', 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1');
+  pickStats(wanIp, 'WAN IP', 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1');
+  if (wanCommon) pickStats(wanCommon, 'WAN Common', 'InternetGatewayDevice.WANDevice.1.WANCommonInterfaceConfig');
+
+  // WLAN radio/config info
+  const wifiRadios: any[] = [];
+  for (const { key, node } of collectInstances(getPath(device, 'InternetGatewayDevice.LANDevice.1.WLANConfiguration'))) {
+    wifiRadios.push({
+      index: key,
+      ssid: pv(node?.SSID),
+      enabled: pv(node?.Enable),
+      channel: pv(node?.Channel),
+      auto_channel: pv(node?.AutoChannelEnable),
+      standard: pv(node?.Standard),
+      bssid: pv(node?.BSSID),
+      beacon_type: pv(node?.BeaconType),
+      total_associations: pv(node?.TotalAssociations) ?? pv(node?.AssociatedDeviceNumberOfEntries),
+      transmit_power: pv(node?.TransmitPower) ?? pv(node?.X_TP_TransmitPower),
+      stats: {
+        bytes_sent: pv(node?.Stats?.BytesSent),
+        bytes_received: pv(node?.Stats?.BytesReceived),
+        errors_sent: pv(node?.Stats?.ErrorsSent),
+        errors_received: pv(node?.Stats?.ErrorsReceived),
+      },
+      source_path: `InternetGatewayDevice.LANDevice.1.WLANConfiguration.${key}`,
+    });
+  }
+
+  const issues: string[] = [];
+  const activeHosts = hosts.filter(h => h.active === true || h.active === 1 || String(h.active).toLowerCase() === 'true' || h.ip);
+  if (!hosts.length) issues.push('No host/client entries found in cached parameters. Run a diagnostic refresh (Hosts/Wi-Fi/Stats) and fetch again after the CPE responds.');
+  for (const it of interfaces) {
+    if (it.connection_status && !/connected|up/i.test(String(it.connection_status))) issues.push(`${it.name} status: ${it.connection_status}`);
+    if (Number(it.errors_received || 0) > 1000 || Number(it.errors_sent || 0) > 1000) issues.push(`${it.name} has elevated error counters (RX ${it.errors_received || 0}, TX ${it.errors_sent || 0})`);
+  }
+  for (const w of wifiRadios) {
+    if (w.enabled === false || String(w.enabled).toLowerCase() === 'false') issues.push(`Wi-Fi radio ${w.index} (${w.ssid || 'SSID'}) is disabled`);
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    counts: { hosts: hosts.length, active_hosts: activeHosts.length, wifi_associations: wifiAssociations.length, wifi_radios: wifiRadios.length },
+    hosts,
+    wifi_associations: wifiAssociations,
+    wifi_radios: wifiRadios,
+    interfaces,
+    issues,
+    parameter_count: flat.length,
+  };
+}
+
 function qs(params: Record<string, any>) {
   const u = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
@@ -186,8 +371,108 @@ router.get('/devices/:id', asyncHandler(async (req, res) => {
       `SELECT d.*, s.full_name AS subscriber_name, s.client_code, s.username AS subscriber_username
        FROM acs_devices d LEFT JOIN subscribers s ON s.id = d.subscriber_id WHERE d.genieacs_id=$1`, [id]
     ).catch(()=>({rows:[] as any[]}));
-    res.json({ ok: true, configured: true, data: device, summary, local: lr.rows[0] || null });
+    const diagnostics = buildDiagnostics(device);
+    const includeFlat = String(req.query.flat || '') === '1' || String(req.query.flat || '') === 'true';
+    res.json({ ok: true, configured: true, data: device, summary, local: lr.rows[0] || null, diagnostics, flat_params: includeFlat ? flattenParams(device) : undefined });
   } catch (e: any) { res.status(e.status || 502).json({ ok: false, configured: true, message: e.message }); }
+}));
+
+router.get('/devices/:id/diagnostics', asyncHandler(async (req, res) => {
+  const cfg = await getAcsConfig();
+  if (!cfg.configured) return res.status(501).json({ ok: false, configured: false, message: 'GenieACS not configured' });
+  const id = String(req.params.id);
+  const data = await acsFetch(`/devices/${qs({ query: { _id: id } })}`);
+  const device = Array.isArray(data) ? data[0] : data;
+  if (!device) return res.status(404).json({ ok: false, message: 'Device not found in ACS' });
+  res.json({ ok: true, diagnostics: buildDiagnostics(device), summary: pickDeviceSummary(device) });
+}));
+
+router.get('/devices/:id/parameters', asyncHandler(async (req, res) => {
+  const cfg = await getAcsConfig();
+  if (!cfg.configured) return res.status(501).json({ ok: false, configured: false, message: 'GenieACS not configured' });
+  const id = String(req.params.id);
+  const search = String(req.query.search || '').toLowerCase();
+  const limit = Math.min(5000, Math.max(1, parseInt(String(req.query.limit || '2000'), 10) || 2000));
+  const data = await acsFetch(`/devices/${qs({ query: { _id: id } })}`);
+  const device = Array.isArray(data) ? data[0] : data;
+  if (!device) return res.status(404).json({ ok: false, message: 'Device not found in ACS' });
+  let flat = flattenParams(device);
+  if (search) flat = flat.filter(p => p.path.toLowerCase().includes(search) || String(p.value ?? '').toLowerCase().includes(search));
+  res.json({ ok: true, total: flat.length, data: flat.slice(0, limit) });
+}));
+
+router.post('/devices/:id/diagnostic-refresh', asyncHandler(async (req, res) => {
+  const id = String(req.params.id);
+  const profile = String(req.body?.profile || 'standard'); // basic|standard|full|auto
+  const custom = Array.isArray(req.body?.parameterNames) ? req.body.parameterNames.map(String) : [];
+  const sets: Record<string, string[]> = {
+    basic: [
+      'InternetGatewayDevice.DeviceInfo.',
+      'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.',
+      'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.',
+      'Device.DeviceInfo.',
+    ],
+    standard: [
+      'InternetGatewayDevice.DeviceInfo.',
+      'InternetGatewayDevice.LANDevice.1.Hosts.',
+      'InternetGatewayDevice.LANDevice.1.WLANConfiguration.',
+      'InternetGatewayDevice.WANDevice.1.WANCommonInterfaceConfig.',
+      'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.',
+      'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.',
+      'Device.Hosts.',
+      'Device.WiFi.',
+      'Device.IP.',
+      'Device.Ethernet.',
+    ],
+    full: [
+      'InternetGatewayDevice.',
+      'Device.',
+    ],
+    auto: [
+      'InternetGatewayDevice.',
+      'Device.',
+    ],
+  };
+  const names = custom.length ? custom : (sets[profile] || sets.standard);
+  const tasks: any[] = [];
+  let connectionRequested = false;
+  for (const name of names) {
+    const body = name.endsWith('.') ? { name: 'refreshObject', objectName: name } : { name: 'getParameterValues', parameterNames: [name] };
+    try {
+      const q = connectionRequested ? '' : qs({ connection_request: '' });
+      const t = await acsFetch(`/devices/${encodeURIComponent(id)}/tasks${q}`, { method: 'POST', body: JSON.stringify(body) });
+      if (!connectionRequested) connectionRequested = true;
+      tasks.push({ ok: true, task: t, request: body });
+    } catch (e: any) {
+      tasks.push({ ok: false, error: e.message, request: body });
+    }
+  }
+  await logAction({ device_id: id, action: 'DIAGNOSTIC_REFRESH', task_name: profile, payload: { profile, parameterNames: names }, result: { tasks: tasks.length, ok: tasks.filter(t=>t.ok).length }, status: tasks.some(t=>t.ok) ? 'QUEUED' : 'FAILED', created_by: (req as any).user?.id });
+  res.json({ ok: true, queued: tasks.filter(t=>t.ok).length, failed: tasks.filter(t=>!t.ok).length, tasks, note: 'Tasks queued in GenieACS. Wait for the CPE to respond (inform/connection request), then reload device diagnostics/parameters to see updated live data.' });
+}));
+
+router.post('/devices/:id/discover-parameters', asyncHandler(async (req, res) => {
+  const id = String(req.params.id);
+  const paths = Array.isArray(req.body?.parameterPaths) && req.body.parameterPaths.length
+    ? req.body.parameterPaths.map(String)
+    : ['InternetGatewayDevice.', 'Device.'];
+  const nextLevel = req.body?.nextLevel === true;
+  const tasks: any[] = [];
+  let connectionRequested = false;
+  for (const parameterPath of paths) {
+    const body: any = { name: 'getParameterNames', parameterPath };
+    if (nextLevel) body.nextLevel = true;
+    try {
+      const q = connectionRequested ? '' : qs({ connection_request: '' });
+      const t = await acsFetch(`/devices/${encodeURIComponent(id)}/tasks${q}`, { method: 'POST', body: JSON.stringify(body) });
+      if (!connectionRequested) connectionRequested = true;
+      tasks.push({ ok: true, task: t, request: body });
+    } catch (e: any) {
+      tasks.push({ ok: false, error: e.message, request: body });
+    }
+  }
+  await logAction({ device_id: id, action: 'DISCOVER_PARAMETERS', task_name: 'getParameterNames', payload: { parameterPaths: paths, nextLevel }, result: { tasks: tasks.length, ok: tasks.filter(t=>t.ok).length }, status: tasks.some(t=>t.ok) ? 'QUEUED' : 'FAILED', created_by: (req as any).user?.id });
+  res.json({ ok: true, queued: tasks.filter(t=>t.ok).length, failed: tasks.filter(t=>!t.ok).length, tasks, note: 'Parameter discovery queued. After the CPE responds, reload Full Output/Diagnostics to see discovered parameters and supported paths.' });
 }));
 
 router.post('/devices/:id/refresh', asyncHandler(async (req, res) => {

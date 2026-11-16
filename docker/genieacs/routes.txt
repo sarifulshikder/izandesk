@@ -1,0 +1,2 @@
+# One "DEST via GATEWAY" or "DEST dev IFACE..." per line (CIDR or host). Used by genieacs container for CPE reachability over WG.
+192.168.88.243/32 via 172.18.0.2

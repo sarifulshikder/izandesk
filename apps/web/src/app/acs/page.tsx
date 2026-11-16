@@ -1,11 +1,19 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { apiFetch, getApiBaseUrl } from '@/lib/api';
-import { RefreshCw, Wifi, Server, Power, RotateCcw, Link2, Search, AlertTriangle, CheckCircle2, XCircle, Activity, Settings2, ListChecks, Database, FileCode2, Bug, Play } from 'lucide-react';
+import { apiFetch } from '@/lib/api';
+import { RefreshCw, Wifi, Server, Power, RotateCcw, Link2, Search, AlertTriangle, CheckCircle2, XCircle, Activity, Settings2, ListChecks, Database, FileCode2, Bug, Play, Gauge, Users, Radio, Binary } from 'lucide-react';
 
 function fmtDate(v: any) { if (!v) return '-'; try { return new Date(v).toLocaleString(); } catch { return String(v); } }
+function bytesHuman(n: any) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return n == null || n === '' ? '-' : String(n);
+  const units = ['B','KB','MB','GB','TB'];
+  let i = 0, v = Math.abs(x);
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v >= 10 || i === 0 ? v.toFixed(0) : v.toFixed(2)} ${units[i]}`;
+}
 
 export default function AcsPage() {
   const { token, user } = useAuth();
@@ -20,7 +28,7 @@ export default function AcsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [selected, setSelected] = useState<any>(null);
   const [detail, setDetail] = useState<any>(null);
-  const [tab, setTab] = useState<'overview'|'actions'|'tasks'|'faults'|'catalog'>('overview');
+  const [tab, setTab] = useState<'overview'|'diagnostics'|'raw'|'actions'|'tasks'|'faults'|'catalog'>('overview');
   const [tasks, setTasks] = useState<any[]>([]);
   const [faults, setFaults] = useState<any[]>([]);
   const [local, setLocal] = useState<any>(null);
@@ -29,6 +37,13 @@ export default function AcsPage() {
   const [param, setParam] = useState({ mode: 'get' as 'get'|'set', name: 'InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ExternalIPAddress', value: '', type: 'xsd:string' });
   const [subscribers, setSubscribers] = useState<any[]>([]);
   const [linkSubId, setLinkSubId] = useState('');
+  const [paramSearch, setParamSearch] = useState('');
+  const [flatParams, setFlatParams] = useState<any[] | null>(null);
+  const [flatTotal, setFlatTotal] = useState(0);
+  const [showFullRaw, setShowFullRaw] = useState(false);
+  const [autoPolling, setAutoPolling] = useState(false);
+  const prevStatsRef = useRef<Record<string, { t: number; rx: number; tx: number }>>({});
+  const pollStopRef = useRef(false);
 
   const loadStatus = useCallback(async () => {
     if (!token) return;
@@ -41,19 +56,19 @@ export default function AcsPage() {
     try {
       const r = await apiFetch<any>('/api/acs/devices?limit=200', {}, token);
       setDevices(r.data || []);
-      if (!status) setStatus({ ok: r.ok, configured: r.configured });
     } catch (e:any) { setErr(e.message); }
     finally { setLoading(false); }
-  }, [token, status]);
+  }, [token]);
 
   const loadSubscribers = useCallback(async () => {
     if (!token) return;
     try { const r = await apiFetch<any>('/api/subscribers?limit=500', {}, token).catch(()=>({data:[]})); setSubscribers(r.data || []); } catch {}
   }, [token]);
 
-  const loadDetail = useCallback(async (id: string) => {
+  const loadDetail = useCallback(async (id: string, opts: { keepMsg?: boolean } = {}) => {
     if (!token || !id) return;
     setBusy('detail');
+    if (!opts.keepMsg) { /* keep existing msg/err context */ }
     try {
       const [d, t, f, l] = await Promise.all([
         apiFetch<any>(`/api/acs/devices/${encodeURIComponent(id)}`, {}, token),
@@ -82,9 +97,26 @@ export default function AcsPage() {
     } catch {}
   }, [token]);
 
-  useEffect(() => { if (token) loadStatus(); loadSubscribers(); }, [token, loadStatus, loadSubscribers]);
+  const loadParams = useCallback(async (id: string, search = '') => {
+    if (!token || !id) return;
+    setBusy('params');
+    try {
+      const r = await apiFetch<any>(`/api/acs/devices/${encodeURIComponent(id)}/parameters?search=${encodeURIComponent(search)}&limit=3000`, {}, token);
+      setFlatParams(r.data || []);
+      setFlatTotal(r.total || (r.data || []).length);
+    } catch (e:any) { setErr(e.message); }
+    finally { setBusy(null); }
+  }, [token]);
+
+  useEffect(() => { if (token) { loadStatus(); loadSubscribers(); } }, [token, loadStatus, loadSubscribers]);
   useEffect(() => { if (token) { loadDevices(); loadCatalog(); } }, [token, loadDevices, loadCatalog]);
-  useEffect(() => { if (selected?.id && token) loadDetail(selected.id); }, [selected?.id, token, loadDetail]);
+  useEffect(() => {
+    if (selected?.id && token) {
+      prevStatsRef.current = {};
+      setFlatParams(null); setParamSearch(''); setShowFullRaw(false);
+      loadDetail(selected.id);
+    }
+  }, [selected?.id, token, loadDetail]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -94,7 +126,7 @@ export default function AcsPage() {
 
   const run = async (label: string, fn: () => Promise<any>, refresh = true) => {
     setErr(null); setMsg(null); setBusy(label);
-    try { await fn(); setMsg(`${label} completed/queued.`); if (refresh && selected?.id) await loadDetail(selected.id); if (refresh) await loadDevices(); }
+    try { await fn(); setMsg(`${label} completed/queued.`); if (refresh && selected?.id) await loadDetail(selected.id, { keepMsg: true }); if (refresh) await loadDevices(); }
     catch (e:any) { setErr(e.message); }
     finally { setBusy(null); }
   };
@@ -112,15 +144,95 @@ export default function AcsPage() {
   const deleteTask = (taskId: string) => run('Delete task', async () => { await apiFetch(`/api/acs/tasks/${encodeURIComponent(taskId)}`, { method:'DELETE' }, token!); });
   const deleteFault = (id: string) => run('Delete fault', async () => { await apiFetch(`/api/acs/faults/${encodeURIComponent(id)}`, { method:'DELETE' }, token!); });
 
+  const diagnosticRefresh = (profile: 'basic'|'standard'|'full'|'auto') => selected?.id && run(`Diagnostic refresh (${profile})`, async () => {
+    const r = await apiFetch<any>(`/api/acs/devices/${encodeURIComponent(selected.id)}/diagnostic-refresh`, { method:'POST', body: JSON.stringify({ profile }) }, token!);
+    setMsg(`Queued ${r.queued || 0} diagnostic task(s). ${r.note || ''}`);
+  }, false);
+
+  const discoverParameters = () => selected?.id && run('Discover parameters', async () => {
+    const r = await apiFetch<any>(`/api/acs/devices/${encodeURIComponent(selected.id)}/discover-parameters`, { method:'POST', body: JSON.stringify({ parameterPaths: ['InternetGatewayDevice.', 'Device.'], nextLevel: false }) }, token!);
+    setMsg(`Queued ${r.queued || 0} parameter-discovery task(s). ${r.note || ''}`);
+  }, false);
+
+  const autoDiagnose = async () => {
+    if (!selected?.id || !token) return;
+    setErr(null); setMsg(null); setBusy('Auto diagnose'); pollStopRef.current = false;
+    try {
+      await apiFetch<any>(`/api/acs/devices/${encodeURIComponent(selected.id)}/discover-parameters`, { method:'POST', body: JSON.stringify({ parameterPaths: ['InternetGatewayDevice.', 'Device.'] }) }, token);
+      const r = await apiFetch<any>(`/api/acs/devices/${encodeURIComponent(selected.id)}/diagnostic-refresh`, { method:'POST', body: JSON.stringify({ profile: 'auto' }) }, token);
+      setMsg(`Auto-diagnose started: queued discovery + ${r.queued || 0} refresh task(s). Waiting for CPE response and auto-reloading...`);
+      setAutoPolling(true);
+      const started = Date.now();
+      while (!pollStopRef.current && Date.now() - started < 180000) { // up to 3 minutes
+        await new Promise(res => setTimeout(res, 7000));
+        if (pollStopRef.current) break;
+        try {
+          const [d, t] = await Promise.all([
+            apiFetch<any>(`/api/acs/devices/${encodeURIComponent(selected.id)}`, {}, token),
+            apiFetch<any>(`/api/acs/devices/${encodeURIComponent(selected.id)}/tasks`, {}, token).catch(()=>({data:[]})),
+          ]);
+          setDetail(d);
+          setTasks(t.data || []);
+          if (tab === 'raw') await loadParams(selected.id, paramSearch).catch(()=>{});
+          if (!Array.isArray(t.data) || t.data.length === 0) {
+            setMsg('Auto-diagnose: CPE responded and tasks completed. Latest diagnostics/parameters loaded.');
+            break;
+          }
+          setMsg(`Auto-diagnose running: ${t.data.length} task(s) still queued on GenieACS. Waiting for CPE session...`);
+        } catch {}
+      }
+      if (!pollStopRef.current && Date.now() - started >= 180000) setMsg('Auto-diagnose timed out waiting for CPE response. If tasks remain queued, the router must inform (or be reachable for connection request). Reload live data after it responds.');
+    } catch (e:any) { setErr(e.message); }
+    finally { setBusy(null); setAutoPolling(false); }
+  };
+
+  const stopAutoDiagnose = () => { pollStopRef.current = true; setAutoPolling(false); setMsg('Auto-diagnose polling stopped. You can reload live data manually.'); };
+
+  const reloadLive = async () => {
+    if (!selected?.id) return;
+    await loadDetail(selected.id, { keepMsg: true });
+    if (tab === 'raw' || flatParams !== null) await loadParams(selected.id, paramSearch);
+    setMsg('Reloaded latest device data from GenieACS.');
+  };
+
+  const diagnostics = detail?.diagnostics;
+  const interfacesWithRate = useMemo(() => {
+    const ifaces = diagnostics?.interfaces || [];
+    const now = Date.now();
+    return ifaces.map((it: any) => {
+      const key = it.source_path || it.name;
+      const rx = Number(it.bytes_received);
+      const tx = Number(it.bytes_sent);
+      const prev = prevStatsRef.current[key];
+      let rxRate: number | null = null, txRate: number | null = null;
+      if (prev && Number.isFinite(rx) && Number.isFinite(tx) && now > prev.t) {
+        const dt = (now - prev.t) / 1000;
+        if (dt > 0 && dt < 3600) { rxRate = Math.max(0, (rx - prev.rx) / dt); txRate = Math.max(0, (tx - prev.tx) / dt); }
+      }
+      if (Number.isFinite(rx) && Number.isFinite(tx)) prevStatsRef.current[key] = { t: now, rx, tx };
+      return { ...it, rxRate, txRate };
+    });
+  }, [diagnostics]);
+
   const deviceCount = devices.length;
   const onlineish = devices.filter(d => d.last_inform_at).length;
+
+  const tabs: Array<{id: typeof tab, label: string, icon?: any}> = [
+    { id: 'overview', label: 'Overview', icon: Server },
+    { id: 'diagnostics', label: 'Diagnostics / Live', icon: Gauge },
+    { id: 'raw', label: 'Full Output', icon: Binary },
+    { id: 'actions', label: 'Actions', icon: Settings2 },
+    { id: 'tasks', label: 'Tasks', icon: ListChecks },
+    { id: 'faults', label: 'Faults', icon: Bug },
+    { id: 'catalog', label: 'Catalog', icon: FileCode2 },
+  ];
 
   return (
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><Wifi className="w-6 h-6 text-primary"/>ACS / TR-069 (GenieACS)</h1>
-          <p className="text-sm text-muted-foreground">Manage CPE devices via GenieACS: discovery, Wi-Fi/config tasks, diagnostics actions, and provisioning catalog.</p>
+          <p className="text-sm text-muted-foreground">Manage CPE devices via GenieACS: connected clients, live traffic/stats, Wi-Fi, diagnostics, and full parameter output.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={loadDevices} disabled={loading} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
@@ -171,7 +283,7 @@ export default function AcsPage() {
         </div>
 
         <div className="xl:col-span-2 rounded-2xl border border-border bg-card p-4 min-h-[400px]">
-          {!selected ? <div className="h-full flex items-center justify-center text-sm text-muted-foreground">Select a device to view details and actions.</div> : (
+          {!selected ? <div className="h-full flex items-center justify-center text-sm text-muted-foreground">Select a device to view connected clients, live traffic/stats, diagnostics, and full GenieACS output.</div> : (
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                 <div>
@@ -180,15 +292,15 @@ export default function AcsPage() {
                   <div className="text-xs text-muted-foreground mt-1">Serial: {detail?.summary?.serial_number || selected.serial_number || '-'} • IP: {detail?.summary?.ip_address || selected.ip_address || '-'} • Last inform: {fmtDate(detail?.summary?.last_inform_at || selected.last_inform_at)}</div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={refreshDevice} disabled={!canManage || busy==='Refresh'} className="px-3 py-1.5 rounded-lg border border-border text-xs inline-flex items-center gap-1 disabled:opacity-50"><RotateCcw className="w-3.5 h-3.5"/>Refresh</button>
+                  <button onClick={refreshDevice} disabled={!canManage || busy==='Refresh'} className="px-3 py-1.5 rounded-lg border border-border text-xs inline-flex items-center gap-1 disabled:opacity-50"><RotateCcw className="w-3.5 h-3.5"/>Refresh Object</button>
                   <button onClick={rebootDevice} disabled={!canDanger || busy==='Reboot'} className="px-3 py-1.5 rounded-lg border border-amber-500/30 text-amber-300 text-xs inline-flex items-center gap-1 disabled:opacity-50"><Power className="w-3.5 h-3.5"/>Reboot</button>
                   {String(user?.role)==='SUPER_ADMIN' && <button onClick={factoryReset} disabled={busy==='Factory reset'} className="px-3 py-1.5 rounded-lg border border-red-500/30 text-red-300 text-xs inline-flex items-center gap-1 disabled:opacity-50"><AlertTriangle className="w-3.5 h-3.5"/>Factory Reset</button>}
                 </div>
               </div>
 
               <div className="flex flex-wrap gap-2 text-xs">
-                {(['overview','actions','tasks','faults','catalog'] as const).map(t => (
-                  <button key={t} onClick={()=>setTab(t)} className={`px-3 py-1.5 rounded-lg border font-semibold capitalize ${tab===t?'bg-primary text-primary-foreground border-primary':'border-border hover:bg-muted/40'}`}>{t}</button>
+                {tabs.map(t => (
+                  <button key={t.id} onClick={()=>{ setTab(t.id); if (t.id==='raw' && flatParams===null && selected?.id) loadParams(selected.id, paramSearch); }} className={`px-3 py-1.5 rounded-lg border font-semibold inline-flex items-center gap-1.5 ${tab===t.id?'bg-primary text-primary-foreground border-primary':'border-border hover:bg-muted/40'}`}>{t.icon ? <t.icon className="w-3.5 h-3.5"/> : null}{t.label}</button>
                 ))}
               </div>
 
@@ -204,6 +316,7 @@ export default function AcsPage() {
                       <div className="text-muted-foreground">Software</div><div>{detail?.summary?.software_version || selected.software_version || '-'}</div>
                       <div className="text-muted-foreground">Hardware</div><div>{detail?.summary?.hardware_version || selected.hardware_version || '-'}</div>
                       <div className="text-muted-foreground">Connection URL</div><div className="truncate" title={detail?.summary?.connection_request_url || ''}>{detail?.summary?.connection_request_url || '-'}</div>
+                      <div className="text-muted-foreground">Cached params</div><div>{diagnostics?.parameter_count ?? '-'}</div>
                     </div>
                   </div>
                   <div className="rounded-xl border border-border p-3 space-y-3">
@@ -216,9 +329,125 @@ export default function AcsPage() {
                     <button onClick={linkSubscriber} disabled={!canManage || busy==='Link subscriber'} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50">Save Link</button>
                     {detail?.local?.subscriber_name && <div className="text-xs text-emerald-300">Linked: {detail.local.client_code || ''} {detail.local.subscriber_name}</div>}
                   </div>
-                  <div className="rounded-xl border border-border p-3 lg:col-span-2">
-                    <div className="font-semibold text-sm mb-2">Raw Device (truncated preview)</div>
-                    <pre className="text-xs bg-muted/30 border border-border rounded-lg p-3 overflow-auto max-h-64 whitespace-pre-wrap break-all">{JSON.stringify(detail?.data ? Object.fromEntries(Object.entries(detail.data).slice(0, 40)) : selected, null, 2)}</pre>
+                  <div className="rounded-xl border border-border p-3 lg:col-span-2 space-y-2">
+                    <div className="font-semibold text-sm flex items-center gap-2"><Gauge className="w-4 h-4"/>Troubleshooting Snapshot (from cached GenieACS data)</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                      <div className="p-2 rounded-lg bg-muted/30 border border-border"><div className="text-muted-foreground">Connected hosts</div><div className="font-bold text-base">{diagnostics?.counts?.hosts ?? 0}</div></div>
+                      <div className="p-2 rounded-lg bg-muted/30 border border-border"><div className="text-muted-foreground">Wi-Fi associations</div><div className="font-bold text-base">{diagnostics?.counts?.wifi_associations ?? 0}</div></div>
+                      <div className="p-2 rounded-lg bg-muted/30 border border-border"><div className="text-muted-foreground">Wi-Fi radios</div><div className="font-bold text-base">{diagnostics?.counts?.wifi_radios ?? 0}</div></div>
+                      <div className="p-2 rounded-lg bg-muted/30 border border-border"><div className="text-muted-foreground">Interfaces</div><div className="font-bold text-base">{(diagnostics?.interfaces || []).length}</div></div>
+                    </div>
+                    <div className="text-xs text-muted-foreground">For live/complete troubleshooting (connected devices, traffic counters, signal), open <b>Diagnostics / Live</b> and run a diagnostic refresh, then reload live data after the CPE responds.</div>
+                  </div>
+                </div>
+              )}
+
+              {tab==='diagnostics' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <div className="font-semibold flex items-center gap-2"><Gauge className="w-4 h-4"/>Subscriber Router Diagnostics (GenieACS)</div>
+                      <div className="text-xs text-muted-foreground">Connected devices, Wi-Fi associations, traffic counters, and potential issues. TR-069 data is polled/cached (not a continuous stream); auto-diagnose queues discovery+refresh and waits for CPE response.</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {!autoPolling ? (
+                        <button onClick={autoDiagnose} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-50"><Play className="w-3.5 h-3.5"/>Auto Diagnose (Full)</button>
+                      ) : (
+                        <button onClick={stopAutoDiagnose} className="px-2.5 py-1.5 rounded-lg border border-amber-500/40 text-amber-300 text-xs font-semibold">Stop Auto</button>
+                      )}
+                      <button onClick={discoverParameters} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-50">Discover Parameters</button>
+                      <button onClick={()=>diagnosticRefresh('basic')} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-50">Refresh Basic</button>
+                      <button onClick={()=>diagnosticRefresh('standard')} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold disabled:opacity-50">Refresh Hosts/Wi-Fi/Stats</button>
+                      <button onClick={()=>diagnosticRefresh('auto')} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-50">Refresh TR-098+TR-181</button>
+                      <button onClick={reloadLive} disabled={busy==='detail' || autoPolling} className="px-2.5 py-1.5 rounded-lg border border-border bg-card text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-50"><RefreshCw className="w-3.5 h-3.5"/>Reload Live Data</button>
+                    </div>
+                  </div>
+
+                  {(diagnostics?.issues || []).length > 0 && (
+                    <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs space-y-1">
+                      <div className="font-semibold text-amber-200 flex items-center gap-2"><AlertTriangle className="w-4 h-4"/>Potential issues / notes</div>
+                      {(diagnostics.issues || []).map((it: string, i: number) => <div key={i} className="text-amber-100/90">• {it}</div>)}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="rounded-xl border border-border p-3">
+                      <div className="font-semibold text-sm flex items-center gap-2 mb-2"><Users className="w-4 h-4"/>Connected Clients / Hosts ({diagnostics?.counts?.hosts ?? 0})</div>
+                      <div className="overflow-auto max-h-64 border border-border/60 rounded-lg">
+                        <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">Hostname</th><th className="text-left p-2">IP</th><th className="text-left p-2">MAC</th><th className="text-left p-2">Interface</th><th className="text-left p-2">Active</th></tr></thead>
+                        <tbody>{(diagnostics?.hosts || []).length ? (diagnostics.hosts || []).map((h:any,i:number)=>(
+                          <tr key={i} className="border-t border-border/60"><td className="p-2">{h.hostname || '-'}</td><td className="p-2 font-mono">{h.ip || '-'}</td><td className="p-2 font-mono">{h.mac || '-'}</td><td className="p-2">{h.interface || '-'}</td><td className="p-2">{String(h.active ?? '-')}</td></tr>
+                        )) : <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No host data cached. Run "Refresh Hosts/Wi-Fi/Stats" then reload.</td></tr>}</tbody></table>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-border p-3">
+                      <div className="font-semibold text-sm flex items-center gap-2 mb-2"><Wifi className="w-4 h-4"/>Wi-Fi Associated Devices ({diagnostics?.counts?.wifi_associations ?? 0})</div>
+                      <div className="overflow-auto max-h-64 border border-border/60 rounded-lg">
+                        <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">SSID</th><th className="text-left p-2">MAC</th><th className="text-left p-2">IP</th><th className="text-left p-2">Signal</th><th className="text-left p-2">Rate</th></tr></thead>
+                        <tbody>{(diagnostics?.wifi_associations || []).length ? (diagnostics.wifi_associations || []).map((w:any,i:number)=>(
+                          <tr key={i} className="border-t border-border/60"><td className="p-2">{w.ssid || '-'} {w.wlan_index ? `(WLAN ${w.wlan_index})` : ''}</td><td className="p-2 font-mono">{w.mac || '-'}</td><td className="p-2 font-mono">{w.ip || '-'}</td><td className="p-2">{w.signal_strength ?? '-'}</td><td className="p-2">{w.tx_rate ?? w.rx_rate ?? '-'}</td></tr>
+                        )) : <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No Wi-Fi association data cached (or not exposed by this CPE). Refresh Hosts/Wi-Fi/Stats.</td></tr>}</tbody></table>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border p-3">
+                    <div className="font-semibold text-sm flex items-center gap-2 mb-2"><Activity className="w-4 h-4"/>Interface / Traffic Stats (bandwidth usage counters)</div>
+                    <div className="text-xs text-muted-foreground mb-2">Counters are from GenieACS cached values. "Live rate" is estimated between reloads in this session (bytes delta / time). Run "Refresh Hosts/Wi-Fi/Stats" then "Reload Live Data" twice (a few seconds apart) to estimate current throughput.</div>
+                    <div className="overflow-auto border border-border/60 rounded-lg">
+                      <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">Interface</th><th className="text-left p-2">Status/IP</th><th className="text-left p-2">RX (total)</th><th className="text-left p-2">TX (total)</th><th className="text-left p-2">RX rate</th><th className="text-left p-2">TX rate</th><th className="text-left p-2">Errors</th></tr></thead>
+                      <tbody>{interfacesWithRate.length ? interfacesWithRate.map((it:any,i:number)=>(
+                        <tr key={i} className="border-t border-border/60"><td className="p-2 font-medium">{it.name}</td><td className="p-2">{it.connection_status || '-'} {it.external_ip ? `• ${it.external_ip}` : ''}</td><td className="p-2">{bytesHuman(it.bytes_received)}</td><td className="p-2">{bytesHuman(it.bytes_sent)}</td><td className="p-2">{it.rxRate != null ? `${bytesHuman(it.rxRate)}/s` : '-'}</td><td className="p-2">{it.txRate != null ? `${bytesHuman(it.txRate)}/s` : '-'}</td><td className="p-2">{(Number(it.errors_received||0)+Number(it.errors_sent||0)) || 0}</td></tr>
+                      )) : <tr><td colSpan={7} className="p-4 text-center text-muted-foreground">No interface/traffic stats cached. Run diagnostic refresh and reload.</td></tr>}</tbody></table>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border p-3">
+                    <div className="font-semibold text-sm flex items-center gap-2 mb-2"><Radio className="w-4 h-4"/>Wi-Fi Radios / Signal Info</div>
+                    <div className="overflow-auto border border-border/60 rounded-lg">
+                      <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">WLAN</th><th className="text-left p-2">SSID</th><th className="text-left p-2">Enabled</th><th className="text-left p-2">Channel</th><th className="text-left p-2">Standard</th><th className="text-left p-2">Associations</th><th className="text-left p-2">TX Power</th></tr></thead>
+                      <tbody>{(diagnostics?.wifi_radios || []).length ? (diagnostics.wifi_radios || []).map((w:any,i:number)=>(
+                        <tr key={i} className="border-t border-border/60"><td className="p-2">{w.index}</td><td className="p-2">{w.ssid || '-'}</td><td className="p-2">{String(w.enabled ?? '-')}</td><td className="p-2">{w.channel ?? '-'}{w.auto_channel ? ' (auto)' : ''}</td><td className="p-2">{w.standard || '-'}</td><td className="p-2">{w.total_associations ?? '-'}</td><td className="p-2">{w.transmit_power ?? '-'}</td></tr>
+                      )) : <tr><td colSpan={7} className="p-4 text-center text-muted-foreground">No Wi-Fi radio data cached. Run diagnostic refresh and reload.</td></tr>}</tbody></table>
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-2">Per-client RSSI/signal is shown in "Wi-Fi Associated Devices" when the CPE exposes it (vendor/model/firmware dependent). Optical/DSL signal parameters (if applicable) appear in the Full Output parameter view.</div>
+                  </div>
+                </div>
+              )}
+
+              {tab==='raw' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <div className="font-semibold flex items-center gap-2"><Binary className="w-4 h-4"/>Full GenieACS Output (Device Parameters)</div>
+                      <div className="text-xs text-muted-foreground">Complete cached device data/parameters from GenieACS for this CPE. Use this to inspect any TR-069 parameter (Hosts, Wi-Fi, WAN, signal, etc.).</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={discoverParameters} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-50">Discover Parameters</button>
+                      <button onClick={()=>diagnosticRefresh('full')} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-50">Refresh Full Tree</button>
+                      <button onClick={()=>selected?.id && loadParams(selected.id, paramSearch)} disabled={busy==='params'} className="px-2.5 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold disabled:opacity-50 inline-flex items-center gap-1"><RefreshCw className="w-3.5 h-3.5"/>Load/Reload Parameters</button>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <input className="flex-1 p-2.5 rounded-xl border border-border bg-card text-sm" placeholder="Search parameter path or value (e.g. Hosts, WLAN, RSSI, Bytes, Signal)" value={paramSearch} onChange={e=>setParamSearch(e.target.value)} />
+                    <button onClick={()=>selected?.id && loadParams(selected.id, paramSearch)} disabled={busy==='params'} className="px-3 py-2 rounded-xl border border-border bg-card text-sm">Search</button>
+                  </div>
+
+                  <div className="rounded-xl border border-border p-3">
+                    <div className="flex items-center justify-between mb-2"><div className="font-semibold text-sm">Flattened Parameters {flatParams ? `(${flatParams.length}${flatTotal>flatParams.length?` of ${flatTotal}`:''})` : ''}</div><div className="text-xs text-muted-foreground">From GenieACS cached device document</div></div>
+                    <div className="overflow-auto max-h-[420px] border border-border/60 rounded-lg">
+                      <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground sticky top-0"><tr><th className="text-left p-2">Path</th><th className="text-left p-2">Value</th><th className="text-left p-2">Type</th><th className="text-left p-2">Timestamp</th></tr></thead>
+                      <tbody>{busy==='params' ? <tr><td colSpan={4} className="p-4 text-center text-muted-foreground">Loading parameters...</td></tr> :
+                        (flatParams && flatParams.length) ? flatParams.map((p:any,i:number)=>(
+                          <tr key={i} className="border-t border-border/60 align-top"><td className="p-2 font-mono break-all">{p.path}</td><td className="p-2 break-all max-w-[260px]">{typeof p.value === 'object' ? JSON.stringify(p.value) : String(p.value ?? '')}</td><td className="p-2 whitespace-nowrap">{p.type || (p.object ? 'object' : '')}</td><td className="p-2 whitespace-nowrap">{fmtDate(p.timestamp)}</td></tr>
+                        )) : <tr><td colSpan={4} className="p-4 text-center text-muted-foreground">No parameters loaded yet. Click "Load/Reload Parameters" (and run "Refresh Full Tree" if data is missing, then reload after CPE responds).</td></tr>}</tbody></table>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border p-3">
+                    <div className="flex items-center justify-between mb-2"><div className="font-semibold text-sm">Raw GenieACS Device JSON</div><button onClick={()=>setShowFullRaw(v=>!v)} className="text-xs px-2 py-1 rounded border border-border">{showFullRaw ? 'Show less' : 'Show full JSON'}</button></div>
+                    <pre className="text-xs bg-muted/30 border border-border rounded-lg p-3 overflow-auto max-h-[420px] whitespace-pre-wrap break-all">{JSON.stringify(detail?.data || {}, null, 2).slice(0, showFullRaw ? undefined : 20000)}{!showFullRaw && JSON.stringify(detail?.data || {}, null, 2).length > 20000 ? '\n\n... (truncated, click "Show full JSON")' : ''}</pre>
                   </div>
                 </div>
               )}
