@@ -37,7 +37,7 @@ export function SystemStatusCard({ health, apiHealth, diag }: { health: any; api
   ];
 
   return (
-    <div className="p-5 rounded-2xl bg-card border border-border/80 shadow-sm flex flex-col h-full">
+    <div className="card p-4 h-full">
       <div className="flex items-center justify-between mb-3 gap-2">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 shrink-0"><Server className="w-4 h-4" /></div>

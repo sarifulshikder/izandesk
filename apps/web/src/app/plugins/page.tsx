@@ -65,25 +65,25 @@ export default function PluginsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+      <div className="page-header flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Plugin Manager</h1>
+          <h1 className="page-title">Plugin Manager</h1>
           <p className="text-sm text-muted-foreground">Hot-reloadable drivers organized by category. Open a plugin to view details and configure it (e.g. Payment Gateways → bKash/Nagad/Rocket/Stripe/PayPal).</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
-          {canReload && <button onClick={() => reload()} disabled={!!reloading} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><RotateCcw className="w-4 h-4"/>{reloading==='all'?'Reloading...':'Reload All'}</button>}
+        <div className="page-actions flex gap-2">
+          <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
+          {canReload && <button onClick={() => reload()} disabled={!!reloading} className="btn btn-primary"><RotateCcw className="w-4 h-4"/>{reloading==='all'?'Reloading...':'Reload All'}</button>}
         </div>
       </div>
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
-      {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{msg}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
+      {msg && <div className="alert alert-success">{msg}</div>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         {orderedTypes.map((t) => {
           const meta = TYPE_META[t] || { label: t, icon: Plug, desc: 'Plugin category' };
           const Icon = meta.icon;
           return (
-            <div key={t} className="p-4 rounded-2xl bg-card border border-border/80">
+            <div key={t} className="card p-4">
               <div className="flex items-center gap-2 text-sm font-bold"><Icon className="w-4 h-4 text-primary"/>{meta.label}</div>
               <div className="mt-1 text-2xl font-black">{(pluginsByType[t] || []).length}</div>
               <div className="text-xs text-muted-foreground mt-1">{meta.desc}</div>
@@ -93,37 +93,37 @@ export default function PluginsPage() {
       </div>
 
       {/* Payment Gateways - prominent section */}
-      <div className="rounded-2xl border border-border bg-card overflow-hidden">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+      <div className="card overflow-hidden">
+        <div className="card-header">
           <div>
             <div className="font-semibold flex items-center gap-2"><CreditCard className="w-4 h-4 text-primary"/>Payment Gateways <span className="text-xs text-muted-foreground font-normal">(PLUGIN CATEGORY: PAYMENT_GATEWAY)</span></div>
             <div className="text-xs text-muted-foreground">Select a gateway to open its configuration page (credentials, mode, webhook, enable/disable).</div>
           </div>
         </div>
-        <div className="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="card-body grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {paymentPlugins.map((p: AnyObj) => {
             const gw = p.gateway || String(p.id || '').replace(/^payment-/, '');
             const cfg = p.gatewayConfig || (data.paymentGateways || []).find((g:any)=>g.gateway===gw) || null;
             return (
-              <div key={p.id} className="rounded-xl border border-border/80 bg-muted/20 p-4 space-y-3">
+              <div key={p.id} className="card card-body-sm space-y-3">
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <div className="font-semibold text-base">{gatewayLabel(gw)}</div>
                     <div className="text-xs text-muted-foreground font-mono">{p.id}</div>
                     <div className="text-xs text-muted-foreground mt-1">{p.title || p.name}</div>
                   </div>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full border ${p.status==='OK'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-red-500/10 text-red-400 border-red-500/20'}`}>{p.status || 'UNKNOWN'}</span>
+                  <span className={`badge ${p.status==='OK'?'badge-success':'badge-danger'}`}>{p.status || 'UNKNOWN'}</span>
                 </div>
                 <div className="text-xs text-muted-foreground">{p.description}</div>
                 <div className="flex flex-wrap gap-2 text-[11px]">
-                  <span className={`px-2 py-1 rounded-lg border ${cfg?.enabled ? 'border-emerald-500/30 text-emerald-300 bg-emerald-500/10' : 'border-border text-muted-foreground'}`}>{cfg?.enabled ? 'Enabled' : 'Disabled'}</span>
-                  <span className="px-2 py-1 rounded-lg border border-border">{cfg?.mode || 'SANDBOX'}</span>
-                  <span className={`px-2 py-1 rounded-lg border inline-flex items-center gap-1 ${cfg?.has_credentials ? 'border-emerald-500/30 text-emerald-300' : 'border-border text-muted-foreground'}`}>{cfg?.has_credentials ? <CheckCircle2 className="w-3 h-3"/> : <XCircle className="w-3 h-3"/>}Credentials</span>
-                  <span className={`px-2 py-1 rounded-lg border inline-flex items-center gap-1 ${cfg?.has_webhook_secret ? 'border-emerald-500/30 text-emerald-300' : 'border-border text-muted-foreground'}`}>{cfg?.has_webhook_secret ? <CheckCircle2 className="w-3 h-3"/> : <XCircle className="w-3 h-3"/>}Webhook secret</span>
+                  <span className={`badge ${cfg?.enabled ? 'badge-success' : 'badge-secondary'}`}>{cfg?.enabled ? 'Enabled' : 'Disabled'}</span>
+                  <span className="badge badge-outline">{cfg?.mode || 'SANDBOX'}</span>
+                  <span className={`badge ${cfg?.has_credentials ? 'badge-success' : 'badge-secondary'}`}>{cfg?.has_credentials ? <CheckCircle2 className="w-3 h-3"/> : <XCircle className="w-3 h-3"/>}Credentials</span>
+                  <span className={`badge ${cfg?.has_webhook_secret ? 'badge-success' : 'badge-secondary'}`}>{cfg?.has_webhook_secret ? <CheckCircle2 className="w-3 h-3"/> : <XCircle className="w-3 h-3"/>}Webhook secret</span>
                 </div>
                 <div className="flex gap-2 pt-1">
-                  <Link href={`/plugins/payment-gateways/${gw}`} className="flex-1 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center justify-center gap-2"><Settings className="w-4 h-4"/>Open Configuration</Link>
-                  {canReload && <button onClick={() => reload(p.id)} disabled={!!reloading} className="px-3 py-2 rounded-xl border border-border text-sm inline-flex items-center gap-2"><RotateCcw className="w-4 h-4"/></button>}
+                  <Link href={`/plugins/payment-gateways/${gw}`} className="btn btn-primary flex-1"><Settings className="w-4 h-4"/>Open Configuration</Link>
+                  {canReload && <button onClick={() => reload(p.id)} disabled={!!reloading} className="btn btn-outline btn-icon"><RotateCcw className="w-4 h-4"/></button>}
                 </div>
               </div>
             );
@@ -138,8 +138,8 @@ export default function PluginsPage() {
         const Icon = meta.icon;
         const items = pluginsByType[type] || [];
         return (
-          <div key={type} className="rounded-2xl border border-border bg-card overflow-hidden">
-            <div className="px-4 py-3 border-b border-border">
+          <div key={type} className="card overflow-hidden">
+            <div className="card-header">
               <div className="font-semibold flex items-center gap-2"><Icon className="w-4 h-4 text-primary"/>{meta.label} <span className="text-xs text-muted-foreground font-normal">({type})</span></div>
               <div className="text-xs text-muted-foreground">{meta.desc}</div>
             </div>
@@ -149,13 +149,13 @@ export default function PluginsPage() {
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="font-semibold">{p.title || p.name || p.id}</div>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/40 font-mono">{p.id}</span>
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full border ${p.status==='OK'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-red-500/10 text-red-400 border-red-500/20'}`}>{p.status || 'UNKNOWN'}</span>
+                      <span className="badge badge-secondary font-mono">{p.id}</span>
+                      <span className={`badge ${p.status==='OK'?'badge-success':'badge-danger'}`}>{p.status || 'UNKNOWN'}</span>
                       {p.version && <span className="text-[10px] text-muted-foreground">v{p.version}</span>}
                     </div>
                     <div className="text-xs text-muted-foreground mt-1">{p.description || 'No description'}</div>
                   </div>
-                  {canReload && <button onClick={() => reload(p.id)} disabled={!!reloading} className="px-3 py-1.5 rounded-lg border border-border text-xs inline-flex items-center gap-1"><RotateCcw className="w-3 h-3"/>{reloading===p.id?'...':'Reload'}</button>}
+                  {canReload && <button onClick={() => reload(p.id)} disabled={!!reloading} className="btn btn-outline btn-sm"><RotateCcw className="w-3 h-3"/>{reloading===p.id?'...':'Reload'}</button>}
                 </div>
               ))}
               {!items.length && <div className="p-6 text-sm text-muted-foreground">No plugins loaded in this category.</div>}

@@ -470,11 +470,11 @@ export default function SubscribersPage() {
   };
   const statusBadge = (s: string) => {
     const v = String(s || '').toUpperCase();
-    if (v === 'ACTIVE') return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-    if (v === 'EXPIRED') return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
-    if (v === 'SUSPENDED') return 'bg-red-500/10 text-red-400 border-red-500/20';
-    if (v === 'PENDING') return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
-    return 'bg-muted/40 text-muted-foreground border-border';
+    if (v === 'ACTIVE') return 'badge-success';
+    if (v === 'EXPIRED') return 'badge-warning';
+    if (v === 'SUSPENDED') return 'badge-danger';
+    if (v === 'PENDING') return 'badge-info';
+    return 'badge-secondary';
   };
 
   const closeImportModal = () => {
@@ -486,9 +486,9 @@ export default function SubscribersPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Subscribers (BSS Core)</h1>
+          <h1 className="page-title">Subscribers (BSS Core)</h1>
           <p className="text-sm text-muted-foreground">Wizard onboarding, PPPoE profiles, map-based location, auto address fill, KYC & topology — {total} total</p>
           <div className="flex flex-wrap gap-1.5 mt-2">
             {[
@@ -498,20 +498,20 @@ export default function SubscribersPage() {
               ['SUSPENDED', 'Suspended'],
               ['PENDING', 'Pending'],
             ].map(([k, label]) => (
-              <button key={k || 'all'} onClick={() => setStatus(k)} className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${status === k ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border hover:bg-muted/50 text-foreground'}`}>{label}</button>
+              <button key={k || 'all'} onClick={() => setStatus(k)} className={`filter-chip ${status === k ? 'active' : ''}`}>{label}</button>
             ))}
-            <Link href="/gis" className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-border bg-card hover:bg-muted/50 text-foreground inline-flex items-center gap-1"><MapPin className="w-3.5 h-3.5"/>Client Locations (GIS)</Link>
-            <button onClick={() => setClientView(v => v === 'detailed' ? 'compact' : 'detailed')} className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${clientView === 'detailed' ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border hover:bg-muted/50 text-foreground'}`}>All Client Info</button>
+            <Link href="/gis" className="btn btn-outline btn-sm"><MapPin className="w-3.5 h-3.5"/>Client Locations (GIS)</Link>
+            <button onClick={() => setClientView(v => v === 'detailed' ? 'compact' : 'detailed')} className={`filter-chip ${clientView === 'detailed' ? 'active' : ''}`}>All Client Info</button>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
-          <button onClick={exportCsv} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Download className="w-4 h-4"/>Export CSV</button>
-          <button onClick={()=>{ setShowImport(true); setImportMode('file'); resetMtImport(); }} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><UploadIcon className="w-4 h-4"/>Import</button>
+          <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
+          <button onClick={exportCsv} className="btn btn-outline"><Download className="w-4 h-4"/>Export CSV</button>
+          <button onClick={()=>{ setShowImport(true); setImportMode('file'); resetMtImport(); }} className="btn btn-outline"><UploadIcon className="w-4 h-4"/>Import</button>
           {selectedIds.length > 0 && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-amber-500/30 bg-amber-500/5">
               <span className="text-xs text-amber-400">{selectedIds.length} selected</span>
-              <select value={batchAction} onChange={e=>setBatchAction(e.target.value)} className="px-2 py-1 rounded-lg bg-card border border-border text-xs text-foreground">
+              <select value={batchAction} onChange={e=>setBatchAction(e.target.value)} className="btn btn-outline btn-sm">
                 <option value="">Action...</option>
                 <option value="activate">Activate</option>
                 <option value="suspend">Suspend</option>
@@ -521,43 +521,43 @@ export default function SubscribersPage() {
                 <option value="set_reseller">Set Reseller</option>
                 <option value="delete">Delete</option>
               </select>
-              <button onClick={handleBatchAction} disabled={!batchAction} className="px-2 py-1.5 rounded-lg bg-amber-500 text-amber-foreground text-xs font-semibold">Apply</button>
+              <button onClick={handleBatchAction} disabled={!batchAction} className="btn btn-warning btn-sm">Apply</button>
               <button onClick={clearSelection} className="p-1.5 rounded-lg hover:bg-muted"><X className="w-3.5 h-3.5"/></button>
             </div>
           )}
-          <button onClick={openCreate} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Subscriber</button>
+          <button onClick={openCreate} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Subscriber</button>
         </div>
       </div>
 
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <div className="p-4 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground">Total (all)</div><div className="text-xl font-black mt-1">{total}</div></div>
-        <div className="p-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5"><div className="text-xs text-emerald-300/80">Active (loaded)</div><div className="text-xl font-black mt-1 text-emerald-400">{counts.active}</div></div>
-        <div className="p-4 rounded-2xl border border-amber-500/20 bg-amber-500/5"><div className="text-xs text-amber-300/80">Expired (loaded)</div><div className="text-xl font-black mt-1 text-amber-400">{counts.expired}</div></div>
-        <div className="p-4 rounded-2xl border border-red-500/20 bg-red-500/5"><div className="text-xs text-red-300/80">Suspended (loaded)</div><div className="text-xl font-black mt-1 text-red-400">{counts.suspended}</div></div>
-        <div className="p-4 rounded-2xl border border-blue-500/20 bg-blue-500/5"><div className="text-xs text-blue-300/80">Pending (loaded)</div><div className="text-xl font-black mt-1 text-blue-400">{counts.pending}</div></div>
+        <div className="card p-4"><div className="text-xs text-muted-foreground">Total (all)</div><div className="text-xl font-black mt-1">{total}</div></div>
+        <div className="card p-4 border-success/30"><div className="text-xs text-emerald-300/80">Active (loaded)</div><div className="text-xl font-black mt-1 text-emerald-400">{counts.active}</div></div>
+        <div className="card p-4 border-warning/30"><div className="text-xs text-amber-300/80">Expired (loaded)</div><div className="text-xl font-black mt-1 text-amber-400">{counts.expired}</div></div>
+        <div className="card p-4 border-danger/30"><div className="text-xs text-red-300/80">Suspended (loaded)</div><div className="text-xl font-black mt-1 text-red-400">{counts.suspended}</div></div>
+        <div className="card p-4 border-info/30"><div className="text-xs text-blue-300/80">Pending (loaded)</div><div className="text-xl font-black mt-1 text-blue-400">{counts.pending}</div></div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <div className="md:col-span-2 relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"/>
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name, client code, username, phone, email, MAC, IP..." className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50"/>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name, client code, username, phone, email, MAC, IP..." className="form-control w-full pl-9"/>
         </div>
-        <select value={status} onChange={e=>setStatus(e.target.value)} className="px-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground">
+        <select value={status} onChange={e=>setStatus(e.target.value)} className="btn btn-outline">
           <option value="">All Statuses</option>
           {['PENDING','ACTIVE','SUSPENDED','EXPIRED','TERMINATED'].map(s=><option key={s} value={s}>{s}</option>)}
         </select>
-        <select value={type} onChange={e=>setType(e.target.value)} className="px-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground">
+        <select value={type} onChange={e=>setType(e.target.value)} className="btn btn-outline">
           <option value="">All Types</option>
           {['HOME','CORPORATE','HOTSPOT'].map(s=><option key={s} value={s}>{s}</option>)}
         </select>
       </div>
 
       <div className={`grid grid-cols-1 ${clientView === 'detailed' ? '' : 'xl:grid-cols-3'} gap-5`}>
-        <div className={`${clientView === 'detailed' ? '' : 'xl:col-span-2'} rounded-2xl border border-border bg-card overflow-hidden`}>
-          <div className="overflow-auto">
-            <table className="w-full text-sm">
+        <div className={`${clientView === 'detailed' ? '' : 'xl:col-span-2'} card overflow-hidden`}>
+          <div className="table-wrap">
+            <table className="table table-hover text-sm">
               <thead className="bg-muted/40 text-muted-foreground text-xs uppercase">
                 <tr>
                   <th className="text-center px-4 py-3 w-10"><input type="checkbox" checked={selectedIds.length === rows.length && rows.length > 0} onChange={selectedIds.length === rows.length ? clearSelection : selectAll} className="w-4 h-4"/></th>
@@ -612,7 +612,7 @@ export default function SubscribersPage() {
                       <div className="text-xs">{[r.area_name, r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || `${r.area_name_db || r.area_name || '-'}`}</div>
                       <div className="text-xs text-muted-foreground">{r.distribution_box_name || r.distribution_box_code || '-'} {r.latitude ? '• 📍' : ''}</div>
                     </td>
-                    <td className="px-4 py-3"><div className="flex flex-col gap-1 items-start"><span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${statusBadge(r.status)}`}>{r.status}</span>{r.fup_exceeded && <span className="text-[10px] px-2 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold">FUP Throttled</span>}</div></td>
+                    <td className="px-4 py-3"><div className="flex flex-col gap-1 items-start"><span className={`badge ${statusBadge(r.status)}`}>{r.status}</span>{r.fup_exceeded && <span className="badge badge-warning">FUP Throttled</span>}</div></td>
                     <td className="px-4 py-3 text-right" onClick={e=>e.stopPropagation()}>
                       <Link href={`/subscribers/${r.id}/live`} onClick={e=>e.stopPropagation()} className="p-2 rounded-lg hover:bg-emerald-500/10 text-emerald-400 inline-flex" title="Open Live Dashboard"><Activity className="w-4 h-4"/></Link>
                       <button onClick={(e)=>{e.stopPropagation();openEdit(r)}} className="p-2 rounded-lg hover:bg-muted" title="Edit"><Pencil className="w-4 h-4"/></button>
@@ -625,7 +625,7 @@ export default function SubscribersPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-4 space-y-4">
+        <div className="card p-4 space-y-4">
           {!detail ? (
             <div className="text-sm text-muted-foreground py-16 text-center border border-dashed border-border rounded-xl">Select a subscriber to view profile, provisioning, location and KYC documents.</div>
           ) : (
@@ -635,9 +635,9 @@ export default function SubscribersPage() {
                   <div className="font-bold text-foreground flex items-center gap-2"><User className="w-4 h-4 text-primary"/><span className="truncate">{detail.full_name}</span></div>
                   <div className="text-xs font-mono text-primary mt-0.5">{detail.client_code}</div>
                   <div className="flex flex-wrap items-center gap-2 mt-2">
-                    <span className={`text-[11px] px-2 py-0.5 rounded-full border font-semibold ${statusBadge(detail.status)}`}>{detail.status}</span>{detail.fup_exceeded && <span className="text-[11px] px-2 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold">FUP Throttled</span>}
-                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/30">{detail.connection_type || '-'}</span>
-                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/30">{detail.provisioning_mode === 'ROUTER' ? 'ROUTER' : 'RADIUS'}</span>
+                    <span className={`badge ${statusBadge(detail.status)}`}>{detail.status}</span>{detail.fup_exceeded && <span className="badge badge-warning">FUP Throttled</span>}
+                    <span className="badge badge-secondary">{detail.connection_type || '-'}</span>
+                    <span className="badge badge-secondary">{detail.provisioning_mode === 'ROUTER' ? 'ROUTER' : 'RADIUS'}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
@@ -696,7 +696,7 @@ export default function SubscribersPage() {
                   <div className="pt-2 border-t border-border">
                     <div className="font-semibold text-sm mb-2">FUP / Quota Enforcement</div>
                     <div className="text-xs text-muted-foreground mb-2 space-y-1">
-                      <div className="flex flex-wrap items-center gap-2"><span>Status: {detail.fup_exceeded ? <span className="text-amber-400 font-semibold">Throttled (FUP enforced)</span> : <span className="text-emerald-400">Not throttled</span>}{detail.fup_applied_at ? ` • applied ${new Date(detail.fup_applied_at).toLocaleString()}` : ''}</span>{detail.fup_exempt && <span className="text-[10px] px-2 py-0.5 rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-300 font-semibold">EXEMPT</span>}</div>
+                      <div className="flex flex-wrap items-center gap-2"><span>Status: {detail.fup_exceeded ? <span className="text-amber-400 font-semibold">Throttled (FUP enforced)</span> : <span className="text-emerald-400">Not throttled</span>}{detail.fup_applied_at ? ` • applied ${new Date(detail.fup_applied_at).toLocaleString()}` : ''}</span>{detail.fup_exempt && <span className="badge badge-purple">EXEMPT</span>}</div>
                       {detail.quota ? (
                         <div>
                           <div>Monthly usage: {Number(detail.quota.used_bytes||0) > 1e9 ? (Number(detail.quota.used_bytes)/1e9).toFixed(2)+' GB' : Number(detail.quota.used_bytes||0) > 1e6 ? (Number(detail.quota.used_bytes)/1e6).toFixed(2)+' MB' : `${Number(detail.quota.used_bytes||0)} B`} of {Number(detail.quota.cap_gb)} GB ({Number(detail.quota.percent||0).toFixed(2)}%) • {detail.quota.over_cap ? <span className="text-red-400">Over cap</span> : <span className="text-emerald-400">Within cap</span>}{detail.quota.fup_speed_mbps ? ` • FUP ${detail.quota.fup_speed_mbps} Mbps` : ''}</div>
@@ -737,7 +737,7 @@ export default function SubscribersPage() {
                     <div className="mt-3 p-3 rounded-xl bg-muted/30 border border-border space-y-2">
                       <div className="text-xs font-semibold flex items-center gap-2"><Upload className="w-3.5 h-3.5"/>Upload KYC</div>
                       <div className="flex gap-2">
-                        <select id="kyc-type" className="px-2 py-1.5 rounded-lg bg-card border border-border text-xs text-foreground" defaultValue="NID">{['NID','PASSPORT','CONTRACT','PHOTO','OTHER'].map(t=><option key={t} value={t}>{t}</option>)}</select>
+                        <select id="kyc-type" className="btn btn-outline btn-sm" defaultValue="NID">{['NID','PASSPORT','CONTRACT','PHOTO','OTHER'].map(t=><option key={t} value={t}>{t}</option>)}</select>
                         <input type="file" className="text-xs flex-1" onChange={e=>{ const f=e.target.files?.[0]; const t=(document.getElementById('kyc-type') as HTMLSelectElement)?.value || 'OTHER'; if(f){ uploadKyc(f,t); e.currentTarget.value=''; } }} disabled={kycUploading} />
                       </div>
                       {kycUploading && <div className="text-xs text-muted-foreground">Uploading...</div>}
@@ -750,7 +750,7 @@ export default function SubscribersPage() {
                 <div className="pt-2 space-y-4">
                   <div className="flex items-center justify-between">
                     <div className="font-semibold text-sm flex items-center gap-2"><Package className="w-4 h-4 text-primary"/>Assigned Equipment</div>
-                    <button onClick={() => setShowEquipModal(true)} className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5"/>Assign Equipment</button>
+                    <button onClick={() => setShowEquipModal(true)} className="btn btn-primary btn-sm inline-flex items-center gap-1"><Plus className="w-3.5 h-3.5"/>Assign Equipment</button>
                   </div>
                   <div className="space-y-2">
                     {equipment.length === 0 ? <div className="text-xs text-muted-foreground py-8 text-center border border-dashed border-border rounded-xl">No equipment assigned. Click "Assign Equipment" to add.</div> :
@@ -767,12 +767,12 @@ export default function SubscribersPage() {
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className={`text-[10px] px-2 py-1 rounded-full border ${
-                              eq.status === 'INSTALLED' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-                              eq.status === 'ASSIGNED' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
-                              eq.status === 'FAULTY' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
-                              eq.status === 'RMA' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
-                              'bg-muted/40 text-muted-foreground border-border'
+                            <span className={`badge ${
+                              eq.status === 'INSTALLED' ? 'badge-success' :
+                              eq.status === 'ASSIGNED' ? 'badge-info' :
+                              eq.status === 'FAULTY' ? 'badge-danger' :
+                              eq.status === 'RMA' ? 'badge-warning' :
+                              'badge-secondary'
                             }`}>{eq.status}</span>
                             <button onClick={() => setEditEquip(eq)} className="p-1.5 rounded hover:bg-muted"><Pencil className="w-3.5 h-3.5"/></button>
                             <button onClick={() => removeEquip(eq.id)} className="p-1.5 rounded hover:bg-red-500/10 text-red-400"><Trash2 className="w-3.5 h-3.5"/></button>
@@ -802,16 +802,16 @@ export default function SubscribersPage() {
                         <div key={c.id} className="p-3 rounded-lg border border-border bg-muted/20">
                           <div className="flex items-start justify-between gap-2 mb-1">
                             <div className="flex items-center gap-2">
-                              <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                              <span className={`badge ${
                                 c.channel === 'CALL' ? 'bg-green-500/10 text-green-400 border-green-500/20' :
                                 c.channel === 'WHATSAPP' ? 'bg-green-500/10 text-green-400 border-green-500/20' :
-                                c.channel === 'EMAIL' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
-                                c.channel === 'SMS' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' :
-                                'bg-muted/40 text-muted-foreground border-border'
+                                c.channel === 'EMAIL' ? 'badge-info' :
+                                c.channel === 'SMS' ? 'badge-purple' :
+                                'badge-secondary'
                               }`}>{c.channel}</span>
-                              <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
-                                c.direction === 'INBOUND' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
-                                'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                              <span className={`badge ${
+                                c.direction === 'INBOUND' ? 'badge-info' :
+                                'badge-success'
                               }`}>{c.direction}</span>
                               {c.subject && <span className="font-medium text-xs">{c.subject}</span>}
                             </div>
@@ -848,7 +848,7 @@ export default function SubscribersPage() {
 
       {showForm && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-3 sm:p-4 overflow-auto">
-          <div className="w-full max-w-5xl bg-card border border-border rounded-2xl shadow-2xl my-4 sm:my-6">
+          <div className="w-full max-w-5xl card my-4 sm:my-6">
             <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-border">
               <div>
                 <h2 className="font-bold text-lg">{editing ? 'Edit Subscriber' : 'Add Subscriber'} — Wizard</h2>
@@ -982,9 +982,9 @@ export default function SubscribersPage() {
               <div className="flex gap-2 justify-end">
                 <button onClick={prevStep} disabled={step===1} className="px-4 py-2 rounded-xl border border-border disabled:opacity-50 inline-flex items-center gap-1"><ChevronLeft className="w-4 h-4"/>Back</button>
                 {step < 4 ? (
-                  <button onClick={nextStep} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold inline-flex items-center gap-1">Next<ChevronRight className="w-4 h-4"/></button>
+                  <button onClick={nextStep} className="btn btn-primary inline-flex items-center gap-1">Next<ChevronRight className="w-4 h-4"/></button>
                 ) : (
-                  <button onClick={save} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">{editing ? 'Save Changes' : 'Create Subscriber'}</button>
+                  <button onClick={save} className="btn btn-primary">{editing ? 'Save Changes' : 'Create Subscriber'}</button>
                 )}
               </div>
             </div>
@@ -995,7 +995,7 @@ export default function SubscribersPage() {
       {/* Import Modal */}
       {showImport && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-4xl bg-card border border-border rounded-2xl shadow-2xl max-h-[90vh] flex flex-col">
+          <div className="w-full max-w-4xl card max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <div>
                 <h2 className="font-bold text-lg">Import Subscribers</h2>
@@ -1055,8 +1055,8 @@ export default function SubscribersPage() {
 
                     <div className="p-3 rounded-xl border border-border bg-muted/20">
                       <div className="text-xs font-semibold mb-2">Preview (first 100 rows)</div>
-                      <div className="overflow-x-auto max-h-80 overflow-auto">
-                        <table className="w-full text-xs">
+                      <div className="table-wrap max-h-80 overflow-auto">
+                        <table className="table table-hover text-xs">
                           <thead className="bg-muted/40 text-muted-foreground">
                             <tr>
                               <th className="text-left px-2 py-1">Row</th>
@@ -1112,7 +1112,7 @@ export default function SubscribersPage() {
                           }
                         };
                         input.click();
-                      }} disabled={importLoading} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold disabled:opacity-50">
+                      }} disabled={importLoading} className="btn btn-primary disabled:opacity-50">
                         {importLoading ? 'Importing...' : 'Execute Import'}
                       </button>
                     </div>
@@ -1122,20 +1122,20 @@ export default function SubscribersPage() {
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">Router (API/REST)</div>
-                      <select className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm" value={mtImportRouterId} onChange={e=>{ setMtImportRouterId(e.target.value); resetMtImport(); }}>
+                      <select className="form-control w-full" value={mtImportRouterId} onChange={e=>{ setMtImportRouterId(e.target.value); resetMtImport(); }}>
                         <option value="">Select router</option>
                         {routers.filter((r:any)=>['API','REST'].includes(String(r.integration_mode||'').toUpperCase())).map((r:any)=> <option key={r.id} value={r.id}>{r.name} ({r.host})</option>)}
                       </select>
                     </label>
                     <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">User Type</div>
-                      <select className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm" value={mtImportType} onChange={e=>{ setMtImportType(e.target.value as any); resetMtImport(); }}>
+                      <select className="form-control w-full" value={mtImportType} onChange={e=>{ setMtImportType(e.target.value as any); resetMtImport(); }}>
                         <option value="ppp-secrets">PPPoE Users (PPP Secrets)</option>
                         <option value="hotspot-users">Hotspot Users</option>
                       </select>
                     </label>
                     <div className="flex items-end gap-2">
-                      <button onClick={fetchMtImportPreview} disabled={importLoading || !mtImportRouterId} className="px-4 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${importLoading?'animate-spin':''}`}/>{importLoading?'Fetching...':'Fetch Users'}</button>
-                      <button onClick={runMtImport} disabled={importLoading || !mtImportItems.length} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Download className="w-4 h-4"/>Import Selected</button>
+                      <button onClick={fetchMtImportPreview} disabled={importLoading || !mtImportRouterId} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${importLoading?'animate-spin':''}`}/>{importLoading?'Fetching...':'Fetch Users'}</button>
+                      <button onClick={runMtImport} disabled={importLoading || !mtImportItems.length} className="btn btn-primary"><Download className="w-4 h-4"/>Import Selected</button>
                     </div>
                   </div>
                   {mtImportMsg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{mtImportMsg}</div>}
@@ -1147,7 +1147,7 @@ export default function SubscribersPage() {
                       <span className="text-muted-foreground">{Object.values(mtImportSelected).filter(Boolean).length} selected / {mtImportItems.length} fetched</span>
                     </div>
                     <div className="max-h-[360px] overflow-auto">
-                      <table className="w-full text-xs">
+                      <table className="table table-hover text-xs">
                         <thead className="sticky top-0 bg-card text-muted-foreground uppercase border-b border-border"><tr>
                           <th className="text-left py-2 px-3 w-10"></th>
                           <th className="text-left py-2 px-3">Username</th>
@@ -1167,8 +1167,8 @@ export default function SubscribersPage() {
                                 {it.limit_uptime || it.limit_bytes_total ? <div>limits: {it.limit_uptime||''} {it.limit_bytes_total||''}</div> : null}
                               </td>
                               <td className="py-2 px-3"><div className="flex flex-wrap gap-1">
-                                {it.disabled ? <span className="px-2 py-0.5 rounded-full border bg-amber-500/10 text-amber-400 border-amber-500/20">disabled</span> : <span className="px-2 py-0.5 rounded-full border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">enabled</span>}
-                                {it.exists ? <span className="px-2 py-0.5 rounded-full border bg-blue-500/10 text-blue-400 border-blue-500/20">exists</span> : <span className="px-2 py-0.5 rounded-full border bg-muted text-muted-foreground border-border">new</span>}
+                                {it.disabled ? <span className="badge badge-warning">disabled</span> : <span className="badge badge-success">enabled</span>}
+                                {it.exists ? <span className="badge badge-info">exists</span> : <span className="badge badge-secondary">new</span>}
                               </div></td>
                             </tr>
                           ))}
@@ -1187,7 +1187,7 @@ export default function SubscribersPage() {
       {/* Equipment Modal */}
       {showEquipModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl">
+          <div className="w-full max-w-md card">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <div>
                 <h2 className="font-bold text-lg">{editEquip ? 'Edit Equipment' : 'Assign Equipment'}</h2>
@@ -1210,7 +1210,7 @@ export default function SubscribersPage() {
 
               <div className="flex justify-end gap-2 pt-2">
                 <button onClick={()=>{setShowEquipModal(false); setEditEquip(null); setEquipForm({ equipment_type: 'CPE', serial_number: '', mac_address: '', inventory_serial_id: '', onu_id: '', status: 'ASSIGNED', location_details: '', firmware_version: '', config_backup: '', notes: '' });}} className="px-4 py-2 rounded-xl border border-border">Cancel</button>
-                <button onClick={saveEquip} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">{editEquip ? 'Save Changes' : 'Assign Equipment'}</button>
+                <button onClick={saveEquip} className="btn btn-primary">{editEquip ? 'Save Changes' : 'Assign Equipment'}</button>
               </div>
             </div>
           </div>
@@ -1230,7 +1230,7 @@ function Input({ label, value, onChange, type='text', placeholder='' }: { label:
   return (
     <label className="block">
       <div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>
-      <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50" />
+      <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} className="form-control w-full text-foreground outline-none focus:border-primary/50" />
     </label>
   );
 }
@@ -1239,7 +1239,7 @@ function Select({ label, value, onChange, options }: { label: string; value: any
   return (
     <label className="block">
       <div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>
-      <select value={value} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50">
+      <select value={value} onChange={e=>onChange(e.target.value)} className="form-control w-full text-foreground outline-none focus:border-primary/50">
         {opts.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}
       </select>
     </label>

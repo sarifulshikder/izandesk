@@ -43,26 +43,26 @@ export default function AddResellerPage() {
   if (!canManage) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-black tracking-tight">Add Reseller</h1>
-        <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-300 text-sm">You do not have permission to create resellers.</div>
+        <h1 className="page-title">Add Reseller</h1>
+        <div className="alert alert-warning">You do not have permission to create resellers.</div>
       </div>
     );
   }
 
   return (
     <div className="space-y-5 max-w-3xl">
-      <div className="flex items-center gap-3">
-        <Link href="/resellers" className="p-2 rounded-xl border border-border bg-card hover:bg-muted"><ArrowLeft className="w-4 h-4" /></Link>
+      <div className="page-header flex items-center gap-3">
+        <Link href="/resellers" className="btn btn-outline btn-icon"><ArrowLeft className="w-4 h-4" /></Link>
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Add Reseller</h1>
+          <h1 className="page-title">Add Reseller</h1>
           <p className="text-sm text-muted-foreground">Create a new reseller. After creation you will be redirected to the reseller's page.</p>
         </div>
       </div>
 
-      {err && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>}
-      {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{msg}</div>}
+      {err && <div className="alert alert-danger">{err}</div>}
+      {msg && <div className="alert alert-success">{msg}</div>}
 
-      <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
+      <div className="card p-4 space-y-4">
         <h2 className="font-bold flex items-center gap-2"><Building2 className="w-4 h-4 text-primary" />Reseller Details</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
@@ -70,30 +70,30 @@ export default function AddResellerPage() {
             ['Subdomain', 'subdomain'], ['Brand Name', 'brand_name'], ['Portal Title', 'portal_title'],
           ].map(([label, key]: any) => (
             <label key={key} className="block">
-              <div className="text-xs text-muted-foreground mb-1">{label}</div>
-              <input className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" value={form[key] || ''} onChange={e => setForm((v: any) => ({ ...v, [key]: e.target.value }))} />
+              <div className="form-label">{label}</div>
+              <input className="form-control" value={form[key] || ''} onChange={e => setForm((v: any) => ({ ...v, [key]: e.target.value }))} />
             </label>
           ))}
           <label className="block">
-            <div className="text-xs text-muted-foreground mb-1">Tier</div>
-            <input className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" placeholder="STANDARD / SILVER / GOLD" value={form.tier} onChange={e => setForm((v: any) => ({ ...v, tier: e.target.value }))} />
+            <div className="form-label">Tier</div>
+            <input className="form-control" placeholder="STANDARD / SILVER / GOLD" value={form.tier} onChange={e => setForm((v: any) => ({ ...v, tier: e.target.value }))} />
           </label>
           <label className="block">
-            <div className="text-xs text-muted-foreground mb-1">Buying Margin %</div>
-            <input className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" type="number" value={form.buying_margin_percent} onChange={e => setForm((v: any) => ({ ...v, buying_margin_percent: e.target.value }))} />
+            <div className="form-label">Buying Margin %</div>
+            <input className="form-control" type="number" value={form.buying_margin_percent} onChange={e => setForm((v: any) => ({ ...v, buying_margin_percent: e.target.value }))} />
           </label>
           <label className="block">
-            <div className="text-xs text-muted-foreground mb-1">Commission %</div>
-            <input className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" type="number" value={form.commission_percent} onChange={e => setForm((v: any) => ({ ...v, commission_percent: e.target.value }))} />
+            <div className="form-label">Commission %</div>
+            <input className="form-control" type="number" value={form.commission_percent} onChange={e => setForm((v: any) => ({ ...v, commission_percent: e.target.value }))} />
           </label>
           <label className="block">
-            <div className="text-xs text-muted-foreground mb-1">Initial Wallet Balance</div>
-            <input className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" type="number" value={form.wallet_balance} onChange={e => setForm((v: any) => ({ ...v, wallet_balance: e.target.value }))} />
+            <div className="form-label">Initial Wallet Balance</div>
+            <input className="form-control" type="number" value={form.wallet_balance} onChange={e => setForm((v: any) => ({ ...v, wallet_balance: e.target.value }))} />
           </label>
         </div>
         <div className="flex gap-3 pt-2">
-          <button onClick={create} disabled={saving} className="px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2 disabled:opacity-50"><Plus className="w-4 h-4" />{saving ? 'Creating...' : 'Create Reseller'}</button>
-          <Link href="/resellers" className="px-4 py-2.5 rounded-xl border border-border bg-card text-sm">Cancel</Link>
+          <button onClick={create} disabled={saving} className="btn btn-primary"><Plus className="w-4 h-4" />{saving ? 'Creating...' : 'Create Reseller'}</button>
+          <Link href="/resellers" className="btn btn-outline">Cancel</Link>
         </div>
       </div>
     </div>

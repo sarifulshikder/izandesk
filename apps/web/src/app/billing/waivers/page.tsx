@@ -60,45 +60,45 @@ export default function WaiversPage() {
 
   return (
     <div className="space-y-5 max-w-4xl">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="page-header flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Waivers</h1>
-          <p className="text-sm text-muted-foreground">Record late-fee/due waivers or concessions as adjustment transactions linked to invoices.</p>
+          <h1 className="page-title">Waivers</h1>
+          <p className="page-subtitle">Record late-fee/due waivers or concessions as adjustment transactions linked to invoices.</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
-          <Link href="/billing?status=unpaid" className="px-3 py-2 rounded-xl border border-border bg-card text-sm">Unpaid Bills</Link>
+        <div className="page-actions flex gap-2">
+          <button onClick={load} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
+          <Link href="/billing?status=unpaid" className="btn btn-outline">Unpaid Bills</Link>
         </div>
       </div>
-      {err && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>}
-      {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{msg}</div>}
+      {err && <div className="alert alert-danger">{err}</div>}
+      {msg && <div className="alert alert-success">{msg}</div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
-          <h2 className="font-bold">Record Waiver</h2>
+        <div className="card p-4 space-y-3">
+          <h2 className="card-title">Record Waiver</h2>
           <div className="space-y-2 text-sm">
-            <select className="w-full p-2.5 rounded-xl border border-border bg-card" value={form.invoice_id} onChange={e=>setForm(f=>({...f, invoice_id:e.target.value}))}>
+            <select className="form-select w-full" value={form.invoice_id} onChange={e=>setForm(f=>({...f, invoice_id:e.target.value}))}>
               <option value="">Select invoice (optional but recommended)</option>
               {invoices.map(i => <option key={i.id} value={i.id}>{i.invoice_number} • {i.subscriber_name || '-'} • Due {money(i.due_amount)} ({i.status})</option>)}
             </select>
             {selected && <div className="text-xs text-muted-foreground p-2 rounded-lg bg-muted/30 border border-border">Selected: <b className="text-foreground">{selected.invoice_number}</b> • {selected.subscriber_name || '-'} • Due {money(selected.due_amount)}</div>}
-            <select className="w-full p-2.5 rounded-xl border border-border bg-card" value={form.reason} onChange={e=>setForm({...form,reason:e.target.value})}>
+            <select className="form-select w-full" value={form.reason} onChange={e=>setForm({...form,reason:e.target.value})}>
               {['Late fee waiver','Partial due waiver','Goodwill concession','Service outage compensation','Billing correction waiver','Other waiver'].map(x => <option key={x} value={x}>{x}</option>)}
             </select>
-            <input type="number" className="w-full p-2.5 rounded-xl border border-border bg-card" placeholder="Waiver amount" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} />
-            <textarea className="w-full p-2.5 rounded-xl border border-border bg-card min-h-[90px]" placeholder="Notes / approval reference (optional)" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} />
+            <input type="number" className="form-control w-full" placeholder="Waiver amount" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})} />
+            <textarea className="form-control w-full min-h-[90px]" placeholder="Notes / approval reference (optional)" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} />
           </div>
-          <button onClick={submit} disabled={!canManage || !Number(form.amount)} className="w-full px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold disabled:opacity-50">Record Waiver</button>
+          <button onClick={submit} disabled={!canManage || !Number(form.amount)} className="btn btn-primary w-full">Record Waiver</button>
           {!canManage && <div className="text-xs text-amber-400">You need billing/admin permissions to record waivers.</div>}
           <div className="text-xs text-muted-foreground">Recorded as a finance adjustment transaction (reference type WAIVER). A dedicated waiver approval workflow/ledger UI is not fully implemented; use narration/notes for approval traceability.</div>
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-4">
-          <h2 className="font-bold mb-3">Eligible Invoices (Unpaid/Overdue)</h2>
+        <div className="card p-4">
+          <h2 className="card-title mb-3">Eligible Invoices (Unpaid/Overdue)</h2>
           <div className="space-y-2 max-h-[520px] overflow-auto">
             {invoices.map(i => (
               <button key={i.id} onClick={()=>setForm(f=>({...f, invoice_id:i.id}))} className={`w-full text-left p-3 rounded-xl border transition-colors ${form.invoice_id===i.id?'border-primary bg-primary/5':'border-border hover:bg-muted/30'}`}>
-                <div className="flex items-center justify-between gap-2"><span className="font-semibold text-sm">{i.invoice_number}</span><span className="text-xs px-2 py-0.5 rounded-full border border-border">{i.status}</span></div>
+                <div className="flex items-center justify-between gap-2"><span className="font-semibold text-sm">{i.invoice_number}</span><span className="badge badge-secondary">{i.status}</span></div>
                 <div className="text-xs text-muted-foreground mt-1">{i.subscriber_name || '-'} {i.client_code ? `• ${i.client_code}` : ''}</div>
                 <div className="text-xs mt-1">Due <span className="text-amber-400 font-semibold">{money(i.due_amount)}</span> / {money(i.total_amount)}</div>
               </button>

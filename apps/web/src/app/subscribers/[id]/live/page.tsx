@@ -101,39 +101,39 @@ export default function SubscriberLivePage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div className="flex items-start gap-3">
-          <Link href="/subscribers" className="p-2 rounded-xl border border-border bg-card hover:bg-muted/50 mt-0.5" title="Back to subscribers"><ArrowLeft className="w-4 h-4"/></Link>
+          <Link href="/subscribers" className="btn btn-outline btn-icon mt-0.5" title="Back to subscribers"><ArrowLeft className="w-4 h-4"/></Link>
           <div>
-            <h1 className="text-2xl font-black tracking-tight">Subscriber Live Dashboard</h1>
-            <p className="text-sm text-muted-foreground">{sub.full_name || 'Subscriber'} {sub.client_code ? `• ${sub.client_code}` : ''} {sub.username ? `• ${sub.username}` : ''}</p>
+            <h1 className="page-title">Subscriber Live Dashboard</h1>
+            <p className="page-subtitle">{sub.full_name || 'Subscriber'} {sub.client_code ? `• ${sub.client_code}` : ''} {sub.username ? `• ${sub.username}` : ''}</p>
           </div>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <Link href="/subscribers/live" className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Activity className="w-4 h-4"/>All Live Sessions</Link>
-          <button onClick={() => load({ ping: true })} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`}/>Refresh</button>
+        <div className="page-actions flex gap-2 flex-wrap">
+          <Link href="/subscribers/live" className="btn btn-outline"><Activity className="w-4 h-4"/>All Live Sessions</Link>
+          <button onClick={() => load({ ping: true })} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`}/>Refresh</button>
         </div>
       </div>
 
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className={`p-4 rounded-2xl border ${bw.online ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-border bg-card'}`}>
+        <div className={`card p-4 ${bw.online ? 'border-emerald-500/20 bg-emerald-500/5' : ''}`}>
           <div className="flex items-center justify-between text-xs text-muted-foreground"><span>Status</span><Wifi className={`w-4 h-4 ${bw.online ? 'text-emerald-400' : ''}`}/></div>
           <div className={`mt-2 text-lg font-black ${bw.online ? 'text-emerald-400' : 'text-muted-foreground'}`}>{bw.online ? 'ONLINE' : (sub.status || 'OFFLINE')}</div>
           <div className="text-xs text-muted-foreground mt-1">Uptime: {bw.uptime || '-'}</div>
         </div>
-        <div className="p-4 rounded-2xl border border-cyan-500/20 bg-cyan-500/5">
+        <div className="card p-4 border-cyan-500/20 bg-cyan-500/5">
           <div className="flex items-center justify-between text-xs text-cyan-300/80"><span>Live Download (RX)</span><Gauge className="w-4 h-4"/></div>
           <div className="mt-2 text-lg font-black text-cyan-400">{fmtBps(Number(bw.rx_bps || 0))}</div>
           <div className="text-xs text-muted-foreground mt-1">Total: {fmtBytes(Number(bw.rx_bytes || 0))}</div>
         </div>
-        <div className="p-4 rounded-2xl border border-indigo-500/20 bg-indigo-500/5">
+        <div className="card p-4 border-indigo-500/20 bg-indigo-500/5">
           <div className="flex items-center justify-between text-xs text-indigo-300/80"><span>Live Upload (TX)</span><Gauge className="w-4 h-4"/></div>
           <div className="mt-2 text-lg font-black text-indigo-400">{fmtBps(Number(bw.tx_bps || 0))}</div>
           <div className="text-xs text-muted-foreground mt-1">Total: {fmtBytes(Number(bw.tx_bytes || 0))}</div>
         </div>
-        <div className="p-4 rounded-2xl border border-border bg-card">
+        <div className="card p-4">
           <div className="flex items-center justify-between text-xs text-muted-foreground"><span>Latency (Ping)</span><Signal className="w-4 h-4"/></div>
           <div className={`mt-2 text-lg font-black ${latency?.ok ? (Number(latency.latency_ms) < 50 ? 'text-emerald-400' : Number(latency.latency_ms) < 120 ? 'text-amber-400' : 'text-red-400') : 'text-muted-foreground'}`}>
             {latency ? (latency.ok ? `${latency.latency_ms ?? '-'} ms` : 'Unreachable') : (bw.ip_address ? 'Checking...' : '-')}
@@ -142,15 +142,15 @@ export default function SubscriberLivePage() {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-5">
+      <div className="card p-5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
           <div>
             <h2 className="font-bold flex items-center gap-2"><Activity className="w-4 h-4 text-primary"/>Live Bandwidth (1s updates)</h2>
             <p className="text-xs text-muted-foreground">Real-time RX/TX throughput for this subscriber (last ~60 seconds)</p>
           </div>
           <div className="flex items-center gap-2 text-xs">
-            <div className="px-2.5 py-1.5 rounded-lg border border-cyan-500/20 bg-cyan-500/10 text-cyan-400 font-mono">RX {fmtBps(Number(bw.rx_bps || 0))}</div>
-            <div className="px-2.5 py-1.5 rounded-lg border border-indigo-500/20 bg-indigo-500/10 text-indigo-400 font-mono">TX {fmtBps(Number(bw.tx_bps || 0))}</div>
+            <div className="badge badge-info font-mono">RX {fmtBps(Number(bw.rx_bps || 0))}</div>
+            <div className="badge badge-primary font-mono">TX {fmtBps(Number(bw.tx_bps || 0))}</div>
           </div>
         </div>
         <div className="w-full h-48 relative overflow-hidden rounded-xl bg-gradient-to-b from-muted/30 to-muted/10 border border-border/40 p-2">
@@ -172,14 +172,14 @@ export default function SubscriberLivePage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-        <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
+        <div className="card p-4 space-y-3">
           <h2 className="font-bold flex items-center gap-2"><KeyRound className="w-4 h-4 text-primary"/>Account & Connection</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
             <Info label="Username" value={sub.username || '-'} mono />
             <div>
               <div className="text-xs text-muted-foreground mb-1 flex items-center justify-between">
                 <span>Password (stored)</span>
-                <button onClick={()=>setShowPass(s=>!s)} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-border hover:bg-muted">{showPass ? <><EyeOff className="w-3 h-3"/>Hide</> : <><Eye className="w-3 h-3"/>Show</>}</button>
+                <button onClick={()=>setShowPass(s=>!s)} className="btn btn-outline btn-sm">{showPass ? <><EyeOff className="w-3 h-3"/>Hide</> : <><Eye className="w-3 h-3"/>Show</>}</button>
               </div>
               <div className="font-mono text-xs p-2 rounded-lg bg-muted/30 border border-border break-all">{showPass ? (passwordValue || '-') : (passwordValue ? '••••••••••••' : '-')}</div>
               {isHashed && showPass && <div className="text-[11px] text-amber-400 mt-1">Stored as hash (plain text not available). PPPoE provisioning may require re-setting a known password.</div>}
@@ -195,7 +195,7 @@ export default function SubscriberLivePage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
+        <div className="card p-4 space-y-3">
           <h2 className="font-bold flex items-center gap-2"><Globe className="w-4 h-4 text-primary"/>Live Session & Network</h2>
           {active ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
@@ -211,18 +211,18 @@ export default function SubscriberLivePage() {
               <Info label="Ping Target" value={bw.ip_address || 'No IP to ping'} mono />
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground p-4 rounded-xl border border-border bg-muted/20">No live/session record found for this subscriber yet. If the subscriber is online, ensure they are provisioned in IzanDesk (username matched), connected via the monitored router/NAS, and accounting/active-session data is available.</div>
+            <div className="alert">No live/session record found for this subscriber yet. If the subscriber is online, ensure they are provisioned in IzanDesk (username matched), connected via the monitored router/NAS, and accounting/active-session data is available.</div>
           )}
         </div>
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-4 space-y-4">
+      <div className="card p-4 space-y-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="font-bold flex items-center gap-2"><Server className="w-4 h-4 text-primary"/>ONU / OLT Information</h2>
           {onus.length > 0 && <div className="text-xs text-muted-foreground">{onus.length} linked ONU{onus.length > 1 ? 's' : ''}</div>}
         </div>
         {!onus.length && !equipment.length ? (
-          <div className="text-sm text-muted-foreground p-4 rounded-xl border border-border bg-muted/20 space-y-1">
+          <div className="alert space-y-1">
             <div>No ONU/OLT info linked to this subscriber.</div>
             <div>ONU details are auto-discovered/linked when possible (by PPPoE session MAC/FDB or username/client-code match). You can also link an ONU from FTTH &amp; OLTs.</div>
           </div>
@@ -237,14 +237,14 @@ export default function SubscriberLivePage() {
                   const tx = o.tx_power_dbm != null ? Number(o.tx_power_dbm) : null;
                   const optState = rx == null ? 'Unknown' : rx >= -24 ? 'Good' : rx >= -27 ? 'Warn' : 'Critical';
                   return (
-                    <div key={o.id || i} className={`rounded-2xl border p-4 space-y-4 ${online ? 'border-emerald-500/20 bg-gradient-to-br from-emerald-500/5 to-card' : 'border-border bg-muted/10'}`}>
+                    <div key={o.id || i} className={`card p-4 space-y-4 ${online ? 'border-emerald-500/20 bg-gradient-to-br from-emerald-500/5 to-card' : ''}`}>
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="text-xs text-muted-foreground">Linked ONU (from OLT)</div>
                           <div className="font-bold text-base truncate" title={o.name || o.serial_number || ''}>{o.name || o.serial_number || 'ONU'}</div>
                           <div className="text-xs text-muted-foreground truncate">{o.olt_name || 'OLT'} {o.olt_vendor || o.olt_model ? `• ${[o.olt_vendor,o.olt_model].filter(Boolean).join(' ')}` : ''} {o.olt_host ? `• ${o.olt_host}` : ''}</div>
                         </div>
-                        <span className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-semibold border ${online ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : st === 'OFFLINE' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-muted text-muted-foreground border-border'}`}>{o.status || 'UNKNOWN'}</span>
+                        <span className={`badge shrink-0 ${online ? 'badge-success' : st === 'OFFLINE' ? 'badge-danger' : 'badge-secondary'}`}>{o.status || 'UNKNOWN'}</span>
                       </div>
 
                       <div className="grid grid-cols-3 gap-2">
@@ -298,8 +298,8 @@ export default function SubscriberLivePage() {
                 <div className="text-xs font-semibold text-muted-foreground mb-2">Assigned Equipment (CPE/ONU)</div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {equipment.map((e:any, i:number) => (
-                    <div key={e.id || i} className="p-4 rounded-2xl border border-border bg-muted/20 text-sm space-y-2">
-                      <div className="flex items-center justify-between gap-2"><div className="font-medium">{e.equipment_type || 'Equipment'} {e.serial_number ? `• ${e.serial_number}` : ''}</div><span className="text-xs px-2 py-0.5 rounded-full border border-border">{e.status || '-'}</span></div>
+                    <div key={e.id || i} className="card p-4 text-sm space-y-2">
+                      <div className="flex items-center justify-between gap-2"><div className="font-medium">{e.equipment_type || 'Equipment'} {e.serial_number ? `• ${e.serial_number}` : ''}</div><span className="badge badge-secondary">{e.status || '-'}</span></div>
                       <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                         <div>MAC: <span className="font-mono text-foreground">{e.mac_address || '-'}</span></div>
                         <div>ONU: <span className="font-mono text-foreground">{e.onu_serial || '-'}</span> {e.onu_pon_port ? `(${e.onu_pon_port})` : ''}</div>

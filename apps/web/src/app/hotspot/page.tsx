@@ -39,8 +39,8 @@ export default function HotspotPage() {
   return (
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div><h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><Wifi className="w-6 h-6 text-primary"/>Hotspot Vouchers</h1><p className="text-sm text-muted-foreground">Prepaid voucher generation, sales, activation/expiry and reconciliation (Phase 7). Live NAS/hotspot enforcement requires controller/RADIUS integration.</p></div>
-        <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
+        <div><h1 className="page-title"><Wifi className="w-6 h-6 text-primary"/>Hotspot Vouchers</h1><p className="text-sm text-muted-foreground">Prepaid voucher generation, sales, activation/expiry and reconciliation (Phase 7). Live NAS/hotspot enforcement requires controller/RADIUS integration.</p></div>
+        <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
       </div>
       {err && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>}
       {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{msg}</div>}
@@ -51,28 +51,28 @@ export default function HotspotPage() {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="xl:col-span-2 space-y-5">
-          <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="card p-4">
             <h2 className="font-bold mb-3 flex items-center gap-2"><Ticket className="w-4 h-4 text-primary"/>Vouchers</h2>
             <div className="overflow-auto max-h-[460px]">
-              <table className="w-full text-xs"><thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border"><th className="text-left py-2 px-2">Code</th><th className="text-left py-2 px-2">Plan</th><th className="text-left py-2 px-2">Price</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Batch</th><th className="text-left py-2 px-2">Actions</th></tr></thead>
-                <tbody>{vouchers.map(v=>(<tr key={v.id} className="border-b border-border/50"><td className="py-2 px-2 font-mono font-semibold">{v.code}</td><td className="py-2 px-2">{v.plan_name||'-'}<div className="text-muted-foreground">{v.duration_hours?`${v.duration_hours}h`:''}{v.data_limit_mb?` • ${v.data_limit_mb}MB`:''}</div></td><td className="py-2 px-2">{money(v.price)}</td><td className="py-2 px-2"><span className={`px-2 py-0.5 rounded-full border ${v.status==='AVAILABLE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':v.status==='SOLD'?'bg-amber-500/10 text-amber-400 border-amber-500/20':v.status==='ACTIVE'?'bg-cyan-500/10 text-cyan-400 border-cyan-500/20':'bg-muted text-muted-foreground border-border'}`}>{v.status}</span></td><td className="py-2 px-2 text-muted-foreground">{v.batch_no||'-'}</td><td className="py-2 px-2 space-x-1">{canManage && v.status==='AVAILABLE' && <button onClick={()=>sell(v.id)} className="px-2 py-1 rounded border border-border">Sell</button>}{canManage && ['AVAILABLE','SOLD'].includes(v.status) && <button onClick={()=>activate(v.id)} className="px-2 py-1 rounded bg-primary text-primary-foreground">Activate</button>}{canManage && v.status==='ACTIVE' && <button onClick={()=>expire(v.id)} className="px-2 py-1 rounded border border-border">Expire</button>}</td></tr>))}{!vouchers.length && <tr><td colSpan={6} className="py-6 text-center text-muted-foreground">No vouchers yet.</td></tr>}</tbody>
+              <table className="table table-hover text-xs"><thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border"><th className="text-left py-2 px-2">Code</th><th className="text-left py-2 px-2">Plan</th><th className="text-left py-2 px-2">Price</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Batch</th><th className="text-left py-2 px-2">Actions</th></tr></thead>
+                <tbody>{vouchers.map(v=>(<tr key={v.id} className="border-b border-border/50"><td className="py-2 px-2 font-mono font-semibold">{v.code}</td><td className="py-2 px-2">{v.plan_name||'-'}<div className="text-muted-foreground">{v.duration_hours?`${v.duration_hours}h`:''}{v.data_limit_mb?` • ${v.data_limit_mb}MB`:''}</div></td><td className="py-2 px-2">{money(v.price)}</td><td className="py-2 px-2"><span className={`badge ${v.status==='AVAILABLE'?'badge-success':v.status==='SOLD'?'badge-warning':v.status==='ACTIVE'?'badge-info':'badge-secondary'}`}>{v.status}</span></td><td className="py-2 px-2 text-muted-foreground">{v.batch_no||'-'}</td><td className="py-2 px-2 space-x-1">{canManage && v.status==='AVAILABLE' && <button onClick={()=>sell(v.id)} className="btn btn-outline btn-sm">Sell</button>}{canManage && ['AVAILABLE','SOLD'].includes(v.status) && <button onClick={()=>activate(v.id)} className="btn btn-primary btn-sm">Activate</button>}{canManage && v.status==='ACTIVE' && <button onClick={()=>expire(v.id)} className="btn btn-outline btn-sm">Expire</button>}</td></tr>))}{!vouchers.length && <tr><td colSpan={6} className="py-6 text-center text-muted-foreground">No vouchers yet.</td></tr>}</tbody>
               </table>
             </div>
           </div>
-          <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="card p-4">
             <h2 className="font-bold mb-2">Reconciliation</h2>
             <div className="text-sm grid grid-cols-1 md:grid-cols-3 gap-3"><div className="p-3 rounded-xl border border-border"><div className="text-xs text-muted-foreground">Sold value (vouchers)</div><div className="font-bold">{money(recon?.summary?.sold_value||0)}</div></div><div className="p-3 rounded-xl border border-border"><div className="text-xs text-muted-foreground">Voucher income (finance)</div><div className="font-bold">{money(recon?.finance_voucher_income||0)}</div></div><div className="p-3 rounded-xl border border-border"><div className="text-xs text-muted-foreground">Batches</div><div className="font-bold">{(recon?.batches||[]).length}</div></div></div>
           </div>
         </div>
-        <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
+        <div className="card p-4 space-y-3">
           <h2 className="font-bold flex items-center gap-2"><Plus className="w-4 h-4 text-primary"/>Generate Vouchers</h2>
           <div className="space-y-2 text-sm">
-            <div className="grid grid-cols-2 gap-2"><input type="number" placeholder="Count" className="p-2.5 rounded-xl border border-border bg-card" value={gen.count} onChange={e=>setGen({...gen,count:e.target.value})} /><input placeholder="Prefix" className="p-2.5 rounded-xl border border-border bg-card" value={gen.prefix} onChange={e=>setGen({...gen,prefix:e.target.value})} /></div>
-            <input placeholder="Plan name" className="p-2.5 rounded-xl border border-border bg-card w-full" value={gen.plan_name} onChange={e=>setGen({...gen,plan_name:e.target.value})} />
-            <div className="grid grid-cols-2 gap-2"><input type="number" placeholder="Price (BDT)" className="p-2.5 rounded-xl border border-border bg-card" value={gen.price} onChange={e=>setGen({...gen,price:e.target.value})} /><input type="number" placeholder="Duration (hours)" className="p-2.5 rounded-xl border border-border bg-card" value={gen.duration_hours} onChange={e=>setGen({...gen,duration_hours:e.target.value})} /></div>
-            <input type="number" placeholder="Data limit MB (optional)" className="p-2.5 rounded-xl border border-border bg-card w-full" value={gen.data_limit_mb} onChange={e=>setGen({...gen,data_limit_mb:e.target.value})} />
+            <div className="grid grid-cols-2 gap-2"><input type="number" placeholder="Count" className="form-control" value={gen.count} onChange={e=>setGen({...gen,count:e.target.value})} /><input placeholder="Prefix" className="form-control" value={gen.prefix} onChange={e=>setGen({...gen,prefix:e.target.value})} /></div>
+            <input placeholder="Plan name" className="form-control w-full" value={gen.plan_name} onChange={e=>setGen({...gen,plan_name:e.target.value})} />
+            <div className="grid grid-cols-2 gap-2"><input type="number" placeholder="Price (BDT)" className="form-control" value={gen.price} onChange={e=>setGen({...gen,price:e.target.value})} /><input type="number" placeholder="Duration (hours)" className="form-control" value={gen.duration_hours} onChange={e=>setGen({...gen,duration_hours:e.target.value})} /></div>
+            <input type="number" placeholder="Data limit MB (optional)" className="form-control w-full" value={gen.data_limit_mb} onChange={e=>setGen({...gen,data_limit_mb:e.target.value})} />
           </div>
-          <button onClick={generate} disabled={!canManage} className="w-full px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold disabled:opacity-50">Generate Batch</button>
+          <button onClick={generate} disabled={!canManage} className="btn btn-primary w-full">Generate Batch</button>
           <div className="text-xs text-muted-foreground">Selling records income in finance; activation sets expiry. For live hotspot access control, integrate voucher auth with your RADIUS/hotspot controller (sync hook returned on activate).</div>
         </div>
       </div>
@@ -80,4 +80,4 @@ export default function HotspotPage() {
   );
 }
 
-function K({label,value}:any){ return <div className="p-3 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground">{label}</div><div className="text-lg font-black">{value}</div></div>; }
+function K({label,value}:any){ return <div className="card p-3"><div className="text-xs text-muted-foreground">{label}</div><div className="text-lg font-black">{value}</div></div>; }

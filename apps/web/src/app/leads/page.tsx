@@ -190,66 +190,66 @@ export default function LeadsPage() {
 
   const statusBadge = (s: string) => {
     const v = String(s || '').toUpperCase();
-    if (v === 'WON') return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-    if (v === 'LOST') return 'bg-red-500/10 text-red-400 border-red-500/20';
-    if (v === 'PROPOSAL') return 'bg-violet-500/10 text-violet-400 border-violet-500/20';
-    if (v === 'QUALIFIED') return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
-    if (v === 'CONTACTED') return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
-    return 'bg-muted/40 text-muted-foreground border-border';
+    if (v === 'WON') return 'badge-success';
+    if (v === 'LOST') return 'badge-danger';
+    if (v === 'PROPOSAL') return 'badge-purple';
+    if (v === 'QUALIFIED') return 'badge-primary';
+    if (v === 'CONTACTED') return 'badge-warning';
+    return 'badge-secondary';
   };
 
   const priorityBadge = (p: string) => {
     const v = String(p || '').toUpperCase();
-    if (v === 'HIGH') return 'bg-red-500/10 text-red-400 border-red-500/20';
-    if (v === 'LOW') return 'bg-muted/40 text-muted-foreground border-border';
-    return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
+    if (v === 'HIGH') return 'badge-danger';
+    if (v === 'LOW') return 'badge-secondary';
+    return 'badge-warning';
   };
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Leads Pipeline</h1>
-          <p className="text-sm text-muted-foreground">Track prospects from inquiry to subscriber — {total} total</p>
+          <h1 className="page-title">Leads Pipeline</h1>
+          <p className="page-subtitle">Track prospects from inquiry to subscriber — {total} total</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2">Refresh</button>
-          <button onClick={openCreate} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Lead</button>
+        <div className="page-actions flex gap-2">
+          <button onClick={load} className="btn btn-outline">Refresh</button>
+          <button onClick={openCreate} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Lead</button>
         </div>
       </div>
 
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
 
       {summary && (
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-          <div className="p-4 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground">Total</div><div className="text-xl font-black mt-1">{summary.total}</div></div>
-          <div className="p-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5"><div className="text-xs text-emerald-300/80">Won</div><div className="text-xl font-black mt-1 text-emerald-400">{summary.won}</div></div>
-          <div className="p-4 rounded-2xl border border-red-500/20 bg-red-500/5"><div className="text-xs text-red-300/80">Lost</div><div className="text-xl font-black mt-1 text-red-400">{summary.lost}</div></div>
-          <div className="p-4 rounded-2xl border border-blue-500/20 bg-blue-500/5"><div className="text-xs text-blue-300/80">This Month</div><div className="text-xl font-black mt-1 text-blue-400">{summary.this_month}</div></div>
-          <div className="p-4 rounded-2xl border border-violet-500/20 bg-violet-500/5"><div className="text-xs text-violet-300/80">Conversion</div><div className="text-xl font-black mt-1 text-violet-400">{summary.conversion_rate}%</div></div>
-          <div className="p-4 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground">Pipeline Value</div><div className="text-xl font-black mt-1">—</div></div>
+          <div className="card p-4"><div className="text-xs text-muted-foreground">Total</div><div className="text-xl font-black mt-1">{summary.total}</div></div>
+          <div className="card p-4 border-emerald-500/20 bg-emerald-500/5"><div className="text-xs text-emerald-300/80">Won</div><div className="text-xl font-black mt-1 text-emerald-400">{summary.won}</div></div>
+          <div className="card p-4 border-red-500/20 bg-red-500/5"><div className="text-xs text-red-300/80">Lost</div><div className="text-xl font-black mt-1 text-red-400">{summary.lost}</div></div>
+          <div className="card p-4 border-blue-500/20 bg-blue-500/5"><div className="text-xs text-blue-300/80">This Month</div><div className="text-xl font-black mt-1 text-blue-400">{summary.this_month}</div></div>
+          <div className="card p-4 border-violet-500/20 bg-violet-500/5"><div className="text-xs text-violet-300/80">Conversion</div><div className="text-xl font-black mt-1 text-violet-400">{summary.conversion_rate}%</div></div>
+          <div className="card p-4"><div className="text-xs text-muted-foreground">Pipeline Value</div><div className="text-xl font-black mt-1">—</div></div>
         </div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-        <div className="md:col-span-2 relative">
+        <div className="md:col-span-2 relative input-icon">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"/>
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name, phone, email, lead no..." className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50"/>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name, phone, email, lead no..." className="form-control pl-9"/>
         </div>
-        <select value={status} onChange={e=>setStatus(e.target.value)} className="px-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground">
+        <select value={status} onChange={e=>setStatus(e.target.value)} className="form-select">
           <option value="">All Statuses</option>
           {LEAD_STATUSES.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
-        <select value={source} onChange={e=>setSource(e.target.value)} className="px-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground">
+        <select value={source} onChange={e=>setSource(e.target.value)} className="form-select">
           <option value="">All Sources</option>
           {LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden">
-          <div className="overflow-auto">
-            <table className="w-full text-sm">
+        <div className="xl:col-span-2 card overflow-hidden">
+          <div className="table-wrap">
+            <table className="table table-hover">
               <thead className="bg-muted/40 text-muted-foreground text-xs uppercase">
                 <tr>
                   <th className="text-left px-4 py-3">Lead</th>
@@ -278,20 +278,20 @@ export default function LeadsPage() {
                       <div className="text-xs text-muted-foreground">{[r.area_name, r.village, r.thana || r.upazila].filter(Boolean).join(', ') || '-'}</div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-[11px] px-2 py-1 rounded-full border border-border bg-muted/30">{r.source || 'OTHER'}</span>
+                      <span className="badge badge-secondary">{r.source || 'OTHER'}</span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col gap-1">
-                        <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${statusBadge(r.status)}`}>{r.status}</span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${priorityBadge(r.priority)}`}>{r.priority}</span>
+                        <span className={`badge ${statusBadge(r.status)}`}>{r.status}</span>
+                        <span className={`badge ${priorityBadge(r.priority)}`}>{r.priority}</span>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right" onClick={e=>e.stopPropagation()}>
                       {r.status !== 'WON' && r.status !== 'LOST' && (
-                        <button onClick={()=>convertLead(r.id)} className="p-2 rounded-lg hover:bg-emerald-500/10 text-emerald-400" title="Convert to Subscriber"><ArrowRight className="w-4 h-4"/></button>
+                        <button onClick={()=>convertLead(r.id)} className="btn btn-ghost btn-icon btn-sm text-success" title="Convert to Subscriber"><ArrowRight className="w-4 h-4"/></button>
                       )}
-                      <button onClick={()=>openEdit(r)} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button>
-                      <button onClick={()=>remove(r.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400"><Trash2 className="w-4 h-4"/></button>
+                      <button onClick={()=>openEdit(r)} className="btn btn-ghost btn-icon btn-sm"><Pencil className="w-4 h-4"/></button>
+                      <button onClick={()=>remove(r.id)} className="btn btn-ghost btn-icon btn-sm text-danger"><Trash2 className="w-4 h-4"/></button>
                     </td>
                   </tr>
                 ))}
@@ -300,9 +300,9 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-4 space-y-4">
+        <div className="card p-4 space-y-4">
           {!detail ? (
-            <div className="text-sm text-muted-foreground py-16 text-center border border-dashed border-border rounded-xl">Select a lead to view details, activities, and convert to subscriber.</div>
+            <div className="empty-state border border-dashed border-border">Select a lead to view details, activities, and convert to subscriber.</div>
           ) : (
             <>
               <div className="flex items-start justify-between gap-2">
@@ -310,17 +310,17 @@ export default function LeadsPage() {
                   <div className="font-bold text-foreground flex items-center gap-2"><User className="w-4 h-4 text-primary"/><span className="truncate">{detail.full_name}</span></div>
                   <div className="text-xs font-mono text-primary mt-0.5">{detail.lead_no}</div>
                   <div className="flex flex-wrap items-center gap-2 mt-2">
-                    <span className={`text-[11px] px-2 py-0.5 rounded-full border font-semibold ${statusBadge(detail.status)}`}>{detail.status}</span>
-                    <span className={`text-[11px] px-2 py-0.5 rounded-full border font-semibold ${priorityBadge(detail.priority)}`}>{detail.priority}</span>
-                    <span className="text-[11px] px-2 py-0.5 rounded-full border border-border bg-muted/30">{detail.source || 'OTHER'}</span>
+                    <span className={`badge ${statusBadge(detail.status)}`}>{detail.status}</span>
+                    <span className={`badge ${priorityBadge(detail.priority)}`}>{detail.priority}</span>
+                    <span className="badge badge-secondary">{detail.source || 'OTHER'}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {detail.status !== 'WON' && detail.status !== 'LOST' && (
-                    <button onClick={()=>convertLead(detail.id)} className="px-2 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 text-xs font-semibold hover:bg-emerald-500/20 inline-flex items-center gap-1"><ArrowRight className="w-3.5 h-3.5"/>Convert</button>
+                    <button onClick={()=>convertLead(detail.id)} className="btn btn-success btn-sm"><ArrowRight className="w-3.5 h-3.5"/>Convert</button>
                   )}
-                  <button onClick={()=>openEdit(detail)} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border" title="Edit"><Pencil className="w-4 h-4"/></button>
-                  <button onClick={()=>setDetail(null)} className="p-1.5 rounded-lg hover:bg-muted" title="Close"><X className="w-4 h-4"/></button>
+                  <button onClick={()=>openEdit(detail)} className="btn btn-ghost btn-icon btn-sm" title="Edit"><Pencil className="w-4 h-4"/></button>
+                  <button onClick={()=>setDetail(null)} className="btn btn-ghost btn-icon btn-sm" title="Close"><X className="w-4 h-4"/></button>
                 </div>
               </div>
 
@@ -348,14 +348,14 @@ export default function LeadsPage() {
                     ))
                   }
                 </div>
-                <div className="mt-3 p-3 rounded-xl bg-muted/30 border border-border space-y-2">
+                <div className="card card-body-sm mt-3 space-y-2">
                   <div className="text-xs font-semibold flex items-center gap-2"><MessageSquare className="w-3.5 h-3.5"/>Log Activity</div>
                   <div className="grid grid-cols-2 gap-2">
-                    <select defaultValue="CALL" className="px-2 py-1.5 rounded-lg bg-card border border-border text-xs text-foreground">{ACTIVITY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
-                    <input type="text" placeholder="Subject" className="px-2 py-1.5 rounded-lg bg-card border border-border text-xs text-foreground" />
+                    <select defaultValue="CALL" className="form-select">{ACTIVITY_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
+                    <input type="text" placeholder="Subject" className="form-control" />
                   </div>
-                  <textarea placeholder="Description" rows={2} className="w-full px-3 py-2 rounded-lg bg-card border border-border text-xs text-foreground outline-none focus:border-primary/50" />
-                  <button className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold">Add Activity</button>
+                  <textarea placeholder="Description" rows={2} className="form-control" />
+                  <button className="btn btn-primary btn-sm">Add Activity</button>
                 </div>
               </div>
             </>
@@ -365,8 +365,8 @@ export default function LeadsPage() {
 
       {showForm && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-3 sm:p-4 overflow-auto">
-          <div className="w-full max-w-3xl bg-card border border-border rounded-2xl shadow-2xl my-4 sm:my-6">
-            <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-border">
+          <div className="card w-full max-w-3xl my-4 sm:my-6">
+            <div className="card-header px-4 sm:px-5">
               <div>
                 <h2 className="font-bold text-lg">{editing ? 'Edit Lead' : 'Add Lead'} — Wizard</h2>
                 <p className="text-xs text-muted-foreground">Step {step} of 3: {steps[step-1].title} — {steps[step-1].desc}</p>
@@ -467,9 +467,9 @@ export default function LeadsPage() {
               <div className="flex gap-2 justify-end">
                 <button onClick={prevStep} disabled={step===1} className="px-4 py-2 rounded-xl border border-border disabled:opacity-50 inline-flex items-center gap-1"><ChevronLeft className="w-4 h-4"/>Back</button>
                 {step < 3 ? (
-                  <button onClick={nextStep} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold inline-flex items-center gap-1">Next<ChevronRight className="w-4 h-4"/></button>
+                  <button onClick={nextStep} className="btn btn-primary">Next<ChevronRight className="w-4 h-4"/></button>
                 ) : (
-                  <button onClick={save} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">{editing ? 'Save Changes' : 'Create Lead'}</button>
+                  <button onClick={save} className="btn btn-primary">{editing ? 'Save Changes' : 'Create Lead'}</button>
                 )}
               </div>
             </div>

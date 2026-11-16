@@ -119,12 +119,12 @@ export default function RoutersPage() {
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><Network className="w-6 h-6 text-primary" />Network & NAS Overview</h1>
+          <h1 className="page-title"><Network className="w-6 h-6 text-primary" />Network & NAS Overview</h1>
           <p className="text-sm text-muted-foreground">Manage RouterOS (API/REST) and RADIUS NAS devices. Open each router for a 360° view, sessions, and actions.</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`} />Refresh</button>
-          <button onClick={()=>{setForm({name:'',host:'',integration_mode:'API',api_port:8728,rest_port:443,username:'admin',password:'',router_type:'MIKROTIK',ros_version:'v7',use_ssl:false,site:'',is_enabled:true,radius_secret:'',coa_port:3799,nas_identifier:''}); setModal('new');}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Router / NAS</button>
+          <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`} />Refresh</button>
+          <button onClick={()=>{setForm({name:'',host:'',integration_mode:'API',api_port:8728,rest_port:443,username:'admin',password:'',router_type:'MIKROTIK',ros_version:'v7',use_ssl:false,site:'',is_enabled:true,radius_secret:'',coa_port:3799,nas_identifier:''}); setModal('new');}} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Router / NAS</button>
         </div>
       </div>
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
@@ -138,7 +138,7 @@ export default function RoutersPage() {
         <Stat label="Aggregate TX" value={fmtBps(summary.aggTxBps||0)} icon={ArrowUp} accent="text-indigo-400" />
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-4">
+      <div className="card p-4">
         <h2 className="font-bold mb-3 flex items-center gap-2"><Server className="w-4 h-4 text-primary"/>Routers & NAS <span className="text-xs font-normal text-muted-foreground">({routers.length})</span></h2>
         <div className="space-y-3 max-h-[760px] overflow-auto">
           {routers.map(r => {
@@ -192,7 +192,7 @@ export default function RoutersPage() {
       </div>
 
       {importRouter && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-4xl bg-card border border-border rounded-2xl shadow-2xl my-8">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-4xl card my-8">
           <div className="flex items-center justify-between px-5 py-4 border-b border-border">
             <div>
               <h2 className="font-bold">Import from MikroTik</h2>
@@ -211,8 +211,8 @@ export default function RoutersPage() {
                 </select>
               </label>
               <div className="flex gap-2">
-                <button onClick={fetchImportPreview} disabled={importLoading} className="px-4 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${importLoading?'animate-spin':''}`}/>{importLoading?'Fetching...':'Fetch from Router'}</button>
-                <button onClick={runImport} disabled={importing || !importItems.length} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Download className="w-4 h-4"/>{importing?'Importing...':'Import Selected'}</button>
+                <button onClick={fetchImportPreview} disabled={importLoading} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${importLoading?'animate-spin':''}`}/>{importLoading?'Fetching...':'Fetch from Router'}</button>
+                <button onClick={runImport} disabled={importing || !importItems.length} className="btn btn-primary"><Download className="w-4 h-4"/>{importing?'Importing...':'Import Selected'}</button>
               </div>
             </div>
             {importMsg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{importMsg}</div>}
@@ -226,7 +226,7 @@ export default function RoutersPage() {
                 </div>
               </div>
               <div className="max-h-[420px] overflow-auto">
-                <table className="w-full text-xs">
+                <table className="table table-hover text-xs">
                   <thead className="sticky top-0 bg-card text-muted-foreground uppercase border-b border-border"><tr>
                     <th className="text-left py-2 px-3 w-10"></th>
                     <th className="text-left py-2 px-3">Name / Username</th>
@@ -247,8 +247,8 @@ export default function RoutersPage() {
                         </td>
                         <td className="py-2 px-3">
                           <div className="flex flex-wrap gap-1">
-                            {it.disabled ? <span className="px-2 py-0.5 rounded-full border bg-amber-500/10 text-amber-400 border-amber-500/20">disabled</span> : <span className="px-2 py-0.5 rounded-full border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">enabled</span>}
-                            {it.exists ? <span className="px-2 py-0.5 rounded-full border bg-blue-500/10 text-blue-400 border-blue-500/20">exists</span> : <span className="px-2 py-0.5 rounded-full border bg-muted text-muted-foreground border-border">new</span>}
+                            {it.disabled ? <span className="badge badge-warning">disabled</span> : <span className="badge badge-success">enabled</span>}
+                            {it.exists ? <span className="badge badge-info">exists</span> : <span className="badge badge-secondary">new</span>}
                           </div>
                         </td>
                       </tr>
@@ -264,7 +264,7 @@ export default function RoutersPage() {
       )}
 
       {modal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-2xl bg-card border border-border rounded-2xl shadow-2xl my-8">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-2xl card my-8">
           <div className="flex items-center justify-between px-5 py-4 border-b border-border"><h2 className="font-bold">{modal==='new'?'Add Router / NAS':'Edit Router / NAS'}</h2><button onClick={()=>setModal(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button></div>
           <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
             <F label="Integration Method"><select className="inp" value={mode} onChange={e=>{const m=e.target.value; setForm({...form,integration_mode:m, api_port: m==='RADIUS'?null:(form.api_port||8728), rest_port: m==='REST'? (form.rest_port||443): (m==='API'? (form.rest_port??null): null)});}}>
@@ -292,7 +292,7 @@ export default function RoutersPage() {
               <div className="md:col-span-2 text-xs text-muted-foreground p-3 rounded-xl bg-violet-500/5 border border-violet-500/20 flex items-start gap-2"><ShieldCheck className="w-4 h-4 mt-0.5 text-violet-400"/>RADIUS NAS for centralized AAA/CoA pool. Sync NAS config and reload FreeRADIUS as needed.</div>
             </>}
           </div>
-          <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={save} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">Save</button></div>
+          <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={save} className="btn btn-primary">Save</button></div>
         </div></div>
       )}
       <style jsx>{`.inp{width:100%;padding:.5rem .75rem;border-radius:.75rem;background:var(--card);color:var(--foreground);border:1px solid var(--border);font-size:.875rem}`}</style>
@@ -300,7 +300,7 @@ export default function RoutersPage() {
   );
 }
 
-function Stat({label,value,icon:Icon,accent='text-foreground'}:any){ return <div className="p-4 rounded-2xl border border-border bg-card hover:border-primary/30 transition-colors"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{label}</span><Icon className={`w-4 h-4 ${accent}`}/></div><div className={`mt-2 text-xl font-black ${accent}`}>{value}</div></div>; }
-function Meter({icon:Icon,label,value}:any){ return <div className="p-2 rounded-lg bg-card border border-border"><div className="flex items-center gap-1 text-muted-foreground"><Icon className="w-3.5 h-3.5"/>{label}</div><div className="font-semibold text-foreground mt-0.5">{value}</div></div>; }
+function Stat({label,value,icon:Icon,accent='text-foreground'}:any){ return <div className="card p-4 hover:border-primary/30 transition-colors"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{label}</span><Icon className={`w-4 h-4 ${accent}`}/></div><div className={`mt-2 text-xl font-black ${accent}`}>{value}</div></div>; }
+function Meter({icon:Icon,label,value}:any){ return <div className="card p-2"><div className="flex items-center gap-1 text-muted-foreground"><Icon className="w-3.5 h-3.5"/>{label}</div><div className="font-semibold text-foreground mt-0.5">{value}</div></div>; }
 function F({label,children}:any){ return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>{children}</label>; }
 function formatUptime(sec:number){ if(!sec) return '-'; const d=Math.floor(sec/86400),h=Math.floor((sec%86400)/3600),m=Math.floor((sec%3600)/60); return `${d}d ${h}h ${m}m`; }

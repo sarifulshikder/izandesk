@@ -30,7 +30,7 @@ export function LiveTrafficChart({ rx, tx, online }: { rx: number; tx: number; o
   }, [history]);
 
   return (
-    <div className="p-5 rounded-2xl bg-card border border-border/80 shadow-sm flex flex-col justify-between h-full">
+    <div className="card p-4 h-full">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="p-2 rounded-xl bg-primary/10 border border-primary/20 text-primary shrink-0">

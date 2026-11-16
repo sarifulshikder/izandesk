@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
-import { ShieldCheck, LogIn, Radio, Sun, Moon } from 'lucide-react';
+import { LogIn, User, Lock, Moon, Sun } from 'lucide-react';
 
 const demoAccounts = [
   { email: 'admin@izandesk.com', password: 'admin123', label: 'Super Admin' },
@@ -35,77 +35,88 @@ export function LoginScreen() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-4 relative">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-background text-foreground p-4 relative">
       <button
         type="button"
         onClick={toggleTheme}
-        className="absolute top-4 right-4 p-2.5 rounded-xl border border-border bg-card hover:bg-muted text-foreground shadow-sm transition-colors"
+        className="absolute top-4 right-4 topbar-icon-btn border border-border bg-card"
         title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
         aria-label="Toggle theme"
       >
-        {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-indigo-500" />}
+        {theme === 'dark' ? <Sun className="w-4 h-4 text-warning" /> : <Moon className="w-4 h-4" />}
       </button>
 
-      <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
-        <div className="hidden lg:flex flex-col justify-between rounded-3xl border border-border bg-gradient-to-br from-card via-card to-primary/10 p-8 shadow-xl text-foreground">
-          <div>
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-primary to-secondary flex items-center justify-center text-white text-2xl font-black mb-4">I</div>
-            <h1 className="text-3xl font-black tracking-tight">Izan<span className="text-primary">Desk</span> ERP</h1>
-            <p className="text-muted-foreground mt-2 max-w-md">ISP Billing, Network Automation, Subscribers, Inventory & GIS — secure role-based access.</p>
+      <div className="w-full max-w-[420px]">
+        <div className="card overflow-hidden">
+          <div className="card-stamp">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/izan-watermark.svg" alt="" />
           </div>
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm"><ShieldCheck className="w-4 h-4 text-primary" /> Role-based access for Admin, NOC, Billing, Technician, Reseller</div>
-            <div className="flex items-center gap-2 text-sm"><Radio className="w-4 h-4 text-emerald-400" /> Live kernel & plugin status integration</div>
-            <div className="text-xs text-muted-foreground">Secure sign-in required to access dashboard and modules.</div>
-          </div>
-        </div>
-
-        <div className="rounded-3xl border border-border bg-card text-foreground p-6 sm:p-8 shadow-xl">
-          <div className="flex items-start justify-between gap-3 mb-6">
-            <div>
-              <h2 className="text-xl font-bold mb-1 text-foreground">Sign in to IzanDesk</h2>
-              <p className="text-sm text-muted-foreground">Authenticate to access the NOC dashboard and role-based modules.</p>
-            </div>
-          </div>
-
-          <form onSubmit={submit} className="space-y-4">
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground">Email or Username</label>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} type="text" autoComplete="username" className="mt-1 w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-primary/50 outline-none text-sm text-foreground placeholder:text-muted-foreground" placeholder="admin@izandesk.com" required />
-            </div>
-            <div>
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-muted-foreground">Password</label>
-                <Link href="/forgot-password" className="text-xs text-primary hover:underline">Forgot password?</Link>
+          <div className="card-body p-6 sm:p-8">
+            <div className="flex items-center gap-3 mb-6">
+              <span className="avatar avatar-lg avatar-primary">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/izan-logo.svg" alt="Izan" className="w-6 h-6" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Admin</div>
+                <h1 className="text-xl font-bold mb-0">Welcome back</h1>
+                <p className="text-xs text-muted-foreground">Sign in to continue</p>
               </div>
-              <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" className="mt-1 w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-primary/50 outline-none text-sm text-foreground placeholder:text-muted-foreground" required />
             </div>
-            <label className="flex items-center gap-2 text-sm text-muted-foreground select-none cursor-pointer">
-              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="rounded border-border" />
-              Remember me
-            </label>
-            {(localError || error) && <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">{localError || error}</div>}
-            <button disabled={submitting || loading} type="submit" className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold hover:opacity-95 disabled:opacity-60">
-              <LogIn className="w-4 h-4" /> {submitting ? 'Signing in...' : 'Sign In'}
-            </button>
-          </form>
 
-          <div className="mt-4 text-xs text-muted-foreground">
-            Customer? <Link href="/portal" className="text-primary hover:underline font-medium">Open the self-care portal</Link>
-          </div>
+            <form onSubmit={submit} className="space-y-4">
+              <div>
+                <label className="form-label" htmlFor="login-username">Username</label>
+                <div className="input-icon">
+                  <User className="w-4 h-4" />
+                  <input id="login-username" value={email} onChange={(e) => setEmail(e.target.value)} type="text" autoComplete="username" className="form-control" placeholder="Your username" required />
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="form-label" htmlFor="login-password">Password</label>
+                  <Link href="/forgot-password" className="text-[11px] text-primary hover:underline">Forgot password?</Link>
+                </div>
+                <div className="input-icon">
+                  <Lock className="w-4 h-4" />
+                  <input id="login-password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" className="form-control" placeholder="Your password" required />
+                </div>
+              </div>
+              <label className="form-check cursor-pointer select-none">
+                <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+                Remember me
+              </label>
+              {(localError || error) && <div className="alert alert-danger">{localError || error}</div>}
+              <button disabled={submitting || loading} type="submit" className="btn btn-primary w-full">
+                <LogIn className="w-4 h-4" /> {submitting ? 'Signing in…' : 'Sign in'}
+              </button>
+            </form>
 
-          <div className="mt-6">
-            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Demo accounts</div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {demoAccounts.map((acc) => (
-                <button key={acc.email} type="button" onClick={() => { setEmail(acc.email); setPassword(acc.password); }} className="text-left p-3 rounded-xl border border-border hover:border-primary/40 hover:bg-muted/50 transition-colors">
-                  <div className="text-xs font-semibold text-foreground">{acc.label}</div>
-                  <div className="text-[11px] text-muted-foreground font-mono break-all">{acc.email}</div>
-                </button>
-              ))}
+            <div className="mt-4 text-center text-xs text-muted-foreground">
+              Customer? <Link href="/portal" className="text-primary font-medium hover:underline">Open the portal</Link>
+              <span className="mx-1.5">·</span>
+              <Link href="/portal" className="text-primary font-medium hover:underline">Register</Link>
             </div>
           </div>
         </div>
+
+        <div className="mt-4 card">
+          <div className="px-3 py-2 flex items-center justify-between">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Demo accounts (click to fill)</span>
+            <span className="badge badge-secondary">RBAC</span>
+          </div>
+          <div className="px-3 pb-3 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            {demoAccounts.map((acc) => (
+              <button key={acc.email} type="button" onClick={() => { setEmail(acc.email); setPassword(acc.password); }} className="text-left px-2.5 py-2 rounded border border-border hover:border-primary/40 hover:bg-muted/50 transition-colors">
+                <div className="text-[11px] font-semibold text-foreground">{acc.label}</div>
+                <div className="text-[10px] text-muted-foreground truncate">{acc.email}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="text-center text-[11px] text-muted-foreground mt-4">© 2026 IzanDesk ERP</div>
       </div>
     </div>
   );

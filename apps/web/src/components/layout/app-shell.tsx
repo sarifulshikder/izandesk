@@ -16,13 +16,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <div className="flex min-h-screen">
+      <div className="page">
         <Sidebar />
-        <div className="hidden lg:block w-72 shrink-0" />
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="page-wrapper">
           <Header />
-          <main className="flex-1 p-4 lg:p-8 pb-24 lg:pb-8 max-w-7xl mx-auto w-full space-y-6">
-            {children}
+          <main className="page-body">
+            <div className="container-xl space-y-5">{children}</div>
           </main>
         </div>
       </div>

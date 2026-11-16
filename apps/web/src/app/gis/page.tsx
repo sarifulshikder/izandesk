@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import { MapPin, Route, Plus, RefreshCw, X, Box, LocateFixed } from 'lucide-react';
 
-const GisMap = dynamic(() => import('./gis-map'), { ssr: false, loading: () => <div className="h-[600px] rounded-2xl border border-border bg-card flex items-center justify-center text-muted-foreground">Loading map...</div> });
+const GisMap = dynamic(() => import('./gis-map'), { ssr: false, loading: () => <div className="h-[600px] card flex items-center justify-center text-muted-foreground">Loading map...</div> });
 
 export default function GisPage() {
   const { token } = useAuth();
@@ -85,12 +85,12 @@ export default function GisPage() {
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Fiber GIS Map & Topology</h1>
+          <h1 className="page-title">Fiber GIS Map & Topology</h1>
           <p className="text-sm text-muted-foreground">PostGIS-backed subscriber pins, distribution boxes, and fiber route tracing. {subCount} subscribers • {boxCount} boxes • {routeCount} routes</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
-          <button onClick={()=>{setMode('add-box'); setForm({name:'', code:'', box_type:'TJ', capacity_ports:8, zone_id: zones[0]?.id || '', latitude:'', longitude:'', address:''}); setPicked(null);}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Distribution Box</button>
+          <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
+          <button onClick={()=>{setMode('add-box'); setForm({name:'', code:'', box_type:'TJ', capacity_ports:8, zone_id: zones[0]?.id || '', latitude:'', longitude:'', address:''}); setPicked(null);}} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Distribution Box</button>
           <button onClick={()=>{setMode('add-route'); setForm({name:'', route_type:'FIBER', from_box_id:'', to_box_id:''}); setDraftPoints([]);}} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><Route className="w-4 h-4"/>Draw Fiber Route</button>
           <button onClick={()=>{setMode('trace'); setForm({name:'', from_box_id:'', subscriber_id:''}); setDraftPoints([]);}} className="px-3 py-2 rounded-xl border border-cyan-500/40 text-cyan-400 text-sm font-semibold inline-flex items-center gap-2"><LocateFixed className="w-4 h-4"/>Trace to Subscriber</button>
         </div>
@@ -99,11 +99,11 @@ export default function GisPage() {
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-2 h-[650px] rounded-2xl border border-border overflow-hidden bg-card">
+        <div className="xl:col-span-2 h-[650px] card overflow-hidden">
           <GisMap data={data} onPick={(mode!=='none')?onPick:undefined} draftLine={draftPoints} />
         </div>
         <div className="space-y-4">
-          <div className="p-4 rounded-2xl border border-border bg-card">
+          <div className="card p-4">
             <h3 className="font-bold mb-2">Map Layers & Legend</h3>
             <div className="text-sm space-y-2 text-muted-foreground">
               <div className="flex items-center gap-2"><span className="w-3 h-3 rounded bg-blue-500 inline-block"></span> Distribution Boxes (TJ/Splitter) — click for details</div>
@@ -126,7 +126,7 @@ export default function GisPage() {
                 <Inp label="Capacity Ports" value={form.capacity_ports||8} onChange={v=>setForm({...form,capacity_ports:Number(v)})} type="number" />
                 <div className="grid grid-cols-2 gap-2"><Inp label="Latitude" value={form.latitude||''} onChange={v=>setForm({...form,latitude:v})} /><Inp label="Longitude" value={form.longitude||''} onChange={v=>setForm({...form,longitude:v})} /></div>
                 <Inp label="Address" value={form.address||''} onChange={v=>setForm({...form,address:v})} />
-                <button onClick={createBox} className="w-full mt-2 px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">Save Distribution Box</button>
+                <button onClick={createBox} className="w-full mt-2 btn btn-primary">Save Distribution Box</button>
               </div>
             </Panel>
           )}
@@ -142,7 +142,7 @@ export default function GisPage() {
                   <button onClick={()=>setDraftPoints(p=>p.slice(0,-1))} className="px-3 py-2 rounded-xl border border-border text-xs">Undo point</button>
                   <button onClick={()=>setDraftPoints([])} className="px-3 py-2 rounded-xl border border-border text-xs">Clear points</button>
                 </div>
-                <button onClick={createRoute} disabled={draftPoints.length<2 || !form.name} className="w-full mt-2 px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold disabled:opacity-50">Save Fiber Route</button>
+                <button onClick={createRoute} disabled={draftPoints.length<2 || !form.name} className="w-full mt-2 btn btn-primary disabled:opacity-50">Save Fiber Route</button>
               </div>
             </Panel>
           )}
@@ -161,7 +161,7 @@ export default function GisPage() {
           )}
 
           {mode === 'none' && (
-            <div className="p-4 rounded-2xl border border-border bg-card space-y-3">
+            <div className="card p-4 space-y-3">
               <h3 className="font-bold flex items-center gap-2"><Box className="w-4 h-4 text-primary"/>Topology Summary</h3>
               <div className="text-sm text-muted-foreground">Areas/Zones: {new Set(zones.map(z=>z.area_id)).size} / {zones.length}</div>
               <div className="text-sm text-muted-foreground">Distribution boxes: {boxesList.length}</div>
@@ -176,6 +176,6 @@ export default function GisPage() {
   );
 }
 
-function Panel({title,onClose,children}: {title:string;onClose:()=>void;children:React.ReactNode}){ return <div className="p-4 rounded-2xl border border-border bg-card"><div className="flex items-center justify-between mb-3"><h3 className="font-bold">{title}</h3><button onClick={onClose} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4"/></button></div>{children}</div>; }
-function Inp({label,value,onChange,type='text'}: {label:string;value:any;onChange:(v:string)=>void;type?:string}){ return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div><input type={type} value={value} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground"/></label>; }
-function Sel({label,value,onChange,options}: {label:string;value:any;onChange:(v:string)=>void;options:any[]}){ return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div><select value={value} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground">{options.map((o:any)=><option key={o.v} value={o.v}>{o.l}</option>)}</select></label>; }
+function Panel({title,onClose,children}: {title:string;onClose:()=>void;children:React.ReactNode}){ return <div className="card p-4"><div className="flex items-center justify-between mb-3"><h3 className="font-bold">{title}</h3><button onClick={onClose} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4"/></button></div>{children}</div>; }
+function Inp({label,value,onChange,type='text'}: {label:string;value:any;onChange:(v:string)=>void;type?:string}){ return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div><input type={type} value={value} onChange={e=>onChange(e.target.value)} className="w-full btn btn-outline text-foreground"/></label>; }
+function Sel({label,value,onChange,options}: {label:string;value:any;onChange:(v:string)=>void;options:any[]}){ return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div><select value={value} onChange={e=>onChange(e.target.value)} className="w-full btn btn-outline text-foreground">{options.map((o:any)=><option key={o.v} value={o.v}>{o.l}</option>)}</select></label>; }

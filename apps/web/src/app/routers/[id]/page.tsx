@@ -16,7 +16,7 @@ function modeBadge(m: string) {
 
 function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
-    <div className="p-4 rounded-2xl border border-border bg-card/60">
+    <div className="card p-4">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 text-xl font-black">{value}</div>
       {sub ? <div className="text-[11px] text-muted-foreground mt-0.5">{sub}</div> : null}
@@ -119,7 +119,7 @@ export default function RouterDetailPage() {
       <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
         <div className="space-y-1">
           <Link href="/routers" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"><ArrowLeft className="w-3.5 h-3.5" />Back to Routers</Link>
-          <h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><Server className="w-6 h-6 text-primary" />{router.name} <span className="text-sm font-semibold text-muted-foreground">360° View</span></h1>
+          <h1 className="page-title"><Server className="w-6 h-6 text-primary" />{router.name} <span className="text-sm font-semibold text-muted-foreground">360° View</span></h1>
           <div className="text-sm text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 items-center">
             <span className={`px-2 py-0.5 rounded-full border text-xs font-semibold ${modeBadge(mode)}`}>{mode}</span>
             <span>{router.router_type || 'Router'} {router.ros_version || ''}</span>
@@ -128,11 +128,11 @@ export default function RouterDetailPage() {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
-          <button onClick={testConn} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Play className="w-4 h-4" />Test</button>
-          {isDirect && <button onClick={provisionWalledGarden} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Globe className="w-4 h-4" />Provision Walled Garden</button>}
-          {mode === 'RADIUS' && <button onClick={syncRadiusNas} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><ShieldCheck className="w-4 h-4" />Sync RADIUS NAS</button>}
-          <Link href="/routers" className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Network className="w-4 h-4" />Overview & Import</Link>
+          <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
+          <button onClick={testConn} className="btn btn-outline inline-flex items-center gap-2"><Play className="w-4 h-4" />Test</button>
+          {isDirect && <button onClick={provisionWalledGarden} className="btn btn-outline inline-flex items-center gap-2"><Globe className="w-4 h-4" />Provision Walled Garden</button>}
+          {mode === 'RADIUS' && <button onClick={syncRadiusNas} className="btn btn-outline inline-flex items-center gap-2"><ShieldCheck className="w-4 h-4" />Sync RADIUS NAS</button>}
+          <Link href="/routers" className="btn btn-outline inline-flex items-center gap-2"><Network className="w-4 h-4" />Overview & Import</Link>
         </div>
       </div>
 
@@ -152,7 +152,7 @@ export default function RouterDetailPage() {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="xl:col-span-1 space-y-4">
-          <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="card p-4">
             <h2 className="font-bold flex items-center gap-2 mb-2"><Activity className="w-4 h-4 text-primary" />Identity & Integration</h2>
             <KV k="Router ID" v={router.id} mono />
             <KV k="Name" v={router.name} />
@@ -163,7 +163,7 @@ export default function RouterDetailPage() {
             <KV k="Enabled" v={router.is_enabled ? 'Yes' : 'No'} />
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="card p-4">
             <h2 className="font-bold flex items-center gap-2 mb-2"><Network className="w-4 h-4 text-primary" />Connectivity & Access</h2>
             <KV k="Host / IP" v={router.host} mono />
             {isDirect ? <>
@@ -182,7 +182,7 @@ export default function RouterDetailPage() {
             <KV k="Updated" v={router.updated_at ? new Date(router.updated_at).toLocaleString() : '-'} />
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="card p-4">
             <h2 className="font-bold flex items-center gap-2 mb-2"><Signal className="w-4 h-4 text-primary" />Capabilities & Notes</h2>
             <div className="text-sm space-y-2 text-muted-foreground">
               {isDirect ? (
@@ -203,22 +203,22 @@ export default function RouterDetailPage() {
 
         <div className="xl:col-span-2 space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="p-3 rounded-xl border border-border bg-card/50 flex items-center gap-2"><Cpu className="w-4 h-4 text-primary" /><div><div className="text-[11px] text-muted-foreground">CPU</div><div className="font-bold">{router.cpu_load != null ? `${Number(router.cpu_load).toFixed(1)}%` : '—'}</div></div></div>
-            <div className="p-3 rounded-xl border border-border bg-card/50 flex items-center gap-2"><HardDrive className="w-4 h-4 text-primary" /><div><div className="text-[11px] text-muted-foreground">Memory</div><div className="font-bold text-sm">{router.memory_total_mb ? `${Number(router.memory_used_mb||0).toFixed(0)}/${Number(router.memory_total_mb||0).toFixed(0)} MB` : '—'}</div></div></div>
-            <div className="p-3 rounded-xl border border-border bg-card/50 flex items-center gap-2"><ArrowDown className="w-4 h-4 text-cyan-400" /><div><div className="text-[11px] text-muted-foreground">RX (agg)</div><div className="font-bold text-sm">{fmtBps(Number(router.rx_bps || derived.totalRx || 0))}</div></div></div>
-            <div className="p-3 rounded-xl border border-border bg-card/50 flex items-center gap-2"><ArrowUp className="w-4 h-4 text-indigo-400" /><div><div className="text-[11px] text-muted-foreground">TX (agg)</div><div className="font-bold text-sm">{fmtBps(Number(router.tx_bps || derived.totalTx || 0))}</div></div></div>
+            <div className="card p-3 flex items-center gap-2"><Cpu className="w-4 h-4 text-primary" /><div><div className="text-[11px] text-muted-foreground">CPU</div><div className="font-bold">{router.cpu_load != null ? `${Number(router.cpu_load).toFixed(1)}%` : '—'}</div></div></div>
+            <div className="card p-3 flex items-center gap-2"><HardDrive className="w-4 h-4 text-primary" /><div><div className="text-[11px] text-muted-foreground">Memory</div><div className="font-bold text-sm">{router.memory_total_mb ? `${Number(router.memory_used_mb||0).toFixed(0)}/${Number(router.memory_total_mb||0).toFixed(0)} MB` : '—'}</div></div></div>
+            <div className="card p-3 flex items-center gap-2"><ArrowDown className="w-4 h-4 text-cyan-400" /><div><div className="text-[11px] text-muted-foreground">RX (agg)</div><div className="font-bold text-sm">{fmtBps(Number(router.rx_bps || derived.totalRx || 0))}</div></div></div>
+            <div className="card p-3 flex items-center gap-2"><ArrowUp className="w-4 h-4 text-indigo-400" /><div><div className="text-[11px] text-muted-foreground">TX (agg)</div><div className="font-bold text-sm">{fmtBps(Number(router.tx_bps || derived.totalTx || 0))}</div></div></div>
           </div>
 
-          <div className="rounded-2xl border border-border bg-card overflow-hidden">
+          <div className="card overflow-hidden">
             <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
               <div>
                 <div className="font-semibold flex items-center gap-2"><Wifi className="w-4 h-4 text-primary" />Live Sessions on this Router ({sessions.length})</div>
                 <div className="text-[11px] text-muted-foreground">{derived.online} online • RX {fmtBps(derived.totalRx)} • TX {fmtBps(derived.totalTx)}</div>
               </div>
-              <Link href="/subscribers/live" className="text-xs px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50">Global Live View</Link>
+              <Link href="/subscribers/live" className="btn btn-outline btn-sm">Global Live View</Link>
             </div>
             <div className="overflow-auto max-h-[560px]">
-              <table className="w-full text-xs">
+              <table className="table table-hover text-xs">
                 <thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr>
                   <th className="text-left px-4 py-2">Subscriber</th>
                   <th className="text-left px-4 py-2">IP / MAC</th>

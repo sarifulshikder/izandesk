@@ -87,12 +87,12 @@ export default function WireGuardPage() {
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><Shield className="w-6 h-6 text-primary"/>WireGuard Overlay (NAT/CGNAT Sites)</h1>
+          <h1 className="page-title"><Shield className="w-6 h-6 text-primary"/>WireGuard Overlay (NAT/CGNAT Sites)</h1>
           <p className="text-sm text-muted-foreground">Plug-and-play hub-and-spoke tunnels to reach MikroTik routers without public IPs and manage <b>OLTs behind them</b>.</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
-          <button onClick={()=>{ setPeerForm({name:'', site_name:'', router_id:'', tunnel_ip:'', allowed_ips:'', olt_mgmt_cidrs:'', keepalive_sec:25, provision_mode:'AUTO'}); setPeerModal('new'); }} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Site/Peer</button>
+          <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
+          <button onClick={()=>{ setPeerForm({name:'', site_name:'', router_id:'', tunnel_ip:'', allowed_ips:'', olt_mgmt_cidrs:'', keepalive_sec:25, provision_mode:'AUTO'}); setPeerModal('new'); }} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Site/Peer</button>
         </div>
       </div>
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
@@ -105,7 +105,7 @@ export default function WireGuardPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-1 rounded-2xl border border-border bg-card p-4 space-y-3">
+        <div className="xl:col-span-1 card p-4 space-y-3">
           <div className="flex items-center justify-between"><h2 className="font-bold flex items-center gap-2"><Server className="w-4 h-4 text-primary"/>Hub Configuration</h2><button onClick={()=>{ setHubForm({ ...(hub||{}), endpoint_host: hub?.endpoint_host||'', endpoint_port: hub?.endpoint_port||51820, hub_address: hub?.hub_address||'10.77.0.1/16', overlay_cidr: hub?.overlay_cidr||'10.77.0.0/16', enabled: hub?.enabled ?? true }); setHubModal(true); }} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button></div>
           <div className="text-xs space-y-2 text-muted-foreground">
             <Row k="Public endpoint" v={hub?.endpoint_host ? `${hub.endpoint_host}:${hub.endpoint_port||hub?.listen_port||51820}` : <span className="text-amber-400">Set public DNS/IP (reachable by routers)</span>} />
@@ -124,7 +124,7 @@ export default function WireGuardPage() {
           </div>
         </div>
 
-        <div className="xl:col-span-2 rounded-2xl border border-border bg-card p-4">
+        <div className="xl:col-span-2 card p-4">
           <h2 className="font-bold mb-3 flex items-center gap-2"><Network className="w-4 h-4 text-primary"/>Sites / Peers (MikroTik spokes, OLTs behind routers)</h2>
           <div className="space-y-3">
             {peers.map(p => (
@@ -133,7 +133,7 @@ export default function WireGuardPage() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold">{p.name}</span>
-                      {p.site_name && <span className="text-[10px] px-2 py-0.5 rounded-full border border-border text-muted-foreground">{p.site_name}</span>}
+                      {p.site_name && <span className="badge badge-outline text-muted-foreground">{p.site_name}</span>}
                       <span className={`text-[10px] px-2 py-0.5 rounded-full border ${p.online?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>{p.online?'ONLINE':(p.status||'PENDING')}</span>
                     </div>
                     <div className="text-xs text-muted-foreground mt-1">Tunnel: <span className="font-mono text-foreground/90">{p.tunnel_ip}</span>{p.router_name ? <> • Router: <span className="text-foreground/90">{p.router_name}</span> <span className="text-[10px]">({p.router_host})</span></> : <> • <span className="text-amber-400">No router linked (bootstrap mode)</span></>}</div>
@@ -193,7 +193,7 @@ export default function WireGuardPage() {
 
       {scriptModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto" onClick={()=>setScriptModal(null)}>
-          <div className="w-full max-w-3xl bg-card border border-border rounded-2xl shadow-2xl my-8" onClick={e=>e.stopPropagation()}>
+          <div className="w-full max-w-3xl card my-8" onClick={e=>e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-border"><h2 className="font-bold flex items-center gap-2"><Copy className="w-4 h-4"/> {scriptModal.title}</h2><div className="flex gap-2"><button onClick={()=>copy(scriptModal.script)} className="px-3 py-1.5 rounded-lg border border-border text-sm">Copy</button><button onClick={()=>setScriptModal(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button></div></div>
             <div className="p-4"><pre className="text-xs font-mono whitespace-pre-wrap bg-muted/40 border border-border rounded-xl p-4 overflow-auto max-h-[70vh]">{scriptModal.script}</pre>
             <div className="text-xs text-muted-foreground mt-3">Apply on MikroTik RouterOS v7+ (Terminal/import). Ensure hub <b>public endpoint</b> is set correctly and UDP port is reachable. The spoke will initiate the tunnel outbound (works behind NAT/CGNAT).</div></div>
@@ -206,14 +206,14 @@ export default function WireGuardPage() {
   );
 }
 
-function Stat({label,value,icon:Icon}:any){ return <div className="p-4 rounded-2xl border border-border bg-card"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{label}</span><Icon className="w-4 h-4"/></div><div className="mt-2 text-lg font-black text-foreground break-all">{value}</div></div>; }
+function Stat({label,value,icon:Icon}:any){ return <div className="card p-4"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{label}</span><Icon className="w-4 h-4"/></div><div className="mt-2 text-lg font-black text-foreground break-all">{value}</div></div>; }
 function Row({k,v}:any){ return <div className="flex items-start justify-between gap-3"><span className="shrink-0">{k}</span><span className="text-right font-medium text-foreground/90 break-all">{v}</span></div>; }
-function Mini({label,value}:any){ return <div className="p-2 rounded-lg bg-card border border-border"><div className="text-muted-foreground">{label}</div><div className="font-semibold text-foreground mt-0.5 break-all">{value}</div></div>; }
+function Mini({label,value}:any){ return <div className="card p-2"><div className="text-muted-foreground">{label}</div><div className="font-semibold text-foreground mt-0.5 break-all">{value}</div></div>; }
 function F({label,children}:any){ return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>{children}</label>; }
 function Modal({title,onClose,onSave,children,wide}:any){ return (
   <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className={`w-full ${wide?'max-w-3xl':'max-w-2xl'} bg-card border border-border rounded-2xl shadow-2xl my-8`}>
     <div className="flex items-center justify-between px-5 py-4 border-b border-border"><h2 className="font-bold">{title}</h2><button onClick={onClose} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button></div>
     <div className="p-5">{children}</div>
-    <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={onClose} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={onSave} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">Save</button></div>
+    <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={onClose} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={onSave} className="btn btn-primary">Save</button></div>
   </div></div>
 ); }

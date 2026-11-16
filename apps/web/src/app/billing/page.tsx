@@ -149,37 +149,37 @@ export default function BillingPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Billing & Payments</h1>
-          <p className="text-sm text-muted-foreground">Automated invoicing, due policies, suspension/walled-garden enforcement, and payment gateway collections with instant reactivation.</p>
+          <h1 className="page-title">Billing & Payments</h1>
+          <p className="page-subtitle">Automated invoicing, due policies, suspension/walled-garden enforcement, and payment gateway collections with instant reactivation.</p>
           <div className="flex flex-wrap gap-2 mt-2 text-[11px]">
-            <a href="/billing/all" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">All Bills</a>
-            <a href="/billing/unpaid" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Unpaid Bills</a>
-            <a href="/billing/paid" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Paid Bills</a>
-            <a href="/billing/invoices" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Invoices</a>
-            <a href="/billing/monthly-generate" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Monthly Generate</a>
-            <a href="/billing/collections" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Today&apos;s Collection</a>
-            <a href="/billing/payments" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Payments</a>
-            <a href="/billing/due-analytics" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Due Analytics</a>
-            <a href="/billing/adjust-bill" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Adjust Bill</a>
-            <a href="/billing/auto-suspend" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Auto Suspend</a>
-            <a href="/billing/waivers" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Waivers</a>
-            <a href="/subscribers" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Clients</a>
-            <a href="/plugins" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Payment Gateways</a>
+            <a href="/billing/all" className="btn btn-outline btn-sm">All Bills</a>
+            <a href="/billing/unpaid" className="btn btn-outline btn-sm">Unpaid Bills</a>
+            <a href="/billing/paid" className="btn btn-outline btn-sm">Paid Bills</a>
+            <a href="/billing/invoices" className="btn btn-outline btn-sm">Invoices</a>
+            <a href="/billing/monthly-generate" className="btn btn-outline btn-sm">Monthly Generate</a>
+            <a href="/billing/collections" className="btn btn-outline btn-sm">Today&apos;s Collection</a>
+            <a href="/billing/payments" className="btn btn-outline btn-sm">Payments</a>
+            <a href="/billing/due-analytics" className="btn btn-outline btn-sm">Due Analytics</a>
+            <a href="/billing/adjust-bill" className="btn btn-outline btn-sm">Adjust Bill</a>
+            <a href="/billing/auto-suspend" className="btn btn-outline btn-sm">Auto Suspend</a>
+            <a href="/billing/waivers" className="btn btn-outline btn-sm">Waivers</a>
+            <a href="/subscribers" className="btn btn-outline btn-sm">Clients</a>
+            <a href="/plugins" className="btn btn-outline btn-sm">Payment Gateways</a>
           </div>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
-          <button onClick={evaluate} disabled={!!working} className="px-3 py-2 rounded-xl border border-amber-500/40 text-amber-300 text-sm font-semibold inline-flex items-center gap-2"><AlertTriangle className="w-4 h-4"/>{working==='eval'?'Evaluating...':'Run Due Policy'}</button>
+        <div className="page-actions flex gap-2 flex-wrap">
+          <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
+          <button onClick={evaluate} disabled={!!working} className="btn btn-warning"><AlertTriangle className="w-4 h-4"/>{working==='eval'?'Evaluating...':'Run Due Policy'}</button>
           <div className="flex items-center gap-2">
-            <input type="date" className="px-3 py-2 rounded-xl border border-border bg-card text-sm" value={cycleDate} onChange={e=>setCycleDate(e.target.value)} />
-            <button onClick={runBatch} disabled={!!working} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Play className="w-4 h-4"/>{working==='batch'?'Generating...':'Generate Batch Invoices'}</button>
+            <input type="date" className="form-control" value={cycleDate} onChange={e=>setCycleDate(e.target.value)} />
+            <button onClick={runBatch} disabled={!!working} className="btn btn-primary"><Play className="w-4 h-4"/>{working==='batch'?'Generating...':'Generate Batch Invoices'}</button>
           </div>
         </div>
       </div>
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
-      {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{msg}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
+      {msg && <div className="alert alert-success">{msg}</div>}
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         {[
@@ -190,7 +190,7 @@ export default function BillingPage() {
           { label: 'Suspended/Isolated', value: String(metrics?.suspendedDue ?? 0), icon: ShieldAlert, accent: 'text-red-400' },
           { label: 'Expired', value: String(metrics?.expiredThisMonth ?? 0), icon: Clock3, accent: 'text-orange-400' },
         ].map((c:any) => (
-          <div key={c.label} className="p-4 rounded-2xl bg-card border border-border/80 hover:border-primary/30 transition-colors">
+          <div key={c.label} className="card p-4 card-link">
             <div className="flex items-center justify-between text-xs uppercase font-bold text-muted-foreground tracking-wider"><span>{c.label}</span><c.icon className={`w-4 h-4 ${c.accent}`}/></div>
             <div className={`mt-2 text-lg font-black ${c.accent}`}>{c.value}</div>
           </div>
@@ -198,10 +198,10 @@ export default function BillingPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div id="billing-invoices" className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden scroll-mt-24">
-          <div className="px-4 py-3 border-b border-border font-semibold flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <div className="flex items-center gap-2"><FileText className="w-4 h-4 text-primary"/>Invoices (batch & prorated)</div>
-            <div className="flex flex-wrap gap-1.5">
+        <div id="billing-invoices" className="card xl:col-span-2 overflow-hidden scroll-mt-24">
+          <div className="card-header flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div className="card-title flex items-center gap-2"><FileText className="w-4 h-4 text-primary"/>Invoices (batch & prorated)</div>
+            <div className="filter-bar flex flex-wrap gap-1.5">
               {[
                 ['ALL', 'All'],
                 ['UNPAID', 'Unpaid/Due'],
@@ -210,12 +210,12 @@ export default function BillingPage() {
                 ['OVERDUE', 'Overdue'],
                 ['PAID', 'Paid'],
               ].map(([k, label]) => (
-                <button key={k} onClick={() => setInvoiceFilter(k)} className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${invoiceFilter === k ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border hover:bg-muted/50 text-foreground'}`}>{label}</button>
+                <button key={k} onClick={() => setInvoiceFilter(k)} className={`filter-chip ${invoiceFilter === k ? 'active' : ''}`}>{label}</button>
               ))}
             </div>
           </div>
-          <div className="overflow-auto max-h-[420px]">
-            <table className="w-full text-sm">
+          <div className="table-wrap overflow-auto max-h-[420px]">
+            <table className="table table-hover w-full text-sm">
               <thead className="bg-muted/40 text-xs uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-3">Invoice</th><th className="text-left px-4 py-3">Subscriber</th><th className="text-left px-4 py-3">Period</th><th className="text-left px-4 py-3">Amounts</th><th className="text-left px-4 py-3">Status</th></tr></thead>
               <tbody>
                 {filteredInvoices.map((inv:any) => (
@@ -226,11 +226,11 @@ export default function BillingPage() {
                     <td className="px-4 py-3 text-xs"><div>Total {money(inv.total_amount||inv.amount)}</div><div className="text-muted-foreground">Paid <span className="text-emerald-400">{money(inv.paid_amount)}</span> • Due <span className={Number(inv.due_amount||0)>0?'text-amber-400 font-medium':''}>{money(inv.due_amount)}</span></div></td>
                     <td className="px-4 py-3 text-xs">
                       <div className="flex flex-col items-start gap-1.5">
-                        <span className={`px-2 py-0.5 rounded-full border font-semibold ${inv.status==='PAID'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':inv.status==='OVERDUE'?'bg-red-500/10 text-red-400 border-red-500/20':inv.status==='PARTIAL'?'bg-amber-500/10 text-amber-400 border-amber-500/20':inv.status==='PENDING'?'bg-blue-500/10 text-blue-400 border-blue-500/20':'bg-muted text-muted-foreground border-border'}`}>{inv.status}</span>
+                        <span className={`badge ${inv.status==='PAID'?'badge-success':inv.status==='OVERDUE'?'badge-danger':inv.status==='PARTIAL'?'badge-warning':inv.status==='PENDING'?'badge-primary':'badge-secondary'}`}>{inv.status}</span>
                         {Number(inv.due_amount || 0) > 0 && String(inv.status).toUpperCase() !== 'PAID' && (
                           <div className="flex flex-wrap gap-1.5" onClick={e=>e.stopPropagation()}>
-                            <a href={`/billing/adjust-bill?invoice_id=${encodeURIComponent(inv.id)}`} className="px-2 py-0.5 rounded-md border border-border hover:bg-muted/50 text-foreground">Adjust</a>
-                            <a href={`/billing/waivers?invoice_id=${encodeURIComponent(inv.id)}`} className="px-2 py-0.5 rounded-md border border-border hover:bg-muted/50 text-foreground">Waive</a>
+                            <a href={`/billing/adjust-bill?invoice_id=${encodeURIComponent(inv.id)}`} className="btn btn-outline btn-sm">Adjust</a>
+                            <a href={`/billing/waivers?invoice_id=${encodeURIComponent(inv.id)}`} className="btn btn-outline btn-sm">Waive</a>
                           </div>
                         )}
                       </div>
@@ -244,30 +244,30 @@ export default function BillingPage() {
         </div>
 
         <div className="space-y-5">
-          <div className="rounded-2xl border border-border bg-card p-4">
-            <h2 className="font-bold mb-3 flex items-center gap-2"><CreditCard className="w-4 h-4 text-primary"/>Sandbox Payment & Instant Reactivation</h2>
+          <div className="card p-4">
+            <h2 className="card-title mb-3 flex items-center gap-2"><CreditCard className="w-4 h-4 text-primary"/>Sandbox Payment & Instant Reactivation</h2>
             <div className="space-y-3 text-sm">
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Invoice</div>
-                <select className="w-full p-2.5 rounded-xl border border-border bg-card" value={payForm.invoice_id} onChange={e=>{ const id=e.target.value; const inv=invoices.find(x=>x.id===id); setPayForm({...payForm, invoice_id:id, amount:String(inv?.due_amount||inv?.total_amount||'')}); }}>
+              <label className="form-label"><div className="text-xs text-muted-foreground mb-1">Invoice</div>
+                <select className="form-select w-full" value={payForm.invoice_id} onChange={e=>{ const id=e.target.value; const inv=invoices.find(x=>x.id===id); setPayForm({...payForm, invoice_id:id, amount:String(inv?.due_amount||inv?.total_amount||'')}); }}>
                   <option value="">Select invoice...</option>
                   {invoices.map((i:any)=>(<option key={i.id} value={i.id}>{i.invoice_number} — {i.subscriber_name || i.client_code} ({money(i.due_amount)} due)</option>))}
                 </select>
               </label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Gateway (hot-reloadable plugin)</div>
-                <select className="w-full p-2.5 rounded-xl border border-border bg-card" value={payForm.gateway} onChange={e=>setPayForm({...payForm, gateway:e.target.value})}>
+              <label className="form-label"><div className="text-xs text-muted-foreground mb-1">Gateway (hot-reloadable plugin)</div>
+                <select className="form-select w-full" value={payForm.gateway} onChange={e=>setPayForm({...payForm, gateway:e.target.value})}>
                   {['bkash','nagad','rocket','stripe','paypal'].map(g => <option key={g} value={g}>{g.toUpperCase()}</option>)}
                 </select>
               </label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Amount</div>
-                <input className="w-full p-2.5 rounded-xl border border-border bg-card" value={payForm.amount} onChange={e=>setPayForm({...payForm, amount:e.target.value})} placeholder={selectedInvoice ? String(selectedInvoice.due_amount) : '0.00'} />
+              <label className="form-label"><div className="text-xs text-muted-foreground mb-1">Amount</div>
+                <input className="form-control w-full" value={payForm.amount} onChange={e=>setPayForm({...payForm, amount:e.target.value})} placeholder={selectedInvoice ? String(selectedInvoice.due_amount) : '0.00'} />
               </label>
-              <button onClick={createAndPay} disabled={!!working || !payForm.invoice_id} className="w-full px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50"><Send className="w-4 h-4"/>{working==='pay'?'Processing...':'Checkout & Confirm (Sandbox)'}</button>
+              <button onClick={createAndPay} disabled={!!working || !payForm.invoice_id} className="btn btn-primary w-full"><Send className="w-4 h-4"/>{working==='pay'?'Processing...':'Checkout & Confirm (Sandbox)'}</button>
               <p className="text-[11px] text-muted-foreground">Creates a checkout session via the selected gateway plugin and simulates successful payment confirmation/webhook to record payment and trigger instant auto-reactivation (&lt;2s target) with PPP/RADIUS/CoA enforcement.</p>
             </div>
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-4">
-            <h2 className="font-bold mb-3 flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-primary"/>Payment Gateways & Plugins</h2>
+          <div className="card p-4">
+            <h2 className="card-title mb-3 flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-primary"/>Payment Gateways & Plugins</h2>
             <div className="space-y-2 text-xs">
               {gateways.map((g:any)=> (
                 <div key={g.gateway} className="p-2.5 rounded-xl border border-border/70 flex items-center justify-between"><div><div className="font-semibold uppercase">{g.gateway}</div><div className="text-muted-foreground">{g.mode} • {g.enabled ? 'enabled' : 'configured'} • {g.has_credentials ? 'credentials set' : 'sandbox/no creds'}</div></div><CheckCircle2 className={`w-4 h-4 ${g.enabled || g.mode==='SANDBOX' ? 'text-emerald-400':'text-muted-foreground'}`}/></div>
@@ -279,20 +279,20 @@ export default function BillingPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-        <div id="billing-due" className="rounded-2xl border border-border bg-card overflow-hidden scroll-mt-24">
-          <div className="px-4 py-3 border-b border-border font-semibold flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-400"/>Due / Suspension Control (warning → grace → isolation/walled garden)</div>
-          <div className="overflow-auto max-h-[360px]">
-            <table className="w-full text-xs">
+        <div id="billing-due" className="card overflow-hidden scroll-mt-24">
+          <div className="card-header font-semibold flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-400"/>Due / Suspension Control (warning → grace → isolation/walled garden)</div>
+          <div className="table-wrap overflow-auto max-h-[360px]">
+            <table className="table table-hover w-full text-xs">
               <thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-2">Subscriber</th><th className="text-left px-4 py-2">Due/Stage</th><th className="text-left px-4 py-2">Status</th><th className="text-right px-4 py-2">Actions</th></tr></thead>
               <tbody>
                 {overdueCandidates.map((s:any)=> (
                   <tr key={s.id} className="border-t border-border/70">
                     <td className="px-4 py-2"><div className="font-semibold">{s.full_name}</div><div className="text-muted-foreground font-mono">{s.client_code || s.username}</div></td>
                     <td className="px-4 py-2"><div>{money(s.current_due || 0)}</div><div className="text-muted-foreground">{s.suspension_stage || 'NONE'} {s.walled_garden ? '• walled garden':''} {s.grace_until ? `• grace ${String(s.grace_until).slice(0,10)}`:''}</div></td>
-                    <td className="px-4 py-2"><span className="px-2 py-0.5 rounded-full border border-border">{s.status}</span></td>
+                    <td className="px-4 py-2"><span className="badge badge-secondary">{s.status}</span></td>
                     <td className="px-4 py-2 text-right space-x-1">
-                      <button onClick={()=>suspendSubscriber(s.id)} disabled={!!working} className="px-2 py-1 rounded-lg border border-red-500/30 text-red-300 inline-flex items-center gap-1"><Ban className="w-3 h-3"/>Suspend</button>
-                      <button onClick={()=>reactivateSubscriber(s.id)} disabled={!!working} className="px-2 py-1 rounded-lg border border-emerald-500/30 text-emerald-300 inline-flex items-center gap-1"><RotateCcw className="w-3 h-3"/>Reactivate</button>
+                      <button onClick={()=>suspendSubscriber(s.id)} disabled={!!working} className="btn btn-danger btn-sm"><Ban className="w-3 h-3"/>Suspend</button>
+                      <button onClick={()=>reactivateSubscriber(s.id)} disabled={!!working} className="btn btn-success btn-sm"><RotateCcw className="w-3 h-3"/>Reactivate</button>
                     </td>
                   </tr>
                 ))}
@@ -302,22 +302,22 @@ export default function BillingPage() {
           </div>
         </div>
 
-        <div id="billing-payments" className="rounded-2xl border border-border bg-card overflow-hidden scroll-mt-24">
-          <div className="px-4 py-3 border-b border-border font-semibold flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2"><Wallet className="w-4 h-4 text-primary"/>Recent Payments & Suspension Logs</div>
-            <button onClick={() => setPaymentsTodayOnly(v => !v)} className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${paymentsTodayOnly ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border hover:bg-muted/50'}`}>{paymentsTodayOnly ? "Showing: Today" : "Filter: Today"}</button>
+        <div id="billing-payments" className="card overflow-hidden scroll-mt-24">
+          <div className="card-header font-semibold flex items-center justify-between gap-2">
+            <div className="card-title flex items-center gap-2"><Wallet className="w-4 h-4 text-primary"/>Recent Payments & Suspension Logs</div>
+            <button onClick={() => setPaymentsTodayOnly(v => !v)} className={`filter-chip ${paymentsTodayOnly ? 'active' : ''}`}>{paymentsTodayOnly ? "Showing: Today" : "Filter: Today"}</button>
           </div>
           <div className="grid grid-rows-2 h-[360px]">
-            <div className="overflow-auto border-b border-border/70">
-              <table className="w-full text-xs"><thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-2">Time</th><th className="text-left px-4 py-2">Ref/Invoice</th><th className="text-left px-4 py-2">Gateway</th><th className="text-left px-4 py-2">Amount</th><th className="text-left px-4 py-2">Status</th></tr></thead>
+            <div className="table-wrap overflow-auto border-b border-border/70">
+              <table className="table table-hover w-full text-xs"><thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-2">Time</th><th className="text-left px-4 py-2">Ref/Invoice</th><th className="text-left px-4 py-2">Gateway</th><th className="text-left px-4 py-2">Amount</th><th className="text-left px-4 py-2">Status</th></tr></thead>
                 <tbody>
                   {filteredPayments.slice(0,30).map((p:any)=>(<tr key={p.id} className="border-t border-border/70"><td className="px-4 py-2 text-muted-foreground">{p.created_at?new Date(p.created_at).toLocaleString():'-'}</td><td className="px-4 py-2"><div className="font-medium">{p.payment_ref}</div><div className="text-muted-foreground">{p.invoice_number || ''} {p.full_name?`• ${p.full_name}`:''}</div></td><td className="px-4 py-2 uppercase">{p.gateway}</td><td className="px-4 py-2">{money(p.amount, p.currency==='USD'?'$':'৳')}</td><td className="px-4 py-2"><span className={p.status==='COMPLETED'?'text-emerald-400':p.status==='FAILED'?'text-red-400':'text-amber-300'}>{p.status}</span></td></tr>))}
                   {!filteredPayments.length && <tr><td colSpan={5} className="px-4 py-4 text-center text-muted-foreground">{payments.length ? 'No payments match the current filter.' : 'No payments yet.'}</td></tr>}
                 </tbody>
               </table>
             </div>
-            <div className="overflow-auto">
-              <table className="w-full text-xs"><thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-2">Time</th><th className="text-left px-4 py-2">Subscriber</th><th className="text-left px-4 py-2">Action/Stage</th><th className="text-left px-4 py-2">Reason</th></tr></thead>
+            <div className="table-wrap overflow-auto">
+              <table className="table table-hover w-full text-xs"><thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-2">Time</th><th className="text-left px-4 py-2">Subscriber</th><th className="text-left px-4 py-2">Action/Stage</th><th className="text-left px-4 py-2">Reason</th></tr></thead>
                 <tbody>
                   {logs.slice(0,30).map((l:any)=>(<tr key={l.id} className="border-t border-border/70"><td className="px-4 py-2 text-muted-foreground">{l.created_at?new Date(l.created_at).toLocaleString():'-'}</td><td className="px-4 py-2"><div className="font-medium">{l.full_name || l.username || l.subscriber_id || '-'}</div><div className="text-muted-foreground">{l.client_code || ''}</div></td><td className="px-4 py-2">{l.action} {l.stage?`• ${l.stage}`:''}</td><td className="px-4 py-2 text-muted-foreground">{l.reason || ''}</td></tr>))}
                   {!logs.length && <tr><td colSpan={4} className="px-4 py-4 text-center text-muted-foreground">No suspension/reactivation logs yet.</td></tr>}
@@ -328,8 +328,8 @@ export default function BillingPage() {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-4 text-sm text-muted-foreground">
-        <div className="font-semibold text-foreground mb-1">Phase 4 capabilities covered</div>
+      <div className="card p-4 text-sm text-muted-foreground">
+        <div className="card-title mb-1">Phase 4 capabilities covered</div>
         <ul className="list-disc pl-5 space-y-1">
           <li>Automated batch monthly invoicing with mid-month proration and invoice records/items.</li>
           <li>Multi-stage due policy: pre-expiry warning, grace countdown, auto-suspension/router isolation and optional walled-garden flag/profile handling.</li>

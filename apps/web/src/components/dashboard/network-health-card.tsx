@@ -21,7 +21,7 @@ export function NetworkHealthCard({ routers, olts, onus }: { routers: any[]; olt
   );
 
   return (
-    <div className="p-5 rounded-2xl bg-card border border-border/80 shadow-sm flex flex-col h-full">
+    <div className="card p-4 h-full">
       <div className="flex items-center justify-between mb-3 gap-2">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="p-2 rounded-xl bg-secondary/10 border border-secondary/20 text-secondary shrink-0"><NetworkIcon className="w-4 h-4" /></div>
@@ -69,7 +69,7 @@ export function NetworkHealthCard({ routers, olts, onus }: { routers: any[]; olt
       <div className="flex items-center gap-2 mb-2 flex-wrap pt-2 border-t border-border/60">
         {pill(oOn, olts.length, 'OLTs')}
         <span className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-muted/30">{onuTotal} ONUs • {onuOnline} online</span>
-        {onuCritical > 0 && <span className="text-[10px] px-2 py-0.5 rounded-full border bg-red-500/10 text-red-400 border-red-500/20 inline-flex items-center gap-1"><AlertOctagon className="w-3 h-3" />{onuCritical} critical</span>}
+        {onuCritical > 0 && <span className="badge badge-danger"><AlertOctagon className="w-3 h-3" />{onuCritical} critical</span>}
       </div>
       <div className="space-y-2">
         {olts.slice(0, 2).map((o) => {

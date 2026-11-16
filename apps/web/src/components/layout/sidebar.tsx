@@ -6,40 +6,11 @@ import { usePathname, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import {
-  LayoutDashboard,
-  Users,
-  Network,
-  CreditCard,
-  Briefcase,
-  LifeBuoy,
-  MapPin,
-  MessageSquare,
-  Package,
-  Settings,
-  Puzzle,
-  ShieldCheck,
-  Radio,
-  Boxes,
-  X,
-  Shield,
-  ChevronDown,
-  ChevronRight,
-  Plug,
-  Wallet,
-  Smartphone,
-  Activity,
-  UserPlus,
-  UserX,
-  UserMinus,
-  Clock3,
-  Landmark,
-  UsersRound,
-  ShoppingCart,
-  Ticket,
-  BarChart3,
-  ScrollText,
-  Wifi,
-  Truck,
+  LayoutDashboard, MapPin, Boxes, Users, UserPlus, Activity, UsersRound, Truck,
+  Clock3, UserX, UserMinus, CreditCard, Receipt, Wallet, Landmark, BarChart3,
+  ScrollText, Briefcase, Radio, Network, Shield, ShieldCheck, Wifi, Package,
+  LifeBuoy, MessageSquare, Puzzle, Smartphone, ShoppingCart, Settings, Server,
+  X, ChevronDown, ChevronRight,
 } from 'lucide-react';
 
 interface NavGroup {
@@ -62,11 +33,7 @@ function isItemActive(pathname: string, searchParams: URLSearchParams | null, hr
     if (searchParams?.get('new') === '1' || searchParams?.get('action') === 'new' || searchParams?.get('add') === '1') return false;
     return true;
   }
-  if (href === '/resellers' && pathname === '/resellers') return true;
-  if (href === '/olts' && pathname === '/olts') return true;
-  if (href === '/olts') return false;
-  if (href === '/routers' && pathname === '/routers') return true;
-  if (href === '/routers') return false;
+  if (['/resellers', '/olts', '/routers'].includes(href) && pathname !== href) return false;
   return pathname === href || (href !== '/' && pathname.startsWith(href + '/'));
 }
 
@@ -77,50 +44,41 @@ export function Sidebar() {
   const [resellers, setResellers] = useState<any[]>([]);
   const [olts, setOlts] = useState<any[]>([]);
   const [routers, setRouters] = useState<any[]>([]);
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Core: true, Subscribers: true, Resellers: true, Network: true, Billing: true, Support: true, 'Finance & Ops': true, Plugins: true, System: false });
-  const [openSub, setOpenSub] = useState<Record<string, boolean>>({ 'Payment Gateways': true, 'All Resellers': true, 'FTTH & OLTs': true, 'Network & Routers': true });
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
+    Dashboard: true, Clients: true, Billing: true, Resellers: false, Network: true, 'OLT & Tools': true,
+    Support: false, 'Finance & Ops': false, Plugins: false, System: false,
+  });
+  const [openSub, setOpenSub] = useState<Record<string, boolean>>({
+    'Payment Gateways': true, 'All Resellers': true, 'FTTH & OLTs': true, 'Network & Routers': true,
+  });
 
   const loadResellers = useCallback(async () => {
     if (!token) return;
-    try {
-      const r = await apiFetch<any>('/api/resellers', {}, token);
-      setResellers(r.data || []);
-    } catch {
-      setResellers([]);
-    }
+    try { setResellers((await apiFetch<any>('/api/resellers', {}, token)).data || []); } catch { setResellers([]); }
   }, [token]);
-
   const loadOlts = useCallback(async () => {
     if (!token) return;
-    try {
-      const r = await apiFetch<any>('/api/olt/olts', {}, token);
-      setOlts(r.data || []);
-    } catch {
-      setOlts([]);
-    }
+    try { setOlts((await apiFetch<any>('/api/olt/olts', {}, token)).data || []); } catch { setOlts([]); }
   }, [token]);
-
   const loadRouters = useCallback(async () => {
     if (!token) return;
-    try {
-      const r = await apiFetch<any>('/api/network/routers', {}, token);
-      setRouters(r.data || []);
-    } catch {
-      setRouters([]);
-    }
+    try { setRouters((await apiFetch<any>('/api/network/routers', {}, token)).data || []); } catch { setRouters([]); }
   }, [token]);
 
   useEffect(() => { loadResellers(); loadOlts(); loadRouters(); }, [loadResellers, loadOlts, loadRouters, pathname]);
 
   useEffect(() => {
-    if (pathname.startsWith('/subscribers')) setOpenGroups(s => ({ ...s, Subscribers: true }));
-    if (pathname.startsWith('/resellers')) { setOpenGroups(s => ({ ...s, Resellers: true })); setOpenSub(s => ({ ...s, 'All Resellers': true })); }
-    if (pathname.startsWith('/routers')) { setOpenGroups(s => ({ ...s, Network: true })); setOpenSub(s => ({ ...s, 'Network & Routers': true })); }
-    if (pathname.startsWith('/olts')) { setOpenGroups(s => ({ ...s, Network: true })); setOpenSub(s => ({ ...s, 'FTTH & OLTs': true })); }
-    if (pathname.startsWith('/acs')) setOpenGroups(s => ({ ...s, Network: true }));
-    if (pathname.startsWith('/plugins')) setOpenGroups(s => ({ ...s, Plugins: true }));
-    if (pathname.startsWith('/plugins/payment-gateways')) setOpenSub(s => ({ ...s, 'Payment Gateways': true }));
-    if (pathname.startsWith('/finance') || pathname.startsWith('/hr') || pathname.startsWith('/procurement') || pathname.startsWith('/hotspot') || pathname.startsWith('/reports') || pathname.startsWith('/audit')) setOpenGroups(s => ({ ...s, 'Finance & Ops': true }));
+    const open = (g: string) => setOpenGroups(s => ({ ...s, [g]: true }));
+    if (pathname === '/') open('Dashboard');
+    if (pathname.startsWith('/subscribers') || pathname.startsWith('/leads') || pathname.startsWith('/installation-orders')) open('Clients');
+    if (pathname.startsWith('/billing') || pathname.startsWith('/payments') || pathname.startsWith('/collections')) open('Billing');
+    if (pathname.startsWith('/resellers')) { open('Resellers'); setOpenSub(s => ({ ...s, 'All Resellers': true })); }
+    if (pathname.startsWith('/routers') || pathname.startsWith('/bandwidth') || pathname.startsWith('/radius') || pathname.startsWith('/wireguard') || pathname.startsWith('/acs')) { open('Network'); setOpenSub(s => ({ ...s, 'Network & Routers': true })); }
+    if (pathname.startsWith('/olts')) { open('OLT & Tools'); setOpenSub(s => ({ ...s, 'FTTH & OLTs': true })); }
+    if (pathname.startsWith('/tickets') || pathname.startsWith('/messaging') || pathname.startsWith('/portal')) open('Support');
+    if (pathname.startsWith('/finance') || pathname.startsWith('/hr') || pathname.startsWith('/procurement') || pathname.startsWith('/hotspot') || pathname.startsWith('/reports') || pathname.startsWith('/audit')) open('Finance & Ops');
+    if (pathname.startsWith('/plugins')) { open('Plugins'); setOpenSub(s => ({ ...s, 'Payment Gateways': true })); }
+    if (pathname.startsWith('/settings') || pathname.startsWith('/system')) open('System');
   }, [pathname]);
 
   if (!user || !activeRole) return null;
@@ -130,32 +88,45 @@ export function Sidebar() {
 
   const sidebarGroups: NavGroup[] = [
     {
-      label: 'Core',
+      label: 'Dashboard',
       items: [
-        { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-        { name: 'Fiber GIS Map', href: '/gis', icon: MapPin, badge: 'Live GIS' },
-        { name: 'Inventory & Serials', href: '/inventory', icon: Boxes, badge: 'Stock' },
+        { name: 'Overview', href: '/', icon: LayoutDashboard },
+        { name: 'Fiber GIS Map', href: '/gis', icon: MapPin, badge: 'GIS' },
+        { name: 'Inventory & Serials', href: '/inventory', icon: Boxes },
       ],
     },
     {
-      label: 'Subscribers',
+      label: 'Clients',
       items: [
         { name: 'All Subscribers', href: '/subscribers', icon: Users, badge: 'All' },
         { name: 'Add Subscriber', href: '/subscribers?new=1', icon: UserPlus },
-        { name: 'Live Sessions', href: '/subscribers/live', icon: Activity },
-          { name: 'Leads Pipeline', href: '/leads', icon: UsersRound, badge: 'CRM' },
-          { name: 'Installation Orders', href: '/installation-orders', icon: Truck, badge: 'Field' },
-          { name: 'Expired Subscribers', href: '/subscribers?status=EXPIRED', icon: Clock3 },
-        { name: 'Suspended Subscribers', href: '/subscribers?status=SUSPENDED', icon: UserX },
+        { name: 'Live Sessions', href: '/subscribers/live', icon: Activity, badge: 'Live' },
+        { name: 'Leads Pipeline', href: '/leads', icon: UsersRound },
+        { name: 'Installation Orders', href: '/installation-orders', icon: Truck },
+        { name: 'Expired', href: '/subscribers?status=EXPIRED', icon: Clock3 },
+        { name: 'Suspended', href: '/subscribers?status=SUSPENDED', icon: UserX },
         { name: 'Pending / Inactive', href: '/subscribers?status=PENDING', icon: UserMinus },
+      ],
+    },
+    {
+      label: 'Billing',
+      items: [
+        { name: 'Billing & Invoices', href: '/billing', icon: CreditCard },
+        { name: 'All Bills', href: '/billing/all', icon: Receipt },
+        { name: 'Invoices', href: '/billing/invoices', icon: Receipt },
+        { name: 'Payments', href: '/billing/payments', icon: Wallet },
+        { name: 'Collections', href: '/collections', icon: Landmark },
+        { name: 'Due Report', href: '/due-report', icon: BarChart3 },
+        { name: 'Monthly Generate', href: '/billing/monthly-generate', icon: Receipt },
+        { name: 'Adjust Bill', href: '/billing/adjust-bill', icon: CreditCard },
+        { name: 'Auto Suspend', href: '/billing/auto-suspend', icon: UserX },
       ],
     },
     {
       label: 'Resellers',
       items: [
         {
-          name: 'All Resellers',
-          icon: Briefcase,
+          name: 'All Resellers', icon: Briefcase,
           children: [
             { name: 'Overview', href: '/resellers' },
             ...resellers.map((r: any) => ({ name: r.name, href: `/resellers/${r.id}` })),
@@ -170,31 +141,29 @@ export function Sidebar() {
       label: 'Network',
       items: [
         { name: 'Bandwidth & QoS', href: '/bandwidth', icon: Radio },
+        { name: 'RADIUS & AAA', href: '/radius', icon: ShieldCheck },
+        { name: 'WireGuard Overlay', href: '/wireguard', icon: Shield, badge: 'WG' },
+        { name: 'ACS / TR-069', href: '/acs', icon: Wifi, badge: 'CWMP' },
         {
-          name: 'Network & Routers',
-          icon: Network,
+          name: 'Network & Routers', icon: Network,
           children: [
             { name: 'Overview', href: '/routers' },
             ...routers.map((r: any) => ({ name: r.name || r.host || 'Router', href: `/routers/${r.id}` })),
           ],
         },
-        { name: 'WireGuard Overlay', href: '/wireguard', icon: Shield, badge: 'WG' },
-        { name: 'RADIUS & AAA', href: '/radius', icon: ShieldCheck },
-        { name: 'ACS / TR-069 (GenieACS)', href: '/acs', icon: Wifi, badge: 'CWMP' },
+      ],
+    },
+    {
+      label: 'OLT & Tools',
+      items: [
         {
-          name: 'FTTH & OLTs',
-          icon: Package,
+          name: 'FTTH & OLTs', icon: Package,
           children: [
             { name: 'Overview', href: '/olts' },
             ...olts.map((o: any) => ({ name: o.name || o.host || 'OLT', href: `/olts/${o.id}` })),
           ],
         },
-      ],
-    },
-    {
-      label: 'Billing',
-      items: [
-        { name: 'Billing & Invoices', href: '/billing', icon: CreditCard },
+        { name: 'Walled Garden', href: '/walled-garden', icon: Shield },
       ],
     },
     {
@@ -208,8 +177,8 @@ export function Sidebar() {
     {
       label: 'Finance & Ops',
       items: [
-        { name: 'Reports & Analytics', href: '/reports', icon: BarChart3, badge: 'P7' },
         { name: 'Finance & Accounts', href: '/finance', icon: Landmark },
+        { name: 'Reports & Analytics', href: '/reports', icon: BarChart3 },
         { name: 'HR & Payroll', href: '/hr', icon: UsersRound },
         { name: 'Procurement & Assets', href: '/procurement', icon: ShoppingCart },
         { name: 'Hotspot Vouchers', href: '/hotspot', icon: Wifi },
@@ -221,8 +190,7 @@ export function Sidebar() {
       items: [
         { name: 'Plugin Manager', href: '/plugins', icon: Puzzle },
         {
-          name: 'Payment Gateways',
-          icon: Wallet,
+          name: 'Payment Gateways', icon: Wallet,
           children: [
             { name: 'bKash', href: '/plugins/payment-gateways/bkash' },
             { name: 'Nagad', href: '/plugins/payment-gateways/nagad' },
@@ -237,7 +205,7 @@ export function Sidebar() {
     {
       label: 'System',
       items: [
-        { name: 'System Health & Backup', href: '/system/health', icon: ShieldCheck, badge: 'Ops' },
+        { name: 'System Health & Backup', href: '/system/health', icon: Server },
         { name: 'Settings & Security', href: '/settings', icon: Settings },
       ],
     },
@@ -247,64 +215,49 @@ export function Sidebar() {
     <>
       <aside
         className={[
-          'flex flex-col w-72 border-r border-border bg-card/95 dark:bg-[#0b1020]/95 backdrop-blur-md h-screen z-40 transition-transform duration-300 shadow-2xl lg:shadow-none',
-          'fixed inset-y-0 left-0',
-          'lg:sticky lg:top-0 lg:translate-x-0',
-          isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full',
+          'sidebar',
+          'fixed inset-y-0 left-0 lg:sticky lg:top-0',
+          'transition-transform duration-200',
+          isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0 hidden lg:flex',
         ].join(' ')}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border/80">
-          <Link href="/" className="flex items-center gap-2.5" onClick={() => setMobileMenuOpen(false)}>
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-primary to-cyan-500 flex items-center justify-center shadow-lg shadow-primary/25 text-white font-black text-lg">I</div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-bold text-lg tracking-tight text-foreground">Izan<span className="text-primary">Desk</span></span>
-                <span className="text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">ERP</span>
-              </div>
-              <p className="text-[11px] text-muted-foreground">ISP Billing & Network OSS</p>
-            </div>
+        <div className="sidebar-brand">
+          <Link href="/" className="flex items-center gap-2" onClick={() => setMobileMenuOpen(false)}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/izan-logo.svg" alt="Izan" className="w-8 h-8 rounded shrink-0" />
+            <span className="flex flex-col leading-none">
+              <span className="text-[15px] font-bold tracking-tight text-foreground">Izan<span className="text-primary">Desk</span> <span className="text-[10px] font-semibold text-muted-foreground">ERP</span></span>
+              <span className="text-[10px] text-muted-foreground mt-0.5">ISP Billing & Network OSS</span>
+            </span>
           </Link>
-          <button onClick={() => setMobileMenuOpen(false)} className="lg:hidden p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted" aria-label="Close menu"><X className="w-5 h-5" /></button>
+          <button onClick={() => setMobileMenuOpen(false)} className="topbar-icon-btn lg:hidden" aria-label="Close menu"><X className="w-4 h-4" /></button>
         </div>
 
-        <div className="px-3 py-3 border-b border-border/60">
-          <div className="px-3 py-2.5 rounded-xl bg-muted/50 border border-border/70 flex items-center justify-between">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-              <div className="min-w-0">
-                <div className="text-xs font-semibold text-foreground truncate">{user.name}</div>
-                <div className="text-[10px] text-muted-foreground uppercase tracking-wider truncate">{activeRole.replace(/_/g, ' ')}</div>
-              </div>
-            </div>
-            <ShieldCheck className="w-4 h-4 text-primary shrink-0" />
-          </div>
-        </div>
-
-        <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+        <div className="sidebar-scroll">
           {sidebarGroups.map((group) => (
-            <div key={group.label} className="rounded-xl border border-border/50 bg-muted/10">
-              <button onClick={() => toggleGroup(group.label)} className="w-full flex items-center justify-between px-3 py-2 text-[11px] uppercase tracking-wider font-bold text-muted-foreground hover:text-foreground">
+            <div key={group.label} className="sidebar-section">
+              <button onClick={() => toggleGroup(group.label)} className="sidebar-section-title">
                 <span>{group.label}</span>
-                {openGroups[group.label] ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                {openGroups[group.label] ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
               </button>
               {openGroups[group.label] && (
-                <div className="px-2 pb-2 space-y-0.5">
+                <div>
                   {group.items.map((item: any) => {
-                    if (item.children && item.children.length) {
+                    if (item.children?.length) {
                       const isOpen = !!openSub[item.name];
                       const subActive = item.children.some((c: any) => isItemActive(pathname, searchParams, c.href));
                       return (
-                        <div key={item.name} className="rounded-lg">
-                          <button onClick={() => toggleSub(item.name)} className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${subActive ? 'bg-primary/10 text-primary' : 'text-foreground/80 hover:bg-muted/70 hover:text-foreground'}`}>
-                            <span className="flex items-center gap-2.5">{item.icon && <item.icon className="w-4 h-4" />}{item.name}</span>
-                            {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                        <div key={item.name}>
+                          <button onClick={() => toggleSub(item.name)} className={`sidebar-link ${subActive && !isOpen ? 'active' : ''}`}>
+                            <span>{item.icon && <item.icon className="w-4 h-4" />}{item.name}</span>
+                            {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                           </button>
                           {isOpen && (
-                            <div className="ml-4 mt-0.5 pl-3 border-l border-primary/20 space-y-0.5 max-h-64 overflow-auto">
+                            <div className="border-l border-border ml-4">
                               {item.children.map((c: any) => {
                                 const active = isItemActive(pathname, searchParams, c.href);
                                 return (
-                                  <Link key={`${item.name}-${c.href}-${c.name}`} href={c.href} onClick={() => setMobileMenuOpen(false)} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-colors ${active ? 'bg-primary text-primary-foreground font-semibold shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-muted/70'}`}>
+                                  <Link key={`${item.name}-${c.href}-${c.name}`} href={c.href} onClick={() => setMobileMenuOpen(false)} className={`sidebar-sublink ${active ? 'active' : ''}`}>
                                     <span className="truncate">{c.name}</span>
                                   </Link>
                                 );
@@ -317,9 +270,9 @@ export function Sidebar() {
                     const active = isItemActive(pathname, searchParams, item.href);
                     const Icon = item.icon;
                     return (
-                      <Link key={item.name} href={item.href!} onClick={() => setMobileMenuOpen(false)} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors border border-transparent ${active ? 'bg-primary text-primary-foreground font-semibold shadow-sm shadow-primary/20' : 'text-foreground/80 hover:bg-muted/70 hover:text-foreground'}`}>
-                        <span className="flex items-center gap-2.5">{Icon && <Icon className={`w-4 h-4 ${active ? '' : 'text-primary/80'}`} />}{item.name}</span>
-                        {item.badge && <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${active ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-muted text-muted-foreground border border-border/60'}`}>{item.badge}</span>}
+                      <Link key={item.name} href={item.href!} onClick={() => setMobileMenuOpen(false)} className={`sidebar-link ${active ? 'active' : ''}`}>
+                        <span>{Icon && <Icon className="w-4 h-4" />}<span className="truncate">{item.name}</span></span>
+                        {item.badge && <span className="sidebar-badge">{item.badge}</span>}
                       </Link>
                     );
                   })}
@@ -327,18 +280,18 @@ export function Sidebar() {
               )}
             </div>
           ))}
-        </nav>
+        </div>
 
-        <div className="p-4 border-t border-border/70 bg-muted/20">
-          <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" />System status</span>
-            <span className="font-mono text-[11px] text-emerald-400">Ready</span>
+        <div className="sidebar-footer">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="flex items-center gap-1.5 text-muted-foreground"><span className="status-dot online" /> System status</span>
+            <span className="font-semibold text-success">Operational</span>
           </div>
-          <div className="text-[11px] text-muted-foreground">Monitoring & automation services</div>
+          <div className="text-[10px] text-muted-foreground mt-1">Signed in as <span className="font-medium text-foreground">{user.name}</span></div>
         </div>
       </aside>
 
-      {isMobileMenuOpen && <div className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm lg:hidden" onClick={() => setMobileMenuOpen(false)} aria-hidden="true" />}
+      {isMobileMenuOpen && <div className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={() => setMobileMenuOpen(false)} aria-hidden="true" />}
     </>
   );
 }

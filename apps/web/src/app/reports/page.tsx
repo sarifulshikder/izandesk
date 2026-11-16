@@ -61,17 +61,17 @@ export default function ReportsPage() {
   const ov = overview || {};
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div><h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><BarChart3 className="w-6 h-6 text-primary"/>Reports & Analytics</h1><p className="text-sm text-muted-foreground">Operational/financial reports, exports, and report schedules (Phase 7).</p></div>
-        <div className="flex flex-wrap gap-2">
-          <button onClick={()=>dlCsv('/api/reports/collections','collections.csv')} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Download className="w-4 h-4"/>Collections CSV</button>
-          <button onClick={()=>dlCsv('/api/reports/dues-aging','dues-aging.csv')} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Download className="w-4 h-4"/>Aging CSV</button>
-          <button onClick={()=>dlCsv('/api/reports/profit-loss','profit-loss.csv')} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Download className="w-4 h-4"/>P&L CSV</button>
-          <button onClick={()=>exportJson('reports-overview', overview)} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Download className="w-4 h-4"/>JSON</button>
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
+      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div><h1 className="page-title"><BarChart3 className="w-6 h-6 text-primary"/>Reports & Analytics</h1><p className="text-sm text-muted-foreground">Operational/financial reports, exports, and report schedules (Phase 7).</p></div>
+        <div className="page-actions flex flex-wrap gap-2">
+          <button onClick={()=>dlCsv('/api/reports/collections','collections.csv')} className="btn btn-outline"><Download className="w-4 h-4"/>Collections CSV</button>
+          <button onClick={()=>dlCsv('/api/reports/dues-aging','dues-aging.csv')} className="btn btn-outline"><Download className="w-4 h-4"/>Aging CSV</button>
+          <button onClick={()=>dlCsv('/api/reports/profit-loss','profit-loss.csv')} className="btn btn-outline"><Download className="w-4 h-4"/>P&L CSV</button>
+          <button onClick={()=>exportJson('reports-overview', overview)} className="btn btn-outline"><Download className="w-4 h-4"/>JSON</button>
+          <button onClick={load} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
         </div>
       </div>
-      {err && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>}
+      {err && <div className="alert alert-danger">{err}</div>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
         <Kpi label="Subscribers" value={ov.subscribers?.total||0} sub={`${ov.subscribers?.active||0} active`} />
@@ -111,18 +111,18 @@ export default function ReportsPage() {
         </Panel>
       </div>
 
-      <div className="rounded-2xl border border-border bg-card p-4">
-        <h2 className="font-bold mb-3">Report Schedules (delivery hook)</h2>
+      <div className="card p-4">
+        <h2 className="card-title mb-3">Report Schedules (delivery hook)</h2>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 overflow-auto max-h-[220px]"><Table cols={['Name','Report','Format','Cron','Enabled']} rows={schedules.map((s:any)=>[s.name,s.report_key,s.format,s.schedule_cron||'-',s.enabled?'Yes':'No'])} empty="No schedules configured." /></div>
-          <div className="space-y-2 text-sm"><input className="w-full p-2.5 rounded-xl border border-border bg-card" placeholder="Schedule name" value={sched.name} onChange={e=>setSched({...sched,name:e.target.value})} /><select className="w-full p-2.5 rounded-xl border border-border bg-card" value={sched.report_key} onChange={e=>setSched({...sched,report_key:e.target.value})}>{['collections','dues-aging','profit-loss','expenses','resellers','payroll'].map(x=><option key={x} value={x}>{x}</option>)}</select><input className="w-full p-2.5 rounded-xl border border-border bg-card" placeholder="Cron (e.g. 0 23 * * *)" value={sched.schedule_cron} onChange={e=>setSched({...sched,schedule_cron:e.target.value})} /><button onClick={createSchedule} className="w-full px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold">Save Schedule</button><div className="text-xs text-muted-foreground">Schedules are stored for report generation/delivery; connect a cron/worker and email/messaging channel to auto-deliver outputs.</div></div>
+          <div className="lg:col-span-2 table-wrap overflow-auto max-h-[220px]"><Table cols={['Name','Report','Format','Cron','Enabled']} rows={schedules.map((s:any)=>[s.name,s.report_key,s.format,s.schedule_cron||'-',s.enabled?'Yes':'No'])} empty="No schedules configured." /></div>
+          <div className="space-y-2 text-sm"><input className="form-control" placeholder="Schedule name" value={sched.name} onChange={e=>setSched({...sched,name:e.target.value})} /><select className="form-select" value={sched.report_key} onChange={e=>setSched({...sched,report_key:e.target.value})}>{['collections','dues-aging','profit-loss','expenses','resellers','payroll'].map(x=><option key={x} value={x}>{x}</option>)}</select><input className="form-control" placeholder="Cron (e.g. 0 23 * * *)" value={sched.schedule_cron} onChange={e=>setSched({...sched,schedule_cron:e.target.value})} /><button onClick={createSchedule} className="btn btn-primary w-full">Save Schedule</button><div className="text-xs text-muted-foreground">Schedules are stored for report generation/delivery; connect a cron/worker and email/messaging channel to auto-deliver outputs.</div></div>
         </div>
       </div>
     </div>
   );
 }
 
-function Kpi({label,value,sub}:any){ return <div className="p-4 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground mb-1">{label}</div><div className="text-xl font-black">{value}</div>{sub && <div className="text-[11px] text-muted-foreground mt-1">{sub}</div>}</div>; }
-function Bucket({label,count,amount}:any){ return <div className="p-3 rounded-xl border border-border bg-muted/20"><div className="text-xs text-muted-foreground">{label}</div><div className="text-lg font-bold">{count}</div><div className="text-xs text-muted-foreground">{money(amount)}</div></div>; }
-function Panel({title,children,id}:any){ return <div id={id} className="rounded-2xl border border-border bg-card p-4 scroll-mt-24"><h2 className="font-bold mb-3">{title}</h2><div className="overflow-auto max-h-[300px]">{children}</div></div>; }
-function Table({cols,rows,empty}:any){ return <table className="w-full text-xs"><thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border">{cols.map((c:string)=><th key={c} className="text-left py-2 px-2">{c}</th>)}</tr></thead><tbody>{(rows||[]).map((r:any,i:number)=>(<tr key={i} className="border-b border-border/50">{r.map((c:any,j:number)=><td key={j} className="py-2 px-2">{c}</td>)}</tr>))}{!(rows||[]).length && <tr><td colSpan={cols.length} className="py-6 text-center text-muted-foreground">{empty||'No data.'}</td></tr>}</tbody></table>; }
+function Kpi({label,value,sub}:any){ return <div className="card p-4"><div className="text-xs text-muted-foreground mb-1">{label}</div><div className="text-xl font-black">{value}</div>{sub && <div className="text-[11px] text-muted-foreground mt-1">{sub}</div>}</div>; }
+function Bucket({label,count,amount}:any){ return <div className="card card-body-sm"><div className="text-xs text-muted-foreground">{label}</div><div className="text-lg font-bold">{count}</div><div className="text-xs text-muted-foreground">{money(amount)}</div></div>; }
+function Panel({title,children,id}:any){ return <div id={id} className="card p-4 scroll-mt-24"><h2 className="card-title mb-3">{title}</h2><div className="table-wrap overflow-auto max-h-[300px]">{children}</div></div>; }
+function Table({cols,rows,empty}:any){ return <table className="table table-hover"><thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border">{cols.map((c:string)=><th key={c} className="text-left py-2 px-2">{c}</th>)}</tr></thead><tbody>{(rows||[]).map((r:any,i:number)=>(<tr key={i} className="border-b border-border/50">{r.map((c:any,j:number)=><td key={j} className="py-2 px-2">{c}</td>)}</tr>))}{!(rows||[]).length && <tr><td colSpan={cols.length} className="py-6 text-center text-muted-foreground">{empty||'No data.'}</td></tr>}</tbody></table>; }

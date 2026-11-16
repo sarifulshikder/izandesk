@@ -16,7 +16,7 @@ function opticalTone(status: string) {
 
 function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
-    <div className="p-4 rounded-2xl border border-border bg-card/60">
+    <div className="card p-4">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 text-xl font-black">{value}</div>
       {sub ? <div className="text-[11px] text-muted-foreground mt-0.5">{sub}</div> : null}
@@ -144,7 +144,7 @@ export default function OltDetailPage() {
       <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
         <div className="space-y-1">
           <Link href="/olts" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"><ArrowLeft className="w-3.5 h-3.5" />Back to OLTs</Link>
-          <h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><Server className="w-6 h-6 text-primary" />{olt.name} <span className="text-sm font-semibold text-muted-foreground">360° View</span></h1>
+          <h1 className="page-title"><Server className="w-6 h-6 text-primary" />{olt.name} <span className="text-sm font-semibold text-muted-foreground">360° View</span></h1>
           <div className="text-sm text-muted-foreground flex flex-wrap gap-x-3 gap-y-1">
             <span>{olt.vendor} {olt.model || ''}</span>
             <span>• Host: <span className="font-mono text-foreground">{olt.host}</span></span>
@@ -153,11 +153,11 @@ export default function OltDetailPage() {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
-          <button onClick={testOlt} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Play className="w-4 h-4" />Test</button>
-          <button onClick={discover} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Search className="w-4 h-4" />Discover</button>
-          <button onClick={refreshTelemetry} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Radio className="w-4 h-4" />Telemetry</button>
-          <button onClick={autoLink} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Wifi className="w-4 h-4" />Auto-Link</button>
+          <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
+          <button onClick={testOlt} className="btn btn-outline inline-flex items-center gap-2"><Play className="w-4 h-4" />Test</button>
+          <button onClick={discover} className="btn btn-outline inline-flex items-center gap-2"><Search className="w-4 h-4" />Discover</button>
+          <button onClick={refreshTelemetry} className="btn btn-outline inline-flex items-center gap-2"><Radio className="w-4 h-4" />Telemetry</button>
+          <button onClick={autoLink} className="btn btn-outline inline-flex items-center gap-2"><Wifi className="w-4 h-4" />Auto-Link</button>
         </div>
       </div>
 
@@ -177,7 +177,7 @@ export default function OltDetailPage() {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="xl:col-span-1 space-y-4">
-          <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="card p-4">
             <h2 className="font-bold flex items-center gap-2 mb-2"><Activity className="w-4 h-4 text-primary" />Identity & Access</h2>
             <KV k="OLT ID" v={olt.id} mono />
             <KV k="Vendor / Model" v={`${olt.vendor || '-'} ${olt.model || ''}`} />
@@ -189,7 +189,7 @@ export default function OltDetailPage() {
             <KV k="Enabled" v={olt.is_enabled ? 'Yes' : 'No'} />
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="card p-4">
             <h2 className="font-bold flex items-center gap-2 mb-2"><Network className="w-4 h-4 text-primary" />Connectivity & Location</h2>
             <KV k="Site" v={olt.site || '-'} />
             <KV k="WG Peer" v={olt.wg_peer_name || 'None'} />
@@ -201,7 +201,7 @@ export default function OltDetailPage() {
             <KV k="Updated" v={olt.updated_at ? new Date(olt.updated_at).toLocaleString() : '-'} />
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="card p-4">
             <h2 className="font-bold flex items-center gap-2 mb-2"><Gauge className="w-4 h-4 text-primary" />Health & Optical Summary</h2>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div className="p-2.5 rounded-xl bg-emerald-500/5 border border-emerald-500/20"><div className="text-[11px] text-muted-foreground">Normal</div><div className="font-bold text-emerald-400">{derived.normal}</div></div>
@@ -212,7 +212,7 @@ export default function OltDetailPage() {
             <div className="mt-3 text-xs text-muted-foreground flex items-start gap-2"><AlertTriangle className="w-3.5 h-3.5 mt-0.5 text-amber-400" />Thresholds: NORMAL ≥ -27 dBm, WARNING &lt; -27 dBm, CRITICAL ≤ -30 or ≥ -8 dBm.</div>
           </div>
 
-          <div className="rounded-2xl border border-border bg-card p-4">
+          <div className="card p-4">
             <h2 className="font-bold flex items-center gap-2 mb-2"><Layers className="w-4 h-4 text-primary" />PON Port Breakdown</h2>
             <div className="space-y-2 max-h-[260px] overflow-auto">
               {derived.ponRows.map(p => (
@@ -234,11 +234,11 @@ export default function OltDetailPage() {
 
         <div className="xl:col-span-2 space-y-4">
           {discovered.length > 0 && (
-            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
+            <div className="alert alert-warning">
               <h2 className="font-bold flex items-center gap-2 mb-3"><Signal className="w-4 h-4 text-amber-400" />Discovered / Pending Authorization ({discovered.length})</h2>
               <div className="space-y-2 max-h-[240px] overflow-auto">
                 {discovered.map(o => (
-                  <div key={o.id} className="p-3 rounded-xl border border-amber-500/20 bg-card/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div key={o.id} className="card p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="text-sm">
                       <div className="font-semibold font-mono">{o.serial_number || 'N/A'} <span className="text-muted-foreground font-sans font-normal">• PON {o.pon_port}{o.onu_id ? ` • ONU ${o.onu_id}` : ''}</span></div>
                       <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-1">
@@ -249,14 +249,14 @@ export default function OltDetailPage() {
                         <span className={`px-1.5 py-0.5 rounded-full border ${opticalTone(o.optical_status)}`}>{o.optical_status}</span>
                       </div>
                     </div>
-                    <button onClick={() => { setAuthModal(o); setAuthSub(''); }} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><CheckCircle2 className="w-4 h-4" />Authorize</button>
+                    <button onClick={() => { setAuthModal(o); setAuthSub(''); }} className="btn btn-primary"><CheckCircle2 className="w-4 h-4" />Authorize</button>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          <div className="rounded-2xl border border-border bg-card overflow-hidden">
+          <div className="card overflow-hidden">
             <div className="px-4 py-3 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <div className="font-semibold">All ONUs & Telemetry ({activeOnus.length}{q ? ` / ${onus.filter(o=>o.status!=='DISCOVERED').length}` : ''})</div>
@@ -265,7 +265,7 @@ export default function OltDetailPage() {
               <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search serial, name, PON, subscriber, MAC, status..." className="w-full sm:w-80 px-3 py-2 rounded-xl border border-border bg-background text-sm" />
             </div>
             <div className="overflow-auto max-h-[620px]">
-              <table className="w-full text-xs">
+              <table className="table table-hover text-xs">
                 <thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr>
                   <th className="text-left px-4 py-2">ONU / Port</th>
                   <th className="text-left px-4 py-2">Subscriber</th>
@@ -301,18 +301,18 @@ export default function OltDetailPage() {
       </div>
 
       {authModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-lg bg-card border border-border rounded-2xl shadow-2xl my-8">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-lg card my-8">
           <div className="flex items-center justify-between px-5 py-4 border-b border-border"><h2 className="font-bold">Authorize ONU</h2><button onClick={() => setAuthModal(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4" /></button></div>
           <div className="p-5 space-y-3 text-sm">
             <div className="p-3 rounded-xl bg-muted/40 border border-border"><div className="font-mono font-semibold">{authModal.serial_number}</div><div className="text-xs text-muted-foreground">{olt.name} • PON {authModal.pon_port}</div></div>
             <label className="block"><div className="text-xs text-muted-foreground mb-1">Link Subscriber (optional)</div>
-              <select className="w-full p-2.5 rounded-xl border border-border bg-card" value={authSub} onChange={e => setAuthSub(e.target.value)}>
+              <select className="w-full form-control" value={authSub} onChange={e => setAuthSub(e.target.value)}>
                 <option value="">No subscriber link</option>
                 {subscribers.map((s: any) => (<option key={s.id} value={s.id}>{s.client_code || ''} — {s.full_name} ({s.username || 'no username'})</option>))}
               </select>
             </label>
           </div>
-          <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={() => setAuthModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={authorize} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold inline-flex items-center gap-2"><CheckCircle2 className="w-4 h-4" />Authorize</button></div>
+          <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={() => setAuthModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={authorize} className="btn btn-primary inline-flex items-center gap-2"><CheckCircle2 className="w-4 h-4" />Authorize</button></div>
         </div></div>
       )}
     </div>

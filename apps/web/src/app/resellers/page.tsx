@@ -32,37 +32,37 @@ export default function ResellersOverviewPage() {
 
   if (isResellerUser) {
     if (loading && !resellers.length) return <div className="p-6 text-sm text-muted-foreground">Loading reseller portal...</div>;
-    if (err) return <div className="p-4 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>;
+    if (err) return <div className="alert alert-danger">{err}</div>;
     if (resellers[0]?.id) return <ResellerPortal resellerId={resellers[0].id} />;
-    return <div className="p-6 rounded-2xl border border-dashed border-border text-muted-foreground">No reseller account is linked to this login. Please contact the administrator.</div>;
+    return <div className="empty-state">No reseller account is linked to this login. Please contact the administrator.</div>;
   }
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Reseller Portal</h1>
+          <h1 className="page-title">Reseller Portal</h1>
           <p className="text-sm text-muted-foreground">Open a reseller to access the full partner portal: dashboard, users, online sessions, balance/sharing reports, payments, and ONU list.</p>
         </div>
         <div className="flex items-center gap-2">
-          {canManage && <Link href="/resellers/add" className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4" />Add Reseller</Link>}
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
+          {canManage && <Link href="/resellers/add" className="btn btn-primary"><Plus className="w-4 h-4" />Add Reseller</Link>}
+          <button onClick={load} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
         </div>
       </div>
-      {err && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>}
+      {err && <div className="alert alert-danger">{err}</div>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {resellers.map(r => (
-          <Link key={r.id} href={`/resellers/${r.id}`} className="group p-4 rounded-2xl border border-border bg-card hover:border-primary/40 hover:bg-muted/20 transition-colors">
+          <Link key={r.id} href={`/resellers/${r.id}`} className="group card card-link p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0"><Building2 className="w-5 h-5" /></div>
+                <div className="dash-stat-icon shrink-0"><Building2 className="w-5 h-5" /></div>
                 <div className="min-w-0">
                   <div className="font-bold truncate">{r.name}</div>
                   <div className="text-xs text-muted-foreground truncate">{r.company_name || r.code}</div>
                 </div>
               </div>
-              <span className="text-[10px] px-2 py-0.5 rounded-full border border-border shrink-0">{r.tier}</span>
+              <span className="badge badge-secondary shrink-0">{r.tier}</span>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
               <div className="p-2.5 rounded-xl bg-muted/30 border border-border/60"><div className="text-[11px] text-muted-foreground flex items-center gap-1"><Users className="w-3 h-3" />Subscribers</div><div className="font-bold">{r.subscriber_count ?? 0}</div></div>
@@ -74,7 +74,7 @@ export default function ResellersOverviewPage() {
             </div>
           </Link>
         ))}
-        {!resellers.length && !loading && <div className="md:col-span-2 xl:col-span-3 rounded-2xl border border-dashed border-border p-10 text-center text-muted-foreground">No resellers found.{canManage ? ' Use “Add Reseller” to create one.' : ''}</div>}
+        {!resellers.length && !loading && <div className="md:col-span-2 xl:col-span-3 empty-state">No resellers found.{canManage ? ' Use “Add Reseller” to create one.' : ''}</div>}
       </div>
     </div>
   );

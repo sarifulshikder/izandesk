@@ -84,18 +84,18 @@ export default function InventoryPage() {
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Inventory & Serial Tracking</h1>
+          <h1 className="page-title">Inventory & Serial Tracking</h1>
           <p className="text-sm text-muted-foreground">Warehouses, hardware items, and serial-number lifecycle (stock, assigned, faulty).</p>
         </div>
-        <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2 w-fit"><RefreshCw className="w-4 h-4"/>Refresh</button>
+        <button onClick={load} className="btn btn-outline inline-flex items-center gap-2 w-fit"><RefreshCw className="w-4 h-4"/>Refresh</button>
       </div>
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
 
       <div className="flex gap-2 flex-wrap">
         {([['warehouses','Warehouses',Warehouse],['items','Items',Package],['serials','Serial Numbers',Barcode]] as any[]).map(([k,label,Icon]) => (
-          <button key={k} onClick={()=>setTab(k)} className={`px-4 py-2 rounded-xl text-sm font-medium border inline-flex items-center gap-2 ${tab===k?'bg-primary text-primary-foreground border-primary':'bg-card border-border'}`}><Icon className="w-4 h-4"/>{label}</button>
+          <button key={k} onClick={()=>setTab(k)} className={`filter-chip ${tab===k?'active':''}`}><Icon className="w-4 h-4"/>{label}</button>
         ))}
-        <button onClick={()=>openNew(tab)} className="ml-auto px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add {tab==='warehouses'?'Warehouse':tab==='items'?'Item':'Serial'}</button>
+        <button onClick={()=>openNew(tab)} className="ml-auto btn btn-primary"><Plus className="w-4 h-4"/>Add {tab==='warehouses'?'Warehouse':tab==='items'?'Item':'Serial'}</button>
       </div>
 
       {tab === 'warehouses' && (
@@ -116,40 +116,40 @@ export default function InventoryPage() {
       {tab === 'serials' && (
         <div className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-            <input value={serialFilter.q} onChange={e=>setSerialFilter({...serialFilter,q:e.target.value})} placeholder="Search serial/MAC..." className="px-3 py-2 rounded-xl bg-card border border-border text-sm"/>
-            <select value={serialFilter.status} onChange={e=>setSerialFilter({...serialFilter,status:e.target.value})} className="px-3 py-2 rounded-xl bg-card border border-border text-sm">
+            <input value={serialFilter.q} onChange={e=>setSerialFilter({...serialFilter,q:e.target.value})} placeholder="Search serial/MAC..." className="btn btn-outline"/>
+            <select value={serialFilter.status} onChange={e=>setSerialFilter({...serialFilter,status:e.target.value})} className="btn btn-outline">
               <option value="">All statuses</option>{['IN_STOCK','ASSIGNED','FAULTY','RMA','RETIRED'].map(s=><option key={s} value={s}>{s}</option>)}
             </select>
-            <select value={serialFilter.item_id} onChange={e=>setSerialFilter({...serialFilter,item_id:e.target.value})} className="px-3 py-2 rounded-xl bg-card border border-border text-sm">
+            <select value={serialFilter.item_id} onChange={e=>setSerialFilter({...serialFilter,item_id:e.target.value})} className="btn btn-outline">
               <option value="">All items</option>{items.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
             </select>
-            <select value={serialFilter.warehouse_id} onChange={e=>setSerialFilter({...serialFilter,warehouse_id:e.target.value})} className="px-3 py-2 rounded-xl bg-card border border-border text-sm">
+            <select value={serialFilter.warehouse_id} onChange={e=>setSerialFilter({...serialFilter,warehouse_id:e.target.value})} className="btn btn-outline">
               <option value="">All warehouses</option>{warehouses.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
-            <select value={serialFilter.source} onChange={e=>setSerialFilter({...serialFilter,source:e.target.value})} className="px-3 py-2 rounded-xl bg-card border border-border text-sm">
+            <select value={serialFilter.source} onChange={e=>setSerialFilter({...serialFilter,source:e.target.value})} className="btn btn-outline">
               <option value="">All sources</option>
               <option value="MANUAL">Manual entry</option>
               <option value="ONU_IMPORT">ONU (auto-imported from OLT)</option>
             </select>
           </div>
           {onuSummary && Number(onuSummary.total_onu_serials) > 0 && (
-            <div className="flex flex-wrap items-center gap-2 p-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 text-sm">
+            <div className="alert alert-success flex-wrap text-sm">
               <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-300"><Radio className="w-4 h-4"/>ONU auto-import</span>
               <span className="text-emerald-200/80">{onuSummary.total_onu_serials} linked ONUs in inventory • {onuSummary.assigned} assigned • {onuSummary.subscribers_with_onu} subscribers</span>
-              {(onuSummary.by_vendor||[]).map((v:any)=>(<span key={v.vendor} className="text-[11px] px-2 py-0.5 rounded-full border border-emerald-500/40 text-emerald-200">{v.vendor}: {v.count}</span>))}
+              {(onuSummary.by_vendor||[]).map((v:any)=>(<span key={v.vendor} className="badge badge-success">{v.vendor}: {v.count}</span>))}
             </div>
           )}
           <div className="flex items-center gap-2 flex-wrap">
-            <button onClick={syncOnus} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Radio className="w-4 h-4"/>Sync ONUs from OLT</button>
+            <button onClick={syncOnus} className="btn btn-primary"><Radio className="w-4 h-4"/>Sync ONUs from OLT</button>
             {syncMsg && <span className="text-xs text-muted-foreground">{syncMsg}</span>}
           </div>
           <CardTable loading={loading} headers={['Serial / MAC','Item','Source','Warehouse','Status','Assigned To','Actions']} rows={serials.map(s => [
             <div key="n"><div className="font-mono text-xs font-semibold">{s.serial_number}</div><div className="text-xs text-muted-foreground">{s.mac_address||'-'}</div></div>,
             <div key="i"><div>{s.item_name}</div><div className="text-xs text-muted-foreground">{s.item_category} {s.brand?`• ${s.brand}`:''}</div></div>,
             s.source === 'ONU_IMPORT'
-              ? <span key="src" title={s.olt_vendor ? `OLT vendor: ${s.olt_vendor}` : ''} className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 whitespace-nowrap"><Radio className="w-3 h-3"/>{s.olt_name ? `${s.olt_name}${s.onu_pon_port ? ' • ' + s.onu_pon_port : ''}` : 'ONU import'}</span>
-              : <span key="src" className="text-[11px] px-2 py-1 rounded-full border border-border text-muted-foreground">MANUAL</span>,
-            s.warehouse_name||'-', <span key="st" className="text-[11px] px-2 py-1 rounded-full border border-border">{s.status}</span>,
+              ? <span key="src" title={s.olt_vendor ? `OLT vendor: ${s.olt_vendor}` : ''} className="badge badge-success whitespace-nowrap"><Radio className="w-3 h-3"/>{s.olt_name ? `${s.olt_name}${s.onu_pon_port ? ' • ' + s.onu_pon_port : ''}` : 'ONU import'}</span>
+              : <span key="src" className="badge badge-outline text-muted-foreground">MANUAL</span>,
+            s.warehouse_name||'-', <span key="st" className="badge badge-outline">{s.status}</span>,
             s.subscriber_name ? `${s.subscriber_name} (${s.subscriber_code})` : '-',
             <Actions key="a" onEdit={()=>openEdit('serials',s)} onDelete={()=>del(`/api/inventory/serials/${s.id}`)} />
           ])} empty="No serials found." />
@@ -158,7 +158,7 @@ export default function InventoryPage() {
 
       {modal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto">
-          <div className="w-full max-w-xl bg-card border border-border rounded-2xl shadow-2xl my-8">
+          <div className="w-full max-w-xl card my-8">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <h2 className="font-bold capitalize">{modal.type.replace('-', ' ')}</h2>
               <button onClick={()=>setModal(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button>
@@ -188,7 +188,7 @@ export default function InventoryPage() {
             </div>
             <div className="px-5 py-4 border-t border-border flex justify-end gap-2">
               <button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button>
-              <button onClick={save} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">Save</button>
+              <button onClick={save} className="btn btn-primary">Save</button>
             </div>
           </div>
         </div>
@@ -205,7 +205,7 @@ function Field({label, children}: any) { return <label className="block"><div cl
 function Actions({onEdit, onDelete}: any) { return <div className="flex justify-end gap-1"><button onClick={onEdit} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button><button onClick={onDelete} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400"><Trash2 className="w-4 h-4"/></button></div>; }
 function CardTable({headers, rows, loading, empty}: any) {
   return (
-    <div className="rounded-2xl border border-border bg-card overflow-hidden"><div className="overflow-auto"><table className="w-full text-sm">
+    <div className="card overflow-hidden"><div className="overflow-auto"><table className="table table-hover text-sm">
       <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr>{headers.map((h:string,i:number)=><th key={i} className={`px-4 py-3 ${i===headers.length-1?'text-right':'text-left'}`}>{h}</th>)}</tr></thead>
       <tbody>
         {loading ? <tr><td colSpan={headers.length} className="px-4 py-8 text-center text-muted-foreground">Loading...</td></tr> :

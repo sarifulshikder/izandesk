@@ -125,20 +125,20 @@ export default function InstallationOrdersPage() {
 
   const statusBadge = (s: string) => {
     const v = String(s || '').toUpperCase();
-    if (v === 'COMPLETED') return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-    if (v === 'IN_PROGRESS') return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
-    if (v === 'CANCELLED') return 'bg-red-500/10 text-red-400 border-red-500/20';
-    if (v === 'ASSIGNED') return 'bg-violet-500/10 text-violet-400 border-violet-500/20';
-    if (v === 'SCHEDULED') return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
-    return 'bg-muted/40 text-muted-foreground border-border';
+    if (v === 'COMPLETED') return 'badge-success';
+    if (v === 'IN_PROGRESS') return 'badge-info';
+    if (v === 'CANCELLED') return 'badge-danger';
+    if (v === 'ASSIGNED') return 'badge-purple';
+    if (v === 'SCHEDULED') return 'badge-warning';
+    return 'badge-secondary';
   };
 
   const priorityBadge = (p: string) => {
     const v = String(p || '').toUpperCase();
-    if (v === 'URGENT') return 'bg-red-500/10 text-red-400 border-red-500/20';
-    if (v === 'HIGH') return 'bg-amber-500/10 text-amber-400 border-amber-500/20';
-    if (v === 'LOW') return 'bg-muted/40 text-muted-foreground border-border';
-    return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+    if (v === 'URGENT') return 'badge-danger';
+    if (v === 'HIGH') return 'badge-warning';
+    if (v === 'LOW') return 'badge-secondary';
+    return 'badge-success';
   };
 
   const typeIcon = (t: string) => {
@@ -155,14 +155,14 @@ export default function InstallationOrdersPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Installation Orders</h1>
+          <h1 className="page-title">Installation Orders</h1>
           <p className="text-sm text-muted-foreground">Schedule, dispatch, and track field work — {total} total</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2">Refresh</button>
-          <button onClick={openCreate} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Create Order</button>
+          <button onClick={load} className="btn btn-outline">Refresh</button>
+          <button onClick={openCreate} className="btn btn-primary"><Plus className="w-4 h-4"/>Create Order</button>
         </div>
       </div>
 
@@ -170,34 +170,34 @@ export default function InstallationOrdersPage() {
 
       {summary && (
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-          <div className="p-4 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground">Pending</div><div className="text-xl font-black mt-1 text-amber-400">{summary.pending}</div></div>
-          <div className="p-4 rounded-2xl border border-blue-500/20 bg-blue-500/5"><div className="text-xs text-blue-300/80">In Progress</div><div className="text-xl font-black mt-1 text-blue-400">{summary.in_progress}</div></div>
-          <div className="p-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5"><div className="text-xs text-emerald-300/80">Completed</div><div className="text-xl font-black mt-1 text-emerald-400">{summary.completed}</div></div>
-          <div className="p-4 rounded-2xl border border-red-500/20 bg-red-500/5"><div className="text-xs text-red-300/80">Overdue</div><div className="text-xl font-black mt-1 text-red-400">{summary.overdue}</div></div>
+          <div className="card p-4"><div className="text-xs text-muted-foreground">Pending</div><div className="text-xl font-black mt-1 text-amber-400">{summary.pending}</div></div>
+          <div className="card p-4 border-info/30"><div className="text-xs text-blue-300/80">In Progress</div><div className="text-xl font-black mt-1 text-blue-400">{summary.in_progress}</div></div>
+          <div className="card p-4 border-success/30"><div className="text-xs text-emerald-300/80">Completed</div><div className="text-xl font-black mt-1 text-emerald-400">{summary.completed}</div></div>
+          <div className="card p-4 border-danger/30"><div className="text-xs text-red-300/80">Overdue</div><div className="text-xl font-black mt-1 text-red-400">{summary.overdue}</div></div>
         </div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
         <div className="md:col-span-2 relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"/>
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by order no, address, contact..." className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50"/>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by order no, address, contact..." className="form-control w-full pl-9"/>
         </div>
-        <select value={status} onChange={e=>setStatus(e.target.value)} className="px-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground">
+        <select value={status} onChange={e=>setStatus(e.target.value)} className="btn btn-outline">
           <option value="">All Statuses</option>
           {ORDER_STATUSES.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
-        <select value={type} onChange={e=>setType(e.target.value)} className="px-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground">
+        <select value={type} onChange={e=>setType(e.target.value)} className="btn btn-outline">
           <option value="">All Types</option>
           {ORDER_TYPES.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
-        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="px-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground" />
-        <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="px-3 py-2.5 rounded-xl bg-card border border-border text-sm text-foreground" />
+        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="btn btn-outline" />
+        <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="btn btn-outline" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden">
-          <div className="overflow-auto">
-            <table className="w-full text-sm">
+        <div className="xl:col-span-2 card overflow-hidden">
+          <div className="table-wrap">
+            <table className="table table-hover text-sm">
               <thead className="bg-muted/40 text-muted-foreground text-xs uppercase">
                 <tr>
                   <th className="text-left px-4 py-3">Order</th>
@@ -233,8 +233,8 @@ export default function InstallationOrdersPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col gap-1">
-                        <span className={`text-[11px] px-2 py-1 rounded-full border font-semibold ${statusBadge(r.status)}`}>{r.status}</span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${priorityBadge(r.priority)}`}>{r.priority}</span>
+                        <span className={`badge ${statusBadge(r.status)}`}>{r.status}</span>
+                        <span className={`badge font-semibold ${priorityBadge(r.priority)}`}>{r.priority}</span>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right" onClick={e=>e.stopPropagation()}>
@@ -248,7 +248,7 @@ export default function InstallationOrdersPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-4 space-y-4">
+        <div className="card p-4 space-y-4">
           {!detail ? (
             <div className="text-sm text-muted-foreground py-16 text-center border border-dashed border-border rounded-xl">Select an order to view details and manage checklist.</div>
           ) : (
@@ -258,8 +258,8 @@ export default function InstallationOrdersPage() {
                   <div className="font-bold text-foreground flex items-center gap-2">{typeIcon(detail.order_type)}<span className="truncate">{detail.order_no}</span></div>
                   <div className="text-xs text-muted-foreground mt-0.5">{detail.order_type}</div>
                   <div className="flex flex-wrap items-center gap-2 mt-2">
-                    <span className={`text-[11px] px-2 py-0.5 rounded-full border font-semibold ${statusBadge(detail.status)}`}>{detail.status}</span>
-                    <span className={`text-[11px] px-2 py-0.5 rounded-full border font-semibold ${priorityBadge(detail.priority)}`}>{detail.priority}</span>
+                    <span className={`badge ${statusBadge(detail.status)}`}>{detail.status}</span>
+                    <span className={`badge ${priorityBadge(detail.priority)}`}>{detail.priority}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
@@ -298,8 +298,8 @@ export default function InstallationOrdersPage() {
               <div className="pt-2 border-t border-border">
                 <div className="font-semibold text-sm mb-2">Completion</div>
                 <div className="space-y-2 text-xs">
-                  <textarea placeholder="Completion notes..." rows={3} className="w-full px-3 py-2 rounded-lg bg-card border border-border text-xs text-foreground outline-none focus:border-primary/50" defaultValue={detail.completion_notes || ''} />
-                  <button className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold">Save Completion Notes</button>
+                  <textarea placeholder="Completion notes..." rows={3} className="form-control w-full text-xs" defaultValue={detail.completion_notes || ''} />
+                  <button className="btn btn-primary btn-sm">Save Completion Notes</button>
                 </div>
               </div>
             </>
@@ -309,7 +309,7 @@ export default function InstallationOrdersPage() {
 
       {showForm && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-3 sm:p-4 overflow-auto">
-          <div className="w-full max-w-3xl bg-card border border-border rounded-2xl shadow-2xl my-4 sm:my-6 max-h-[90vh] overflow-auto">
+          <div className="w-full max-w-3xl card my-4 sm:my-6 max-h-[90vh] overflow-auto">
             <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-border sticky top-0 bg-card z-10">
               <div>
                 <h2 className="font-bold text-lg">{editing ? 'Edit Order' : 'Create Installation Order'}</h2>
@@ -339,13 +339,13 @@ export default function InstallationOrdersPage() {
 
               <div className="border-t border-border pt-4">
                 <div className="font-semibold text-sm mb-2">Required Equipment (serial numbers, comma-separated)</div>
-                <textarea placeholder="ONU-123, ROUTER-456, CABLE-789" rows={2} className="w-full px-3 py-2 rounded-lg bg-card border border-border text-xs text-foreground outline-none focus:border-primary/50" value={form.required_equipment?.join(', ') || ''} onChange={e=>setForm({...form, required_equipment: e.target.value.split(',').map((s:string)=>s.trim()).filter(Boolean)})} />
+                <textarea placeholder="ONU-123, ROUTER-456, CABLE-789" rows={2} className="form-control w-full text-xs" value={form.required_equipment?.join(', ') || ''} onChange={e=>setForm({...form, required_equipment: e.target.value.split(',').map((s:string)=>s.trim()).filter(Boolean)})} />
               </div>
             </div>
 
             <div className="px-4 sm:px-5 py-4 border-t border-border flex justify-end gap-2">
               <button onClick={()=>setShowForm(false)} className="px-4 py-2 rounded-xl border border-border">Cancel</button>
-              <button onClick={save} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">{editing ? 'Save Changes' : 'Create Order'}</button>
+              <button onClick={save} className="btn btn-primary">{editing ? 'Save Changes' : 'Create Order'}</button>
             </div>
           </div>
         </div>
@@ -361,7 +361,7 @@ function Input({ label, value, onChange, type='text', placeholder='' }: { label:
   return (
     <label className="block">
       <div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>
-      <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50" />
+      <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} className="form-control w-full text-foreground outline-none focus:border-primary/50" />
     </label>
   );
 }
@@ -370,7 +370,7 @@ function Select({ label, value, onChange, options }: { label: string; value: any
   return (
     <label className="block">
       <div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>
-      <select value={value} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50">
+      <select value={value} onChange={e=>onChange(e.target.value)} className="form-control w-full text-foreground outline-none focus:border-primary/50">
         {opts.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}
       </select>
     </label>

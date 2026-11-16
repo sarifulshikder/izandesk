@@ -231,12 +231,12 @@ export default function AcsPage() {
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><Wifi className="w-6 h-6 text-primary"/>ACS / TR-069 (GenieACS)</h1>
+          <h1 className="page-title"><Wifi className="w-6 h-6 text-primary"/>ACS / TR-069 (GenieACS)</h1>
           <p className="text-sm text-muted-foreground">Manage CPE devices via GenieACS: connected clients, live traffic/stats, Wi-Fi, diagnostics, and full parameter output.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={loadDevices} disabled={loading} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
-          <button onClick={sync} disabled={!canDanger || !status?.configured || busy==='Sync'} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2 disabled:opacity-50"><Database className="w-4 h-4"/>Sync from ACS</button>
+          <button onClick={loadDevices} disabled={loading} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
+          <button onClick={sync} disabled={!canDanger || !status?.configured || busy==='Sync'} className="btn btn-primary disabled:opacity-50"><Database className="w-4 h-4"/>Sync from ACS</button>
         </div>
       </div>
 
@@ -244,14 +244,14 @@ export default function AcsPage() {
       {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{msg}</div>}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="p-4 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground">ACS Status</div><div className="mt-1 font-bold flex items-center gap-2">{status?.configured ? (status?.reachable !== false ? <><CheckCircle2 className="w-4 h-4 text-emerald-400"/>Configured</> : <><AlertTriangle className="w-4 h-4 text-amber-400"/>Unreachable</>) : <><XCircle className="w-4 h-4 text-red-400"/>Not configured</>}</div><div className="text-xs text-muted-foreground mt-1 truncate">{status?.baseUrl || 'Set in Settings → ACS / TR-069 (or GENIEACS_URL env)'}{status?.source ? ` • source: ${status.source}` : ''}</div></div>
-        <div className="p-4 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground">Devices (loaded)</div><div className="text-xl font-black mt-1">{deviceCount}</div></div>
-        <div className="p-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/5"><div className="text-xs text-emerald-300/80">With inform timestamp</div><div className="text-xl font-black mt-1 text-emerald-400">{onlineish}</div></div>
-        <div className="p-4 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground">Catalog</div><div className="text-sm mt-1">{catalog.presets.length} presets • {catalog.provisions.length} provisions • {catalog.files.length} files</div></div>
+        <div className="card p-4"><div className="text-xs text-muted-foreground">ACS Status</div><div className="mt-1 font-bold flex items-center gap-2">{status?.configured ? (status?.reachable !== false ? <><CheckCircle2 className="w-4 h-4 text-emerald-400"/>Configured</> : <><AlertTriangle className="w-4 h-4 text-amber-400"/>Unreachable</>) : <><XCircle className="w-4 h-4 text-red-400"/>Not configured</>}</div><div className="text-xs text-muted-foreground mt-1 truncate">{status?.baseUrl || 'Set in Settings → ACS / TR-069 (or GENIEACS_URL env)'}{status?.source ? ` • source: ${status.source}` : ''}</div></div>
+        <div className="card p-4"><div className="text-xs text-muted-foreground">Devices (loaded)</div><div className="text-xl font-black mt-1">{deviceCount}</div></div>
+        <div className="alert alert-success"><div className="text-xs text-emerald-300/80">With inform timestamp</div><div className="text-xl font-black mt-1 text-emerald-400">{onlineish}</div></div>
+        <div className="card p-4"><div className="text-xs text-muted-foreground">Catalog</div><div className="text-sm mt-1">{catalog.presets.length} presets • {catalog.provisions.length} provisions • {catalog.files.length} files</div></div>
       </div>
 
       {!status?.configured && (
-        <div className="p-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 text-sm text-amber-100 space-y-2">
+        <div className="alert alert-warning text-sm space-y-2">
           <div className="font-semibold">GenieACS is not configured</div>
           <div>Configure GenieACS from the UI or via environment variables, then (optionally) start the ACS stack:</div>
           <ul className="list-disc ml-5 text-amber-100/90">
@@ -264,7 +264,7 @@ export default function AcsPage() {
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-1 rounded-2xl border border-border bg-card overflow-hidden">
+        <div className="xl:col-span-1 card overflow-hidden">
           <div className="p-3 border-b border-border flex items-center gap-2">
             <Search className="w-4 h-4 text-muted-foreground"/>
             <input className="flex-1 bg-transparent outline-none text-sm" placeholder="Search device, serial, model, subscriber..." value={q} onChange={e=>setQ(e.target.value)} />
@@ -274,7 +274,7 @@ export default function AcsPage() {
              filtered.length === 0 ? <div className="p-6 text-sm text-muted-foreground">No ACS devices found.</div> :
              filtered.map(d => (
               <button key={d.id} onClick={()=>{ setSelected(d); setTab('overview'); }} className={`w-full text-left p-3 hover:bg-muted/30 ${selected?.id===d.id?'bg-primary/5':''}`}>
-                <div className="flex items-center justify-between gap-2"><div className="font-semibold text-sm truncate">{d.model_name || d.product_class || d.id}</div><span className="text-[10px] px-2 py-0.5 rounded-full border border-border">{d.last_inform_at ? 'Seen' : 'Unknown'}</span></div>
+                <div className="flex items-center justify-between gap-2"><div className="font-semibold text-sm truncate">{d.model_name || d.product_class || d.id}</div><span className="badge badge-outline">{d.last_inform_at ? 'Seen' : 'Unknown'}</span></div>
                 <div className="text-xs text-muted-foreground truncate">{d.manufacturer || '-'} • {d.serial_number || 'no serial'}</div>
                 <div className="text-xs text-muted-foreground truncate">{d.ip_address || '-'} {d?.local?.client_code ? `• ${d.local.client_code}` : ''}</div>
               </button>
@@ -282,7 +282,7 @@ export default function AcsPage() {
           </div>
         </div>
 
-        <div className="xl:col-span-2 rounded-2xl border border-border bg-card p-4 min-h-[400px]">
+        <div className="xl:col-span-2 card p-4 min-h-[400px]">
           {!selected ? <div className="h-full flex items-center justify-center text-sm text-muted-foreground">Select a device to view connected clients, live traffic/stats, diagnostics, and full GenieACS output.</div> : (
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
@@ -300,7 +300,7 @@ export default function AcsPage() {
 
               <div className="flex flex-wrap gap-2 text-xs">
                 {tabs.map(t => (
-                  <button key={t.id} onClick={()=>{ setTab(t.id); if (t.id==='raw' && flatParams===null && selected?.id) loadParams(selected.id, paramSearch); }} className={`px-3 py-1.5 rounded-lg border font-semibold inline-flex items-center gap-1.5 ${tab===t.id?'bg-primary text-primary-foreground border-primary':'border-border hover:bg-muted/40'}`}>{t.icon ? <t.icon className="w-3.5 h-3.5"/> : null}{t.label}</button>
+                  <button key={t.id} onClick={()=>{ setTab(t.id); if (t.id==='raw' && flatParams===null && selected?.id) loadParams(selected.id, paramSearch); }} className={`filter-chip ${tab===t.id?'active':''}`}>{t.icon ? <t.icon className="w-3.5 h-3.5"/> : null}{t.label}</button>
                 ))}
               </div>
 
@@ -322,11 +322,11 @@ export default function AcsPage() {
                   <div className="rounded-xl border border-border p-3 space-y-3">
                     <div className="font-semibold flex items-center gap-2 text-sm"><Link2 className="w-4 h-4"/>Subscriber Linking</div>
                     <div className="text-xs text-muted-foreground">Link this ACS device to an IzanDesk subscriber for operational mapping.</div>
-                    <select className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" value={linkSubId} onChange={e=>setLinkSubId(e.target.value)}>
+                    <select className="w-full form-control text-sm" value={linkSubId} onChange={e=>setLinkSubId(e.target.value)}>
                       <option value="">(Not linked)</option>
                       {subscribers.map(s => <option key={s.id} value={s.id}>{s.client_code || s.username || s.id} • {s.full_name || s.name || ''}</option>)}
                     </select>
-                    <button onClick={linkSubscriber} disabled={!canManage || busy==='Link subscriber'} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50">Save Link</button>
+                    <button onClick={linkSubscriber} disabled={!canManage || busy==='Link subscriber'} className="btn btn-primary">Save Link</button>
                     {detail?.local?.subscriber_name && <div className="text-xs text-emerald-300">Linked: {detail.local.client_code || ''} {detail.local.subscriber_name}</div>}
                   </div>
                   <div className="rounded-xl border border-border p-3 lg:col-span-2 space-y-2">
@@ -351,7 +351,7 @@ export default function AcsPage() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {!autoPolling ? (
-                        <button onClick={autoDiagnose} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-50"><Play className="w-3.5 h-3.5"/>Auto Diagnose (Full)</button>
+                        <button onClick={autoDiagnose} disabled={!canManage || !!busy} className="btn btn-primary btn-sm"><Play className="w-3.5 h-3.5"/>Auto Diagnose (Full)</button>
                       ) : (
                         <button onClick={stopAutoDiagnose} className="px-2.5 py-1.5 rounded-lg border border-amber-500/40 text-amber-300 text-xs font-semibold">Stop Auto</button>
                       )}
@@ -359,7 +359,7 @@ export default function AcsPage() {
                       <button onClick={()=>diagnosticRefresh('basic')} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-50">Refresh Basic</button>
                       <button onClick={()=>diagnosticRefresh('standard')} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold disabled:opacity-50">Refresh Hosts/Wi-Fi/Stats</button>
                       <button onClick={()=>diagnosticRefresh('auto')} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-50">Refresh TR-098+TR-181</button>
-                      <button onClick={reloadLive} disabled={busy==='detail' || autoPolling} className="px-2.5 py-1.5 rounded-lg border border-border bg-card text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-50"><RefreshCw className="w-3.5 h-3.5"/>Reload Live Data</button>
+                      <button onClick={reloadLive} disabled={busy==='detail' || autoPolling} className="btn btn-outline btn-sm"><RefreshCw className="w-3.5 h-3.5"/>Reload Live Data</button>
                     </div>
                   </div>
 
@@ -374,7 +374,7 @@ export default function AcsPage() {
                     <div className="rounded-xl border border-border p-3">
                       <div className="font-semibold text-sm flex items-center gap-2 mb-2"><Users className="w-4 h-4"/>Connected Clients / Hosts ({diagnostics?.counts?.hosts ?? 0})</div>
                       <div className="overflow-auto max-h-64 border border-border/60 rounded-lg">
-                        <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">Hostname</th><th className="text-left p-2">IP</th><th className="text-left p-2">MAC</th><th className="text-left p-2">Interface</th><th className="text-left p-2">Active</th></tr></thead>
+                        <table className="table table-hover text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">Hostname</th><th className="text-left p-2">IP</th><th className="text-left p-2">MAC</th><th className="text-left p-2">Interface</th><th className="text-left p-2">Active</th></tr></thead>
                         <tbody>{(diagnostics?.hosts || []).length ? (diagnostics.hosts || []).map((h:any,i:number)=>(
                           <tr key={i} className="border-t border-border/60"><td className="p-2">{h.hostname || '-'}</td><td className="p-2 font-mono">{h.ip || '-'}</td><td className="p-2 font-mono">{h.mac || '-'}</td><td className="p-2">{h.interface || '-'}</td><td className="p-2">{String(h.active ?? '-')}</td></tr>
                         )) : <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No host data cached. Run "Refresh Hosts/Wi-Fi/Stats" then reload.</td></tr>}</tbody></table>
@@ -383,7 +383,7 @@ export default function AcsPage() {
                     <div className="rounded-xl border border-border p-3">
                       <div className="font-semibold text-sm flex items-center gap-2 mb-2"><Wifi className="w-4 h-4"/>Wi-Fi Associated Devices ({diagnostics?.counts?.wifi_associations ?? 0})</div>
                       <div className="overflow-auto max-h-64 border border-border/60 rounded-lg">
-                        <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">SSID</th><th className="text-left p-2">MAC</th><th className="text-left p-2">IP</th><th className="text-left p-2">Signal</th><th className="text-left p-2">Rate</th></tr></thead>
+                        <table className="table table-hover text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">SSID</th><th className="text-left p-2">MAC</th><th className="text-left p-2">IP</th><th className="text-left p-2">Signal</th><th className="text-left p-2">Rate</th></tr></thead>
                         <tbody>{(diagnostics?.wifi_associations || []).length ? (diagnostics.wifi_associations || []).map((w:any,i:number)=>(
                           <tr key={i} className="border-t border-border/60"><td className="p-2">{w.ssid || '-'} {w.wlan_index ? `(WLAN ${w.wlan_index})` : ''}</td><td className="p-2 font-mono">{w.mac || '-'}</td><td className="p-2 font-mono">{w.ip || '-'}</td><td className="p-2">{w.signal_strength ?? '-'}</td><td className="p-2">{w.tx_rate ?? w.rx_rate ?? '-'}</td></tr>
                         )) : <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No Wi-Fi association data cached (or not exposed by this CPE). Refresh Hosts/Wi-Fi/Stats.</td></tr>}</tbody></table>
@@ -395,7 +395,7 @@ export default function AcsPage() {
                     <div className="font-semibold text-sm flex items-center gap-2 mb-2"><Activity className="w-4 h-4"/>Interface / Traffic Stats (bandwidth usage counters)</div>
                     <div className="text-xs text-muted-foreground mb-2">Counters are from GenieACS cached values. "Live rate" is estimated between reloads in this session (bytes delta / time). Run "Refresh Hosts/Wi-Fi/Stats" then "Reload Live Data" twice (a few seconds apart) to estimate current throughput.</div>
                     <div className="overflow-auto border border-border/60 rounded-lg">
-                      <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">Interface</th><th className="text-left p-2">Status/IP</th><th className="text-left p-2">RX (total)</th><th className="text-left p-2">TX (total)</th><th className="text-left p-2">RX rate</th><th className="text-left p-2">TX rate</th><th className="text-left p-2">Errors</th></tr></thead>
+                      <table className="table table-hover text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">Interface</th><th className="text-left p-2">Status/IP</th><th className="text-left p-2">RX (total)</th><th className="text-left p-2">TX (total)</th><th className="text-left p-2">RX rate</th><th className="text-left p-2">TX rate</th><th className="text-left p-2">Errors</th></tr></thead>
                       <tbody>{interfacesWithRate.length ? interfacesWithRate.map((it:any,i:number)=>(
                         <tr key={i} className="border-t border-border/60"><td className="p-2 font-medium">{it.name}</td><td className="p-2">{it.connection_status || '-'} {it.external_ip ? `• ${it.external_ip}` : ''}</td><td className="p-2">{bytesHuman(it.bytes_received)}</td><td className="p-2">{bytesHuman(it.bytes_sent)}</td><td className="p-2">{it.rxRate != null ? `${bytesHuman(it.rxRate)}/s` : '-'}</td><td className="p-2">{it.txRate != null ? `${bytesHuman(it.txRate)}/s` : '-'}</td><td className="p-2">{(Number(it.errors_received||0)+Number(it.errors_sent||0)) || 0}</td></tr>
                       )) : <tr><td colSpan={7} className="p-4 text-center text-muted-foreground">No interface/traffic stats cached. Run diagnostic refresh and reload.</td></tr>}</tbody></table>
@@ -405,7 +405,7 @@ export default function AcsPage() {
                   <div className="rounded-xl border border-border p-3">
                     <div className="font-semibold text-sm flex items-center gap-2 mb-2"><Radio className="w-4 h-4"/>Wi-Fi Radios / Signal Info</div>
                     <div className="overflow-auto border border-border/60 rounded-lg">
-                      <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">WLAN</th><th className="text-left p-2">SSID</th><th className="text-left p-2">Enabled</th><th className="text-left p-2">Channel</th><th className="text-left p-2">Standard</th><th className="text-left p-2">Associations</th><th className="text-left p-2">TX Power</th></tr></thead>
+                      <table className="table table-hover text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">WLAN</th><th className="text-left p-2">SSID</th><th className="text-left p-2">Enabled</th><th className="text-left p-2">Channel</th><th className="text-left p-2">Standard</th><th className="text-left p-2">Associations</th><th className="text-left p-2">TX Power</th></tr></thead>
                       <tbody>{(diagnostics?.wifi_radios || []).length ? (diagnostics.wifi_radios || []).map((w:any,i:number)=>(
                         <tr key={i} className="border-t border-border/60"><td className="p-2">{w.index}</td><td className="p-2">{w.ssid || '-'}</td><td className="p-2">{String(w.enabled ?? '-')}</td><td className="p-2">{w.channel ?? '-'}{w.auto_channel ? ' (auto)' : ''}</td><td className="p-2">{w.standard || '-'}</td><td className="p-2">{w.total_associations ?? '-'}</td><td className="p-2">{w.transmit_power ?? '-'}</td></tr>
                       )) : <tr><td colSpan={7} className="p-4 text-center text-muted-foreground">No Wi-Fi radio data cached. Run diagnostic refresh and reload.</td></tr>}</tbody></table>
@@ -425,19 +425,19 @@ export default function AcsPage() {
                     <div className="flex flex-wrap gap-2">
                       <button onClick={discoverParameters} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-50">Discover Parameters</button>
                       <button onClick={()=>diagnosticRefresh('full')} disabled={!canManage || !!busy} className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-50">Refresh Full Tree</button>
-                      <button onClick={()=>selected?.id && loadParams(selected.id, paramSearch)} disabled={busy==='params'} className="px-2.5 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold disabled:opacity-50 inline-flex items-center gap-1"><RefreshCw className="w-3.5 h-3.5"/>Load/Reload Parameters</button>
+                      <button onClick={()=>selected?.id && loadParams(selected.id, paramSearch)} disabled={busy==='params'} className="btn btn-primary btn-sm"><RefreshCw className="w-3.5 h-3.5"/>Load/Reload Parameters</button>
                     </div>
                   </div>
 
                   <div className="flex gap-2">
-                    <input className="flex-1 p-2.5 rounded-xl border border-border bg-card text-sm" placeholder="Search parameter path or value (e.g. Hosts, WLAN, RSSI, Bytes, Signal)" value={paramSearch} onChange={e=>setParamSearch(e.target.value)} />
-                    <button onClick={()=>selected?.id && loadParams(selected.id, paramSearch)} disabled={busy==='params'} className="px-3 py-2 rounded-xl border border-border bg-card text-sm">Search</button>
+                    <input className="form-control flex-1" placeholder="Search parameter path or value (e.g. Hosts, WLAN, RSSI, Bytes, Signal)" value={paramSearch} onChange={e=>setParamSearch(e.target.value)} />
+                    <button onClick={()=>selected?.id && loadParams(selected.id, paramSearch)} disabled={busy==='params'} className="btn btn-outline">Search</button>
                   </div>
 
                   <div className="rounded-xl border border-border p-3">
                     <div className="flex items-center justify-between mb-2"><div className="font-semibold text-sm">Flattened Parameters {flatParams ? `(${flatParams.length}${flatTotal>flatParams.length?` of ${flatTotal}`:''})` : ''}</div><div className="text-xs text-muted-foreground">From GenieACS cached device document</div></div>
                     <div className="overflow-auto max-h-[420px] border border-border/60 rounded-lg">
-                      <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground sticky top-0"><tr><th className="text-left p-2">Path</th><th className="text-left p-2">Value</th><th className="text-left p-2">Type</th><th className="text-left p-2">Timestamp</th></tr></thead>
+                      <table className="table table-hover text-xs"><thead className="bg-muted/40 text-muted-foreground sticky top-0"><tr><th className="text-left p-2">Path</th><th className="text-left p-2">Value</th><th className="text-left p-2">Type</th><th className="text-left p-2">Timestamp</th></tr></thead>
                       <tbody>{busy==='params' ? <tr><td colSpan={4} className="p-4 text-center text-muted-foreground">Loading parameters...</td></tr> :
                         (flatParams && flatParams.length) ? flatParams.map((p:any,i:number)=>(
                           <tr key={i} className="border-t border-border/60 align-top"><td className="p-2 font-mono break-all">{p.path}</td><td className="p-2 break-all max-w-[260px]">{typeof p.value === 'object' ? JSON.stringify(p.value) : String(p.value ?? '')}</td><td className="p-2 whitespace-nowrap">{p.type || (p.object ? 'object' : '')}</td><td className="p-2 whitespace-nowrap">{fmtDate(p.timestamp)}</td></tr>
@@ -456,31 +456,31 @@ export default function AcsPage() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <div className="rounded-xl border border-border p-3 space-y-2">
                     <div className="font-semibold text-sm flex items-center gap-2"><Wifi className="w-4 h-4"/>Wi-Fi Update</div>
-                    <input className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" placeholder="New SSID (optional)" value={wifi.ssid} onChange={e=>setWifi({...wifi,ssid:e.target.value})} />
-                    <input type="password" className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" placeholder="New Wi-Fi password (optional)" value={wifi.password} onChange={e=>setWifi({...wifi,password:e.target.value})} />
+                    <input className="w-full form-control text-sm" placeholder="New SSID (optional)" value={wifi.ssid} onChange={e=>setWifi({...wifi,ssid:e.target.value})} />
+                    <input type="password" className="w-full form-control text-sm" placeholder="New Wi-Fi password (optional)" value={wifi.password} onChange={e=>setWifi({...wifi,password:e.target.value})} />
                     <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">Advanced parameter paths</summary>
                       <div className="mt-2 space-y-2">
-                        <input className="w-full p-2 rounded-lg border border-border bg-card" placeholder="SSID path (TR-098/TR-181)" value={wifi.ssid_path} onChange={e=>setWifi({...wifi,ssid_path:e.target.value})} />
-                        <input className="w-full p-2 rounded-lg border border-border bg-card" placeholder="Password path (KeyPassphrase)" value={wifi.password_path} onChange={e=>setWifi({...wifi,password_path:e.target.value})} />
+                        <input className="form-control w-full" placeholder="SSID path (TR-098/TR-181)" value={wifi.ssid_path} onChange={e=>setWifi({...wifi,ssid_path:e.target.value})} />
+                        <input className="form-control w-full" placeholder="Password path (KeyPassphrase)" value={wifi.password_path} onChange={e=>setWifi({...wifi,password_path:e.target.value})} />
                       </div>
                     </details>
-                    <button onClick={saveWifi} disabled={!canManage || (!wifi.ssid && !wifi.password) || busy==='Wi-Fi update'} className="w-full px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50">Queue Wi-Fi Task</button>
+                    <button onClick={saveWifi} disabled={!canManage || (!wifi.ssid && !wifi.password) || busy==='Wi-Fi update'} className="btn btn-primary w-full">Queue Wi-Fi Task</button>
                     <div className="text-xs text-muted-foreground">Device must support the parameter paths and be reachable by GenieACS (connection request/inform).</div>
                   </div>
                   <div className="rounded-xl border border-border p-3 space-y-2">
                     <div className="font-semibold text-sm flex items-center gap-2"><Settings2 className="w-4 h-4"/>Get / Set Parameter</div>
                     <div className="flex gap-2 text-xs">
-                      <button onClick={()=>setParam(p=>({...p,mode:'get'}))} className={`px-2.5 py-1 rounded-lg border ${param.mode==='get'?'bg-primary text-primary-foreground border-primary':'border-border'}`}>Get</button>
-                      <button onClick={()=>setParam(p=>({...p,mode:'set'}))} className={`px-2.5 py-1 rounded-lg border ${param.mode==='set'?'bg-primary text-primary-foreground border-primary':'border-border'}`}>Set</button>
+                      <button onClick={()=>setParam(p=>({...p,mode:'get'}))} className={`filter-chip ${param.mode==='get'?'active':''}`}>Get</button>
+                      <button onClick={()=>setParam(p=>({...p,mode:'set'}))} className={`filter-chip ${param.mode==='set'?'active':''}`}>Set</button>
                     </div>
-                    <input className="w-full p-2.5 rounded-xl border border-border bg-card text-sm font-mono" placeholder="Parameter name/path" value={param.name} onChange={e=>setParam({...param,name:e.target.value})} />
+                    <input className="w-full form-control text-sm font-mono" placeholder="Parameter name/path" value={param.name} onChange={e=>setParam({...param,name:e.target.value})} />
                     {param.mode==='set' && <>
-                      <input className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" placeholder="Value" value={param.value} onChange={e=>setParam({...param,value:e.target.value})} />
-                      <select className="w-full p-2.5 rounded-xl border border-border bg-card text-sm" value={param.type} onChange={e=>setParam({...param,type:e.target.value})}>
+                      <input className="w-full form-control text-sm" placeholder="Value" value={param.value} onChange={e=>setParam({...param,value:e.target.value})} />
+                      <select className="w-full form-control text-sm" value={param.type} onChange={e=>setParam({...param,type:e.target.value})}>
                         {['xsd:string','xsd:boolean','xsd:int','xsd:unsignedInt'].map(t=> <option key={t} value={t}>{t}</option>)}
                       </select>
                     </>}
-                    <button onClick={runParam} disabled={!canManage || !param.name || busy==='Get parameter' || busy==='Set parameter'} className="w-full px-3 py-2 rounded-xl border border-border bg-card hover:bg-muted/40 text-sm font-semibold disabled:opacity-50 inline-flex items-center justify-center gap-2"><Play className="w-4 h-4"/>Queue {param.mode === 'get' ? 'GetParameterValues' : 'SetParameterValues'}</button>
+                    <button onClick={runParam} disabled={!canManage || !param.name || busy==='Get parameter' || busy==='Set parameter'} className="btn btn-outline w-full"><Play className="w-4 h-4"/>Queue {param.mode === 'get' ? 'GetParameterValues' : 'SetParameterValues'}</button>
                     <div className="text-xs text-muted-foreground">Use TR-098 (InternetGatewayDevice.*) or TR-181 (Device.*) paths depending on the CPE.</div>
                   </div>
                 </div>
@@ -490,7 +490,7 @@ export default function AcsPage() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between"><div className="font-semibold text-sm flex items-center gap-2"><ListChecks className="w-4 h-4"/>ACS Tasks (queued/active on GenieACS)</div><button onClick={()=>selected?.id && loadDetail(selected.id)} className="text-xs px-2 py-1 rounded border border-border">Refresh</button></div>
                   <div className="overflow-auto rounded-xl border border-border">
-                    <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">Task</th><th className="text-left p-2">Name</th><th className="text-left p-2">Time</th><th className="text-left p-2">Fault</th><th className="text-right p-2">Action</th></tr></thead>
+                    <table className="table table-hover text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">Task</th><th className="text-left p-2">Name</th><th className="text-left p-2">Time</th><th className="text-left p-2">Fault</th><th className="text-right p-2">Action</th></tr></thead>
                     <tbody>{tasks.length ? tasks.map((t:any)=>(
                       <tr key={t._id || JSON.stringify(t)} className="border-t border-border/60"><td className="p-2 font-mono truncate max-w-[180px]" title={t._id}>{t._id || '-'}</td><td className="p-2">{t.name || '-'}</td><td className="p-2">{fmtDate(t.timestamp || t._timestamp)}</td><td className="p-2 text-red-300 truncate max-w-[180px]">{t.fault ? (t.fault.message || JSON.stringify(t.fault)) : '-'}</td><td className="p-2 text-right">{t._id && <button onClick={()=>deleteTask(t._id)} disabled={!canDanger} className="px-2 py-1 rounded border border-border hover:bg-muted/40 disabled:opacity-50">Delete</button>}</td></tr>
                     )) : <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No tasks found for this device.</td></tr>}</tbody></table>
@@ -504,7 +504,7 @@ export default function AcsPage() {
                 <div className="space-y-3">
                   <div className="font-semibold text-sm flex items-center gap-2"><Bug className="w-4 h-4"/>Device Faults</div>
                   <div className="overflow-auto rounded-xl border border-border">
-                    <table className="w-full text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">Fault ID</th><th className="text-left p-2">Channel/Code</th><th className="text-left p-2">Message</th><th className="text-left p-2">Time</th><th className="text-right p-2">Action</th></tr></thead>
+                    <table className="table table-hover text-xs"><thead className="bg-muted/40 text-muted-foreground"><tr><th className="text-left p-2">Fault ID</th><th className="text-left p-2">Channel/Code</th><th className="text-left p-2">Message</th><th className="text-left p-2">Time</th><th className="text-right p-2">Action</th></tr></thead>
                     <tbody>{faults.length ? faults.map((f:any)=>(
                       <tr key={f._id || JSON.stringify(f)} className="border-t border-border/60"><td className="p-2 font-mono truncate max-w-[160px]" title={f._id}>{f._id || '-'}</td><td className="p-2">{f.channel || f.code || '-'}</td><td className="p-2 text-red-300">{f.message || f.detail?.message || JSON.stringify(f.detail || f).slice(0,120)}</td><td className="p-2">{fmtDate(f.timestamp)}</td><td className="p-2 text-right">{f._id && <button onClick={()=>deleteFault(f._id)} disabled={!canDanger} className="px-2 py-1 rounded border border-border hover:bg-muted/40 disabled:opacity-50">Delete</button>}</td></tr>
                     )) : <tr><td colSpan={5} className="p-4 text-center text-muted-foreground">No faults reported for this device.</td></tr>}</tbody></table>

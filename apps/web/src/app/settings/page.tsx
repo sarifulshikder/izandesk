@@ -125,7 +125,7 @@ export default function SettingsPage() {
 
   const renderField = (f: Field) => {
     const cur = values[tab]?.[f.field];
-    const common = 'w-full px-3 py-2 rounded-xl bg-background border border-border text-sm';
+    const common = 'form-control';
     if (f.type === 'boolean') {
       return (
         <select className={common} value={String(form[f.field] ?? false)} onChange={(e) => setF(f.field, e.target.value === 'true')} disabled={!isAdmin}>
@@ -159,27 +159,27 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><SettingsIcon className="w-6 h-6"/>Settings & Security</h1>
+          <h1 className="page-title"><SettingsIcon className="w-6 h-6"/>Settings & Security</h1>
           <p className="text-sm text-muted-foreground">Company profile, security policy, notifications, branding, billing defaults and network parameters. Changes are audited.</p>
         </div>
-        {!isAdmin && <span className="text-xs px-3 py-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-300 w-fit">Read-only — SUPER_ADMIN can edit</span>}
+        {!isAdmin && <span className="badge badge-warning w-fit">Read-only — SUPER_ADMIN can edit</span>}
       </div>
 
       {maint === true && (
-        <div className="p-3 rounded-2xl border border-amber-500/40 bg-amber-500/10 text-amber-200 text-sm flex items-center gap-2">
+        <div className="alert alert-warning">
           <AlertTriangle className="w-4 h-4"/> Maintenance mode is ON — non-admin API access is blocked with 503. ({values.security?.maintenance_message || ''})
         </div>
       )}
-      {err && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{err}</div>}
-      {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm flex items-center gap-2"><CheckCircle2 className="w-4 h-4"/>{msg}</div>}
+      {err && <div className="alert alert-danger">{err}</div>}
+      {msg && <div className="alert alert-success"><CheckCircle2 className="w-4 h-4"/>{msg}</div>}
 
       <div className="flex gap-2 flex-wrap">
         {Object.entries(schema?.categories || {}).map(([k, meta]) => {
           const Icon = TAB_ICONS[k] || SettingsIcon;
           return (
-            <button key={k} onClick={() => setTab(k)} className={`px-4 py-2 rounded-xl text-sm font-medium border inline-flex items-center gap-2 ${tab === k ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border'}`}>
+            <button key={k} onClick={() => setTab(k)} className={`filter-chip ${tab === k ? 'active' : ''}`}>
               <Icon className="w-4 h-4"/>{meta.label}
             </button>
           );
@@ -187,12 +187,12 @@ export default function SettingsPage() {
       </div>
 
       {schema && (
-        <div className="p-5 rounded-2xl bg-card border border-border/80 space-y-4">
+        <div className="card p-4 space-y-4">
           <div className="text-sm text-muted-foreground">{schema.categories[tab]?.description}</div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {fields.map((f) => (
               <label key={f.key} className={`block ${f.type === 'text' ? 'md:col-span-2' : ''}`}>
-                <div className="text-xs font-semibold text-muted-foreground mb-1">{f.label}</div>
+                <div className="form-label">{f.label}</div>
                 {renderField(f)}
                 {f.description && <div className="text-[11px] text-muted-foreground mt-1">{f.description}</div>}
               </label>
@@ -201,12 +201,12 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2 flex-wrap pt-1">
             {isAdmin && (
               <>
-                <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2 disabled:opacity-60"><Save className="w-4 h-4"/>{busy ? 'Saving…' : 'Save'}</button>
-                <button onClick={reset} disabled={busy} className="px-4 py-2 rounded-xl border border-border text-sm inline-flex items-center gap-2 hover:bg-muted"><RotateCcw className="w-4 h-4"/>Reset to defaults</button>
+                <button onClick={save} disabled={busy} className="btn btn-primary"><Save className="w-4 h-4"/>{busy ? 'Saving…' : 'Save'}</button>
+                <button onClick={reset} disabled={busy} className="btn btn-outline"><RotateCcw className="w-4 h-4"/>Reset to defaults</button>
               </>
             )}
             {tab === 'notifications' && isAdmin && (
-              <button onClick={testSmtp} className="px-4 py-2 rounded-xl border border-border text-sm inline-flex items-center gap-2 hover:bg-muted"><Send className="w-4 h-4"/>Test SMTP</button>
+              <button onClick={testSmtp} className="btn btn-outline"><Send className="w-4 h-4"/>Test SMTP</button>
             )}
             {smtpMsg && <span className="text-xs text-muted-foreground">{smtpMsg}</span>}
           </div>
@@ -214,15 +214,15 @@ export default function SettingsPage() {
       )}
 
       {tab === 'security' && (
-        <div className="p-5 rounded-2xl bg-card border border-border/80 space-y-3">
+        <div className="card p-4 space-y-3">
           <div className="text-xs uppercase font-bold text-muted-foreground tracking-wider flex items-center gap-2"><KeyRound className="w-4 h-4"/>Change my password</div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <input type="password" placeholder="Current password" className="px-3 py-2 rounded-xl bg-background border border-border text-sm" value={pw.old} onChange={(e) => setPw({ ...pw, old: e.target.value })} />
-            <input type="password" placeholder="New password" className="px-3 py-2 rounded-xl bg-background border border-border text-sm" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
-            <input type="password" placeholder="Confirm new password" className="px-3 py-2 rounded-xl bg-background border border-border text-sm" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} />
+            <input type="password" placeholder="Current password" className="form-control" value={pw.old} onChange={(e) => setPw({ ...pw, old: e.target.value })} />
+            <input type="password" placeholder="New password" className="form-control" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
+            <input type="password" placeholder="Confirm new password" className="form-control" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} />
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={changePw} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold">Update password</button>
+            <button onClick={changePw} className="btn btn-primary">Update password</button>
             {pwMsg && <span className="text-xs text-emerald-300">{pwMsg}</span>}
             {pwErr && <span className="text-xs text-red-300">{pwErr}</span>}
           </div>

@@ -90,23 +90,23 @@ export default function BandwidthPage() {
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight">Bandwidth & QoS Packages</h1>
+          <h1 className="page-title">Bandwidth & QoS Packages</h1>
           <p className="text-sm text-muted-foreground">Manage speed packages, burst limits, queue types and sync to MikroTik routers (Simple Queues / Queue Trees).</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
-          <button onClick={()=>{ setShowImport(true); setImportItems([]); setImportSelected({}); setImportMsg(null); setError(null); }} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Download className="w-4 h-4"/>Import from Router</button>
+          <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
+          <button onClick={()=>{ setShowImport(true); setImportItems([]); setImportSelected({}); setImportMsg(null); setError(null); }} className="btn btn-outline inline-flex items-center gap-2"><Download className="w-4 h-4"/>Import from Router</button>
           <button onClick={sync} disabled={syncing} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><Router className="w-4 h-4"/>{syncing?'Syncing...':'Sync to Routers'}</button>
-          <button onClick={()=>{setForm({name:'',profile_name:'',download_mbps:20,upload_mbps:20,burst_download_mbps:'',burst_upload_mbps:'',burst_threshold_download_mbps:'',burst_threshold_upload_mbps:'',burst_time_sec:'',priority:8,queue_type:'SIMPLE',price:0,description:'',is_active:true,data_cap_gb:'',fup_speed_mbps:''}); setModal('new');}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4"/>Add Package</button>
+          <button onClick={()=>{setForm({name:'',profile_name:'',download_mbps:20,upload_mbps:20,burst_download_mbps:'',burst_upload_mbps:'',burst_threshold_download_mbps:'',burst_threshold_upload_mbps:'',burst_time_sec:'',priority:8,queue_type:'SIMPLE',price:0,description:'',is_active:true,data_cap_gb:'',fup_speed_mbps:''}); setModal('new');}} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Package</button>
         </div>
       </div>
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
       {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{msg}</div>}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden">
+        <div className="xl:col-span-2 card overflow-hidden">
           <div className="overflow-auto">
-            <table className="w-full text-sm">
+            <table className="table table-hover text-sm">
               <thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="text-left px-4 py-3">Package</th><th className="text-left px-4 py-3">Speed</th><th className="text-left px-4 py-3">Burst / Queue</th><th className="text-left px-4 py-3">Cap / FUP</th><th className="text-left px-4 py-3">Price</th><th className="text-right px-4 py-3">Actions</th></tr></thead>
               <tbody>
                 {packages.map(p => (
@@ -125,7 +125,7 @@ export default function BandwidthPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-4">
+        <div className="card p-4">
           <h2 className="font-bold mb-3 flex items-center gap-2"><Zap className="w-4 h-4 text-primary"/>Router Sync Status</h2>
           <div className="text-xs text-muted-foreground mb-2">{routers.length} routers • {packages.length} packages</div>
           <div className="space-y-2 max-h-[520px] overflow-auto">
@@ -142,7 +142,7 @@ export default function BandwidthPage() {
       </div>
 
       {showImport && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-4xl bg-card border border-border rounded-2xl shadow-2xl my-8">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-4xl card my-8">
           <div className="flex items-center justify-between px-5 py-4 border-b border-border">
             <div>
               <h2 className="font-bold">Import Packages/Profiles from Router</h2>
@@ -165,8 +165,8 @@ export default function BandwidthPage() {
                 </select>
               </label>
               <div className="flex items-end gap-2">
-                <button onClick={fetchImportPreview} disabled={importLoading || !importRouterId} className="px-4 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${importLoading?'animate-spin':''}`}/>{importLoading?'Fetching...':'Fetch Profiles'}</button>
-                <button onClick={runImport} disabled={importing || !importItems.length} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Download className="w-4 h-4"/>{importing?'Importing...':'Import Selected'}</button>
+                <button onClick={fetchImportPreview} disabled={importLoading || !importRouterId} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${importLoading?'animate-spin':''}`}/>{importLoading?'Fetching...':'Fetch Profiles'}</button>
+                <button onClick={runImport} disabled={importing || !importItems.length} className="btn btn-primary"><Download className="w-4 h-4"/>{importing?'Importing...':'Import Selected'}</button>
               </div>
             </div>
             {importMsg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{importMsg}</div>}
@@ -177,7 +177,7 @@ export default function BandwidthPage() {
                 <span className="text-muted-foreground">{Object.values(importSelected).filter(Boolean).length} selected / {importItems.length} fetched</span>
               </div>
               <div className="max-h-[420px] overflow-auto">
-                <table className="w-full text-xs">
+                <table className="table table-hover text-xs">
                   <thead className="sticky top-0 bg-card text-muted-foreground uppercase border-b border-border"><tr>
                     <th className="text-left py-2 px-3 w-10"></th>
                     <th className="text-left py-2 px-3">Profile Name</th>
@@ -197,7 +197,7 @@ export default function BandwidthPage() {
                           {it.address_pool ? <div>pool: {it.address_pool}</div> : null}
                           {it.session_timeout || it.idle_timeout ? <div>timeouts: {it.session_timeout||'-'} / {it.idle_timeout||'-'}</div> : null}
                         </td>
-                        <td className="py-2 px-3">{it.exists ? <span className="px-2 py-0.5 rounded-full border bg-blue-500/10 text-blue-400 border-blue-500/20">exists</span> : <span className="px-2 py-0.5 rounded-full border bg-emerald-500/10 text-emerald-400 border-emerald-500/20">new</span>}</td>
+                        <td className="py-2 px-3">{it.exists ? <span className="badge badge-info">exists</span> : <span className="badge badge-success">new</span>}</td>
                       </tr>
                     ))}
                     {!importItems.length && <tr><td colSpan={5} className="py-10 text-center text-muted-foreground">{importLoading ? 'Fetching from MikroTik...' : 'Select a router and click "Fetch Profiles".'}</td></tr>}
@@ -211,7 +211,7 @@ export default function BandwidthPage() {
       )}
 
       {modal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-3xl bg-card border border-border rounded-2xl shadow-2xl my-8">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-3xl card my-8">
           <div className="flex items-center justify-between px-5 py-4 border-b border-border"><h2 className="font-bold">{modal==='new'?'Add Package':'Edit Package'}</h2><button onClick={()=>setModal(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button></div>
           <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-3">
             <F label="Name"><input className="inp" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})}/></F>
@@ -230,7 +230,7 @@ export default function BandwidthPage() {
             <F label="FUP Speed (Mbps)"><input className="inp" type="number" placeholder="None" value={form.fup_speed_mbps ?? ''} onChange={e=>setForm({...form,fup_speed_mbps:e.target.value===''?'':Number(e.target.value)})}/></F>
             <div className="md:col-span-3"><F label="Description"><input className="inp" value={form.description||''} onChange={e=>setForm({...form,description:e.target.value})}/></F></div>
           </div>
-          <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={save} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">Save</button></div>
+          <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={save} className="btn btn-primary">Save</button></div>
         </div></div>
       )}
       <style jsx>{`.inp{width:100%;padding:.5rem .75rem;border-radius:.75rem;background:var(--card);color:var(--foreground);border:1px solid var(--border);font-size:.875rem}`}</style>

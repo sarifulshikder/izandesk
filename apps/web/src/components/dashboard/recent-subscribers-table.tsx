@@ -6,8 +6,8 @@ import { Users, CheckCircle2, AlertTriangle, ExternalLink } from 'lucide-react';
 
 export function RecentSubscribersTable({ subscribers }: { subscribers: any[] }) {
   return (
-    <div className="p-5 rounded-2xl bg-card border border-border/80 shadow-sm flex flex-col h-full">
-      <div className="flex items-center justify-between gap-3 mb-4">
+    <div className="card p-4 h-full">
+      <div className="flex items-center justify-between gap-3 mb-3">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="p-2 rounded-xl bg-primary/10 border border-primary/20 text-primary shrink-0"><Users className="w-4 h-4" /></div>
           <div className="min-w-0">

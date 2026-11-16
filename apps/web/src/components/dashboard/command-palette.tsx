@@ -80,8 +80,8 @@ export function CommandPalette() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-20 px-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150" onClick={() => setCommandPaletteOpen(false)}>
-      <div className="w-full max-w-2xl bg-card border border-border rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[75vh]" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-3 px-4 py-3.5 border-b border-border bg-muted/30">
+      <div className="w-full max-w-2xl bg-card border border-border rounded shadow-2xl overflow-hidden flex flex-col max-h-[75vh]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-muted/40">
           <Search className="w-5 h-5 text-primary" />
           <input
             type="text"

@@ -23,7 +23,7 @@ export function MobileBottomNav() {
   ];
 
   return (
-    <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-card/90 backdrop-blur-lg border-t border-border px-3 py-2 flex items-center justify-around shadow-2xl">
+    <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-card border-t border-border px-2 py-1.5 flex items-center justify-around shadow-lg">
       {navs.map((item) => {
         const isActive = item.href === '/' ? pathname === '/' : pathname === item.href || pathname.startsWith(item.href + '/');
         const Icon = item.icon;
@@ -32,11 +32,11 @@ export function MobileBottomNav() {
           <Link
             key={item.name}
             href={item.href}
-            className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${
-              isActive ? 'text-primary font-bold' : 'text-muted-foreground'
+            className={`flex flex-col items-center gap-0.5 py-1.5 px-3 rounded transition-colors ${
+              isActive ? 'text-primary font-semibold bg-primary/10' : 'text-muted-foreground'
             }`}
           >
-            <Icon className={`w-5 h-5 ${isActive ? 'scale-110 text-primary' : ''}`} />
+            <Icon className="w-5 h-5" />
             <span className="text-[10px] tracking-tight">{item.name}</span>
           </Link>
         );

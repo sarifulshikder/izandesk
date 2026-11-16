@@ -10,7 +10,7 @@ import { Package, Plus, RefreshCw, Pencil, Trash2, Play, Search, Radio, X, Wifi,
 
 function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
-    <div className="p-3 rounded-xl border border-border bg-card/60">
+    <div className="card p-3">
       <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
       <div className="mt-1 text-lg font-black">{value}</div>
       {sub ? <div className="text-[11px] text-muted-foreground mt-0.5">{sub}</div> : null}
@@ -77,14 +77,14 @@ export default function OltsPage() {
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><Package className="w-6 h-6 text-primary" />FTTH & OLTs Overview</h1>
+          <h1 className="page-title"><Package className="w-6 h-6 text-primary" />FTTH & OLTs Overview</h1>
           <p className="text-sm text-muted-foreground">Monitor OLTs and ONUs, discover/authorize devices, refresh optical telemetry, and jump into each OLT’s dedicated page.</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`} />Refresh</button>
-          <button onClick={refreshTelemetry} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Radio className="w-4 h-4" />Refresh Telemetry</button>
-          <button onClick={autoLink} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><Wifi className="w-4 h-4" />Auto-Link ONUs</button>
-          <button onClick={()=>{setForm({name:'',vendor:'HUAWEI',model:'',host:'',ssh_port:23,snmp_port:161,username:'admin',password:'',snmp_community:'public',site:'',wg_peer_id:'',is_enabled:true}); setModal('new');}} className="px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold inline-flex items-center gap-2"><Plus className="w-4 h-4" />Add OLT</button>
+          <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`} />Refresh</button>
+          <button onClick={refreshTelemetry} className="btn btn-outline inline-flex items-center gap-2"><Radio className="w-4 h-4" />Refresh Telemetry</button>
+          <button onClick={autoLink} className="btn btn-outline inline-flex items-center gap-2"><Wifi className="w-4 h-4" />Auto-Link ONUs</button>
+          <button onClick={()=>{setForm({name:'',vendor:'HUAWEI',model:'',host:'',ssh_port:23,snmp_port:161,username:'admin',password:'',snmp_community:'public',site:'',wg_peer_id:'',is_enabled:true}); setModal('new');}} className="btn btn-primary"><Plus className="w-4 h-4" />Add OLT</button>
         </div>
       </div>
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
@@ -101,7 +101,7 @@ export default function OltsPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="rounded-2xl border border-border bg-card p-4">
+        <div className="card p-4">
           <div className="flex items-center justify-between mb-3">
             <h2 className="font-bold flex items-center gap-2"><Server className="w-4 h-4 text-primary" />OLTs</h2>
             {selectedOlt && <button onClick={()=>setSelectedOlt('')} className="text-xs text-primary hover:underline">Clear filter</button>}
@@ -149,7 +149,7 @@ export default function OltsPage() {
             </div>
           )}
 
-          <div className="rounded-2xl border border-dashed border-border bg-card/40 p-5 text-sm text-muted-foreground flex items-start gap-3">
+          <div className="card p-4 text-sm text-muted-foreground flex items-start gap-3">
             <Activity className="w-4 h-4 mt-0.5 text-primary" />
             <div>
               <div className="font-medium text-foreground">OLT details & ONU management</div>
@@ -163,7 +163,7 @@ export default function OltsPage() {
       </div>
 
       {modal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-2xl bg-card border border-border rounded-2xl shadow-2xl my-8">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-2xl card my-8">
           <div className="flex items-center justify-between px-5 py-4 border-b border-border"><h2 className="font-bold">{modal==='new'?'Add OLT':'Edit OLT'}</h2><button onClick={()=>setModal(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4" /></button></div>
           <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
             <F label="Name"><input className="inp" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})} /></F>
@@ -178,7 +178,7 @@ export default function OltsPage() {
             <F label="Site"><input className="inp" value={form.site||''} onChange={e=>setForm({...form,site:e.target.value})} /></F>
             <F label="WireGuard peer (tunnel route)"><select className="inp" value={form.wg_peer_id||''} onChange={e=>setForm({...form,wg_peer_id:e.target.value||''})}><option value="">None (direct/host-routed)</option>{wgPeers.map((p:any)=>(<option key={p.id} value={p.id}>{p.name} {p.site_name?`— ${p.site_name}`:''} ({p.tunnel_ip||'-'})</option>))}</select></F>
           </div>
-          <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={saveOlt} className="px-4 py-2 rounded-xl bg-primary text-primary-foreground font-semibold">Save</button></div>
+          <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={saveOlt} className="btn btn-primary">Save</button></div>
         </div></div>
       )}
 
