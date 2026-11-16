@@ -376,8 +376,8 @@ router.get('/:id/sessions', asyncHandler(async (req, res) => {
   try {
     const r = await pool.query(`
       SELECT s.id as subscriber_id, s.client_code, s.full_name, s.username, s.package_name,
-             ss.status, ss.ip_address, ss.mac_address, ss.rx_bps, ss.tx_bps, ss.uptime_sec, ss.updated_at, ss.router_id,
-              ss.nas_port, nr.name AS device, nr.host AS nas_ip, nr.id AS nas_id
+             ss.status, ss.ip_address, s.ipv6_address, s.ipv6_prefix, ss.mac_address, ss.rx_bps, ss.tx_bps, ss.uptime_sec, ss.updated_at, ss.router_id,
+             ss.nas_port, nr.name AS device, nr.host AS nas_ip, nr.id AS nas_id
       FROM subscribers s
       JOIN subscriber_sessions ss ON ss.subscriber_id = s.id
       LEFT JOIN network_routers nr ON nr.id=ss.router_id
@@ -389,7 +389,7 @@ router.get('/:id/sessions', asyncHandler(async (req, res) => {
     try {
       const r = await pool.query(`
         SELECT s.id as subscriber_id, s.client_code, s.full_name, s.username, s.package_name,
-               'ONLINE' as status, ra.framedipaddress as ip_address, ra.callingstationid as mac_address,
+               'ONLINE' as status, ra.framedipaddress as ip_address, s.ipv6_address, s.ipv6_prefix, ra.callingstationid as mac_address,
                0::bigint as rx_bps, 0::bigint as tx_bps,
                EXTRACT(EPOCH FROM (now()-ra.acctstarttime))::int as uptime_sec,
                COALESCE(ra.acctupdatetime, ra.acctstarttime) as updated_at,
@@ -1268,6 +1268,15 @@ router.post('/:id/customers/:sid/payment', asyncHandler(async (req, res) => {
     res.json({ ok: true, payment, balance: newBal, due: newDue, excess: newExcess });
   } catch (e: any) { await client.query('ROLLBACK').catch(()=>{}); throw e; }
   finally { client.release(); }
+}));
+
+// Admin queue for gateway wallet top-up requests
+router.get('/topups/pending', asyncHandler(async (req, res) => {
+  if (!isAdminLike(getUser(req).role)) return res.status(403).json({ message: 'Insufficient permissions' });
+  const rows = (await pool.query(`SELECT t.*, r.name AS reseller_name, r.code AS reseller_code
+    FROM wallet_topup_requests t JOIN resellers r ON r.id=t.reseller_id
+    WHERE t.status='PENDING' ORDER BY t.created_at ASC LIMIT 200`)).rows;
+  res.json({ data: rows });
 }));
 
 // ---- Self-service gateway wallet top-up ------------------------------------

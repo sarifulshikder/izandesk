@@ -18,6 +18,8 @@ export default function ResellersOverviewPage() {
   const [editing, setEditing] = useState<AnyObj | null>(null);
   const [editForm, setEditForm] = useState<AnyObj>({});
   const [saving, setSaving] = useState(false);
+  const [topups, setTopups] = useState<AnyObj[]>([]);
+  const [topupBusy, setTopupBusy] = useState<string | null>(null);
   const isResellerUser = user?.role === 'RESELLER';
   const canManage = ['SUPER_ADMIN', 'BILLING_OPERATOR'].includes(String(user?.role));
 
@@ -31,7 +33,9 @@ export default function ResellersOverviewPage() {
     finally { setLoading(false); }
   }, [token]);
 
-  useEffect(() => { load(); }, [load]);
+  const loadTopups = useCallback(async () => { if (!token || !canManage) return; try { const r = await apiFetch<any>('/api/resellers/topups/pending', {}, token); setTopups(r.data || []); } catch {} }, [token, canManage]);
+  useEffect(() => { load(); loadTopups(); }, [load, loadTopups]);
+  const decideTopup = async (resellerId: string, id: string, approve: boolean) => { if (!token) return; setTopupBusy(id); setErr(null); try { await apiFetch<any>(`/api/resellers/${resellerId}/wallet/topups/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body: JSON.stringify({ reason: approve ? undefined : 'Rejected by administrator' }) }, token); await Promise.all([loadTopups(), load()]); } catch (e: any) { setErr(e.message); } finally { setTopupBusy(null); } };
 
   const openEdit = (r: AnyObj) => {
     setErr(null);
@@ -117,6 +121,14 @@ export default function ResellersOverviewPage() {
         ))}
         {!resellers.length && !loading && <div className="md:col-span-2 xl:col-span-3 empty-state">No resellers found.{canManage ? ' Use “Add Reseller” to create one.' : ''}</div>}
       </div>
+
+      {canManage && <div className="card p-4 space-y-3">
+        <div className="flex items-center justify-between"><h2 className="font-bold flex items-center gap-2"><Wallet className="w-4 h-4 text-primary" />Pending Wallet Top-ups <span className="text-xs text-muted-foreground font-normal">({topups.length})</span></h2><button onClick={loadTopups} className="btn btn-outline btn-sm"><RefreshCw className="w-3.5 h-3.5" />Refresh</button></div>
+        <div className="overflow-auto"><table className="w-full text-xs min-w-[800px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Date</th><th className="text-left py-2 px-2">Reseller</th><th className="text-left py-2 px-2">Amount</th><th className="text-left py-2 px-2">Gateway</th><th className="text-left py-2 px-2">Trx ID</th><th className="text-left py-2 px-2">Payer</th><th className="text-left py-2 px-2">Notes</th><th className="text-left py-2 px-2">Action</th></tr></thead><tbody>
+          {topups.map(t => <tr key={t.id} className="border-b border-border/50"><td className="py-2 px-2 whitespace-nowrap text-muted-foreground">{new Date(t.created_at).toLocaleString()}</td><td className="py-2 px-2 font-semibold">{t.reseller_name}</td><td className="py-2 px-2 font-bold text-emerald-400">{money(t.amount)}</td><td className="py-2 px-2">{t.gateway}{t.method ? ` / ${t.method}` : ''}</td><td className="py-2 px-2 font-mono">{t.trx_id || '-'}</td><td className="py-2 px-2">{t.payer_number || '-'}</td><td className="py-2 px-2 max-w-[180px] truncate" title={t.notes || ''}>{t.notes || '-'}</td><td className="py-2 px-2"><div className="flex gap-1.5"><button disabled={!!topupBusy} onClick={()=>decideTopup(t.reseller_id, t.id, true)} className="btn btn-primary btn-sm">{topupBusy===t.id?'…':'Approve'}</button><button disabled={!!topupBusy} onClick={()=>decideTopup(t.reseller_id, t.id, false)} className="btn btn-outline btn-sm">Reject</button></div></td></tr>)}
+          {!topups.length && <tr><td colSpan={8} className="py-8 text-center text-muted-foreground">No pending top-up requests.</td></tr>}
+        </tbody></table></div>
+      </div>}
 
       {editing && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setEditing(null)}>
