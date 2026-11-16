@@ -25,6 +25,8 @@ export default function DashboardPage() {
 
   const load = useCallback(async () => {
     if (!token) return;
+    // Diagnostics is admin-only — skip it for reseller/technician roles instead of firing a 403.
+    const canDiagnostics = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(activeRole || user?.role));
     try {
       const [sum, subs, sessions, billing, routers, olts, onus, health, apiHealth, diag, general] = await Promise.all([
         apiFetch<any>('/api/subscribers/summary', {}, token).catch(() => null),
@@ -36,7 +38,7 @@ export default function DashboardPage() {
         apiFetch<any>('/api/olt/onus', {}, token).catch(() => null),
         fetch(`${getApiBaseUrl()}/api/system/health`).then((r) => r.json()).catch(() => null),
         fetch(`${getApiBaseUrl()}/api/health`).then((r) => r.json()).catch(() => null),
-        apiFetch<any>('/api/system/diagnostics', {}, token).catch(() => null),
+        canDiagnostics ? apiFetch<any>('/api/system/diagnostics', {}, token).catch(() => null) : Promise.resolve(null),
         apiFetch<any>('/api/settings/general', {}, token).catch(() => null),
       ]);
       setD({
@@ -52,7 +54,7 @@ export default function DashboardPage() {
         company: general?.data?.company_name || 'IzanDesk',
       });
     } catch {}
-  }, [token]);
+  }, [token, activeRole, user?.role]);
 
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
 

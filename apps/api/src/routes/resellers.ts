@@ -334,8 +334,10 @@ router.get('/:id/users', asyncHandler(async (req, res) => {
     params.push(`%${q}%`);
     where += ` AND (lower(COALESCE(s.full_name,'')) LIKE $${params.length} OR lower(COALESCE(s.username,'')) LIKE $${params.length} OR lower(COALESCE(s.client_code,'')) LIKE $${params.length} OR lower(COALESCE(s.phone,'')) LIKE $${params.length} OR lower(COALESCE(s.email,'')) LIKE $${params.length} OR lower(COALESCE(s.address,'')) LIKE $${params.length} OR lower(COALESCE(s.ip_address,'')) LIKE $${params.length} OR lower(COALESCE(s.mac_address,'')) LIKE $${params.length} OR lower(COALESCE(s.nid_number,'')) LIKE $${params.length})`;
   }
-  const r = await pool.query(`SELECT s.id,s.client_code,s.full_name,s.username,s.phone,s.email,s.status,s.package_name,s.monthly_bill,s.current_due,s.expiry_date,s.created_at,s.provisioning_mode,s.ip_address,s.mac_address,s.address,s.zone,s.area,s.connection_type
-    FROM subscribers s ${where} ORDER BY s.created_at DESC LIMIT 500`, params);
+  // zone/area are FK IDs on subscribers — resolve their names via joins (s.zone/s.area do not exist).
+  const r = await pool.query(`SELECT s.id,s.client_code,s.full_name,s.username,s.phone,s.email,s.status,s.package_name,s.monthly_bill,s.current_due,s.expiry_date,s.created_at,s.provisioning_mode,s.ip_address,s.mac_address,s.address,z.name AS zone,a.name AS area,s.connection_type
+    FROM subscribers s LEFT JOIN zones z ON z.id=s.zone_id LEFT JOIN areas a ON a.id=s.area_id
+    ${where} ORDER BY s.created_at DESC LIMIT 500`, params);
   res.json({ data: r.rows, total: r.rowCount });
 }));
 

@@ -1,7 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { usePathname } from 'next/navigation';
+import { useAuth } from '@/lib/auth-context';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { MobileBottomNav } from '@/components/layout/mobile-bottom-nav';
@@ -9,6 +10,11 @@ import { CommandPalette } from '@/components/dashboard/command-palette';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { user } = useAuth();
+  // Resellers have no use for the admin dashboard — send them straight to their portal.
+  useEffect(() => {
+    if (user?.role === 'RESELLER' && pathname === '/') window.location.replace('/resellers');
+  }, [user?.role, pathname]);
   // Public/self-contained routes render without admin chrome
   if (pathname?.startsWith('/portal') || pathname === '/walled-garden' || pathname === '/forgot-password') {
     return <>{children}</>;
