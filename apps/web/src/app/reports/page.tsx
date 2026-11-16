@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { RefreshCw, BarChart3, Download } from 'lucide-react';
@@ -22,6 +23,15 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string|null>(null);
   const [sched, setSched] = useState<any>({ name:'Daily Collections', report_key:'collections', format:'CSV', schedule_cron:'0 23 * * *' });
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const hash = typeof window !== 'undefined' ? window.location.hash.replace('#','') : '';
+    const view = String(searchParams?.get('view') || hash || '').toLowerCase();
+    if (!view) return;
+    const id = view === 'dues' || view === 'due-analytics' ? 'dues-aging' : view === 'collections' ? 'collections-report' : view;
+    setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+  }, [searchParams, loading]);
 
   const load = useCallback(async () => {
     if (!token) return; setLoading(true); setErr(null);
@@ -76,7 +86,7 @@ export default function ReportsPage() {
           <div className="grid grid-cols-3 gap-3 mb-3 text-sm"><div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20"><div className="text-xs text-muted-foreground">Income</div><div className="font-bold">{money(pnl?.income||0)}</div></div><div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20"><div className="text-xs text-muted-foreground">Expense</div><div className="font-bold">{money(pnl?.expense||0)}</div></div><div className="p-3 rounded-xl bg-primary/10 border border-primary/20"><div className="text-xs text-muted-foreground">Net</div><div className="font-bold">{money(pnl?.net||0)}</div></div></div>
           <Table cols={['Type','Method','Count','Total']} rows={(pnl?.breakdown||[]).map((r:any)=>[r.txn_type,r.method,r.count,money(r.total)])} empty="No finance data." />
         </Panel>
-        <Panel title="Dues Aging">
+        <Panel title="Dues Aging" id="dues-aging">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
             <Bucket label="Current" count={aging?.current_bucket||0} amount={aging?.current_amount} />
             <Bucket label="1-30 days" count={aging?.d1_30||0} amount={aging?.d1_30_amount} />
@@ -84,7 +94,7 @@ export default function ReportsPage() {
             <Bucket label="> 60 days" count={aging?.d60_plus||0} amount={aging?.d60_plus_amount} />
           </div>
         </Panel>
-        <Panel title="Collections (by period & gateway)">
+        <Panel title="Collections (by period & gateway)" id="collections-report">
           <Table cols={['Period','Gateway','Count','Total']} rows={collections.map((r:any)=>[r.period,r.gateway,r.count,money(r.total)])} empty="No collection data." />
         </Panel>
         <Panel title="Expense Breakdown">
@@ -114,5 +124,5 @@ export default function ReportsPage() {
 
 function Kpi({label,value,sub}:any){ return <div className="p-4 rounded-2xl border border-border bg-card"><div className="text-xs text-muted-foreground mb-1">{label}</div><div className="text-xl font-black">{value}</div>{sub && <div className="text-[11px] text-muted-foreground mt-1">{sub}</div>}</div>; }
 function Bucket({label,count,amount}:any){ return <div className="p-3 rounded-xl border border-border bg-muted/20"><div className="text-xs text-muted-foreground">{label}</div><div className="text-lg font-bold">{count}</div><div className="text-xs text-muted-foreground">{money(amount)}</div></div>; }
-function Panel({title,children}:any){ return <div className="rounded-2xl border border-border bg-card p-4"><h2 className="font-bold mb-3">{title}</h2><div className="overflow-auto max-h-[300px]">{children}</div></div>; }
+function Panel({title,children,id}:any){ return <div id={id} className="rounded-2xl border border-border bg-card p-4 scroll-mt-24"><h2 className="font-bold mb-3">{title}</h2><div className="overflow-auto max-h-[300px]">{children}</div></div>; }
 function Table({cols,rows,empty}:any){ return <table className="w-full text-xs"><thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border">{cols.map((c:string)=><th key={c} className="text-left py-2 px-2">{c}</th>)}</tr></thead><tbody>{(rows||[]).map((r:any,i:number)=>(<tr key={i} className="border-b border-border/50">{r.map((c:any,j:number)=><td key={j} className="py-2 px-2">{c}</td>)}</tr>))}{!(rows||[]).length && <tr><td colSpan={cols.length} className="py-6 text-center text-muted-foreground">{empty||'No data.'}</td></tr>}</tbody></table>; }

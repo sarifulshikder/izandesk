@@ -1440,6 +1440,52 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_subscriber_comms_channel ON subscriber_communications(channel);
   `).catch(e => console.error('[DB] Phase 8 subscriber enhancement error', e.message));
 
+  // Phase 9: ACS / GenieACS (TR-069) device management
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS acs_devices (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      genieacs_id TEXT NOT NULL UNIQUE,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      serial_number TEXT,
+      oui TEXT,
+      product_class TEXT,
+      manufacturer TEXT,
+      model_name TEXT,
+      software_version TEXT,
+      hardware_version TEXT,
+      connection_request_url TEXT,
+      ip_address TEXT,
+      status TEXT NOT NULL DEFAULT 'UNKNOWN',
+      last_inform_at TIMESTAMPTZ,
+      tags JSONB DEFAULT '[]'::jsonb,
+      raw_summary JSONB DEFAULT '{}'::jsonb,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_acs_devices_subscriber ON acs_devices(subscriber_id);
+    CREATE INDEX IF NOT EXISTS idx_acs_devices_status ON acs_devices(status);
+    CREATE INDEX IF NOT EXISTS idx_acs_devices_last_inform ON acs_devices(last_inform_at DESC NULLS LAST);
+
+    CREATE TABLE IF NOT EXISTS acs_device_actions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      acs_device_id UUID REFERENCES acs_devices(id) ON DELETE SET NULL,
+      device_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      task_name TEXT,
+      task_id TEXT,
+      payload JSONB DEFAULT '{}'::jsonb,
+      result JSONB DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'QUEUED',
+      error_message TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_acs_device_actions_device ON acs_device_actions(device_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_acs_device_actions_action ON acs_device_actions(action);
+  `).catch(e => console.error('[DB] ACS schema error', e.message));
+
   // Stable client-code sequence (UUID primary keys have no serial sequence).
   // Seed it from the highest numeric suffix already present so new codes never collide.
   await pool.query('CREATE SEQUENCE IF NOT EXISTS subscriber_client_code_seq').catch(() => {});

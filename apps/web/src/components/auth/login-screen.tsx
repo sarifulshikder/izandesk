@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { ShieldCheck, LogIn, Radio, Sun, Moon } from 'lucide-react';
 
@@ -16,6 +17,7 @@ export function LoginScreen() {
   const { login, loading, error, theme, toggleTheme } = useAuth();
   const [email, setEmail] = useState('admin@izandesk.com');
   const [password, setPassword] = useState('admin123');
+  const [remember, setRemember] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -24,7 +26,7 @@ export function LoginScreen() {
     setSubmitting(true);
     setLocalError(null);
     try {
-      await login(email, password);
+      await login(email, password, remember);
     } catch (err: any) {
       setLocalError(err?.message || 'Login failed');
     } finally {
@@ -68,21 +70,32 @@ export function LoginScreen() {
 
           <form onSubmit={submit} className="space-y-4">
             <div>
-              <label className="text-xs font-semibold text-muted-foreground">Email</label>
-              <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="username" className="mt-1 w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-primary/50 outline-none text-sm text-foreground placeholder:text-muted-foreground" required />
+              <label className="text-xs font-semibold text-muted-foreground">Email or Username</label>
+              <input value={email} onChange={(e) => setEmail(e.target.value)} type="text" autoComplete="username" className="mt-1 w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-primary/50 outline-none text-sm text-foreground placeholder:text-muted-foreground" placeholder="admin@izandesk.com" required />
             </div>
             <div>
-              <label className="text-xs font-semibold text-muted-foreground">Password</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-muted-foreground">Password</label>
+                <Link href="/forgot-password" className="text-xs text-primary hover:underline">Forgot password?</Link>
+              </div>
               <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" className="mt-1 w-full px-3.5 py-2.5 rounded-xl bg-card border border-border focus:border-primary/50 outline-none text-sm text-foreground placeholder:text-muted-foreground" required />
             </div>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground select-none cursor-pointer">
+              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="rounded border-border" />
+              Remember me
+            </label>
             {(localError || error) && <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">{localError || error}</div>}
             <button disabled={submitting || loading} type="submit" className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground font-semibold hover:opacity-95 disabled:opacity-60">
               <LogIn className="w-4 h-4" /> {submitting ? 'Signing in...' : 'Sign In'}
             </button>
           </form>
 
+          <div className="mt-4 text-xs text-muted-foreground">
+            Customer? <Link href="/portal" className="text-primary hover:underline font-medium">Open the self-care portal</Link>
+          </div>
+
           <div className="mt-6">
-            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Demo RBAC accounts</div>
+            <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Demo accounts</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {demoAccounts.map((acc) => (
                 <button key={acc.email} type="button" onClick={() => { setEmail(acc.email); setPassword(acc.password); }} className="text-left p-3 rounded-xl border border-border hover:border-primary/40 hover:bg-muted/50 transition-colors">

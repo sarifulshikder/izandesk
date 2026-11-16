@@ -145,31 +145,36 @@ async function bootstrap() {
 
   app.post('/api/auth/login', async (req, res) => {
     try {
-      const body = req.body as LoginRequest;
-      const email = String(body.email || '').toLowerCase();
+      const body = req.body as LoginRequest & { username?: string; identifier?: string };
+      const identifier = String(body.identifier || body.email || body.username || '').trim().toLowerCase();
       const pw = String(body.password || '');
       const now = Date.now();
       const maxAttempts = Number(await getCached('security.login_max_attempts', 5)) || 5;
       const lockMinutes = Number(await getCached('security.login_lockout_minutes', 15)) || 15;
-      const att = loginAttempts.get(email);
+      const att = loginAttempts.get(identifier);
       if (att && att.lockedUntil > now) {
         return res.status(429).json({ message: `Too many failed attempts. Locked — try again in ${Math.ceil((att.lockedUntil - now) / 60000)} min.` });
       }
-      const user = users.find((u) => u.email.toLowerCase() === email);
+      // Support login by email or local-part username (e.g. "admin" for admin@izandesk.com)
+      const user = users.find((u) => {
+        const em = u.email.toLowerCase();
+        const local = em.split('@')[0];
+        return em === identifier || local === identifier;
+      });
       const ok = user ? await checkPassword(user, pw) : false;
       if (!user || !ok) {
-        const a = loginAttempts.get(email) || { fails: 0, lockedUntil: 0 };
+        const a = loginAttempts.get(identifier) || { fails: 0, lockedUntil: 0 };
         a.fails += 1;
         if (a.fails >= maxAttempts) {
           a.lockedUntil = now + lockMinutes * 60000; a.fails = 0;
-          loginAttempts.set(email, a);
-          await auditLog({ action: 'auth.lockout', entity_type: 'auth', entity_id: email, details: { lockout_minutes: lockMinutes, max_attempts: maxAttempts }, ip_address: req.ip });
+          loginAttempts.set(identifier, a);
+          await auditLog({ action: 'auth.lockout', entity_type: 'auth', entity_id: identifier, details: { lockout_minutes: lockMinutes, max_attempts: maxAttempts }, ip_address: req.ip });
           return res.status(429).json({ message: `Too many failed attempts. Account locked for ${lockMinutes} min.` });
         }
-        loginAttempts.set(email, a);
-        return res.status(401).json({ message: 'Invalid email or password' });
+        loginAttempts.set(identifier, a);
+        return res.status(401).json({ message: 'Invalid email/username or password' });
       }
-      loginAttempts.delete(email);
+      loginAttempts.delete(identifier);
       const session = toSession(user);
       const sessionMinutes = Number(await getCached('security.session_timeout_minutes', 720)) || 720;
       await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.login', entity_type: 'auth', ip_address: req.ip });

@@ -117,6 +117,7 @@ export function Sidebar() {
     if (pathname.startsWith('/resellers')) { setOpenGroups(s => ({ ...s, Resellers: true })); setOpenSub(s => ({ ...s, 'All Resellers': true })); }
     if (pathname.startsWith('/routers')) { setOpenGroups(s => ({ ...s, Network: true })); setOpenSub(s => ({ ...s, 'Network & Routers': true })); }
     if (pathname.startsWith('/olts')) { setOpenGroups(s => ({ ...s, Network: true })); setOpenSub(s => ({ ...s, 'FTTH & OLTs': true })); }
+    if (pathname.startsWith('/acs')) setOpenGroups(s => ({ ...s, Network: true }));
     if (pathname.startsWith('/plugins')) setOpenGroups(s => ({ ...s, Plugins: true }));
     if (pathname.startsWith('/plugins/payment-gateways')) setOpenSub(s => ({ ...s, 'Payment Gateways': true }));
     if (pathname.startsWith('/finance') || pathname.startsWith('/hr') || pathname.startsWith('/procurement') || pathname.startsWith('/hotspot') || pathname.startsWith('/reports') || pathname.startsWith('/audit')) setOpenGroups(s => ({ ...s, 'Finance & Ops': true }));
@@ -179,6 +180,7 @@ export function Sidebar() {
         },
         { name: 'WireGuard Overlay', href: '/wireguard', icon: Shield, badge: 'WG' },
         { name: 'RADIUS & AAA', href: '/radius', icon: ShieldCheck },
+        { name: 'ACS / TR-069 (GenieACS)', href: '/acs', icon: Wifi, badge: 'CWMP' },
         {
           name: 'FTTH & OLTs',
           icon: Package,
@@ -329,10 +331,10 @@ export function Sidebar() {
 
         <div className="p-4 border-t border-border/70 bg-muted/20">
           <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
-            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" />Carrier Engine</span>
-            <span className="font-mono text-[11px] text-emerald-400">ONLINE</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" />System status</span>
+            <span className="font-mono text-[11px] text-emerald-400">Ready</span>
           </div>
-          <div className="w-full bg-border/70 rounded-full h-1.5 overflow-hidden"><div className="bg-gradient-to-r from-primary to-cyan-500 h-1.5 rounded-full w-[94%]" /></div>
+          <div className="text-[11px] text-muted-foreground">Monitoring & automation services</div>
         </div>
       </aside>
 

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import { RefreshCw, FileText, PlusCircle, Play, AlertTriangle, ShieldAlert, CheckCircle2, CreditCard, Wallet, Send, RotateCcw, Ban, Clock3 } from 'lucide-react';
@@ -14,6 +15,7 @@ function money(v: any, cur = '৳') {
 
 export default function BillingPage() {
   const { token } = useAuth();
+  const searchParams = useSearchParams();
   const [metrics, setMetrics] = useState<AnyObj | null>(null);
   const [invoices, setInvoices] = useState<AnyObj[]>([]);
   const [payments, setPayments] = useState<AnyObj[]>([]);
@@ -28,6 +30,27 @@ export default function BillingPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [cycleDate, setCycleDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [payForm, setPayForm] = useState({ invoice_id: '', gateway: 'bkash', amount: '' });
+  const [invoiceFilter, setInvoiceFilter] = useState<string>('ALL');
+  const [paymentsTodayOnly, setPaymentsTodayOnly] = useState(false);
+
+  useEffect(() => {
+    const s = String(searchParams?.get('status') || '').toUpperCase();
+    if (!s) return;
+    if (s === 'UNPAID' || s === 'DUE') setInvoiceFilter('UNPAID');
+    else if (['PAID','OVERDUE','PARTIAL','PENDING','ALL'].includes(s)) setInvoiceFilter(s);
+  }, [searchParams]);
+
+  useEffect(() => {
+    const view = String(searchParams?.get('view') || '').toLowerCase();
+    if (view === 'payments' || view === 'collections') {
+      setPaymentsTodayOnly(view === 'collections');
+      setTimeout(() => document.getElementById('billing-payments')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+    } else if (view === 'invoices') {
+      setTimeout(() => document.getElementById('billing-invoices')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+    } else if (view === 'due' || view === 'suspension') {
+      setTimeout(() => document.getElementById('billing-due')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+    }
+  }, [searchParams]);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -113,6 +136,16 @@ export default function BillingPage() {
 
   const selectedInvoice = useMemo(() => invoices.find(i => i.id === payForm.invoice_id), [invoices, payForm.invoice_id]);
   const overdueCandidates = useMemo(() => subscribers.filter(s => Number(s.current_due || 0) > 0 || s.status === 'SUSPENDED' || ['WARNING','GRACE','ISOLATED','WALLED_GARDEN'].includes(String(s.suspension_stage||''))).slice(0, 12), [subscribers]);
+  const filteredInvoices = useMemo(() => {
+    if (invoiceFilter === 'ALL') return invoices;
+    if (invoiceFilter === 'UNPAID') return invoices.filter((i: any) => ['PENDING', 'PARTIAL', 'OVERDUE', 'UNPAID'].includes(String(i.status || '').toUpperCase()) || Number(i.due_amount || 0) > 0);
+    return invoices.filter((i: any) => String(i.status || '').toUpperCase() === invoiceFilter);
+  }, [invoices, invoiceFilter]);
+  const filteredPayments = useMemo(() => {
+    if (!paymentsTodayOnly) return payments;
+    const today = new Date().toISOString().slice(0, 10);
+    return payments.filter((p: any) => String(p.created_at || '').slice(0, 10) === today);
+  }, [payments, paymentsTodayOnly]);
 
   return (
     <div className="space-y-5">
@@ -121,9 +154,19 @@ export default function BillingPage() {
           <h1 className="text-2xl font-black tracking-tight">Billing & Payments</h1>
           <p className="text-sm text-muted-foreground">Automated invoicing, due policies, suspension/walled-garden enforcement, and payment gateway collections with instant reactivation.</p>
           <div className="flex flex-wrap gap-2 mt-2 text-[11px]">
-            <a href="/plugins" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Payment Gateways (Plugins)</a>
-            <a href="/subscribers" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Subscribers</a>
-            <a href="/subscribers/live" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Live Sessions</a>
+            <a href="/billing/all" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">All Bills</a>
+            <a href="/billing/unpaid" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Unpaid Bills</a>
+            <a href="/billing/paid" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Paid Bills</a>
+            <a href="/billing/invoices" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Invoices</a>
+            <a href="/billing/monthly-generate" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Monthly Generate</a>
+            <a href="/billing/collections" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Today&apos;s Collection</a>
+            <a href="/billing/payments" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Payments</a>
+            <a href="/billing/due-analytics" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Due Analytics</a>
+            <a href="/billing/adjust-bill" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Adjust Bill</a>
+            <a href="/billing/auto-suspend" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Auto Suspend</a>
+            <a href="/billing/waivers" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Waivers</a>
+            <a href="/subscribers" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Clients</a>
+            <a href="/plugins" className="px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted/50">Payment Gateways</a>
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -155,22 +198,46 @@ export default function BillingPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden">
-          <div className="px-4 py-3 border-b border-border font-semibold flex items-center gap-2"><FileText className="w-4 h-4 text-primary"/>Invoices (batch & prorated)</div>
+        <div id="billing-invoices" className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden scroll-mt-24">
+          <div className="px-4 py-3 border-b border-border font-semibold flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div className="flex items-center gap-2"><FileText className="w-4 h-4 text-primary"/>Invoices (batch & prorated)</div>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                ['ALL', 'All'],
+                ['UNPAID', 'Unpaid/Due'],
+                ['PENDING', 'Pending'],
+                ['PARTIAL', 'Partial'],
+                ['OVERDUE', 'Overdue'],
+                ['PAID', 'Paid'],
+              ].map(([k, label]) => (
+                <button key={k} onClick={() => setInvoiceFilter(k)} className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${invoiceFilter === k ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border hover:bg-muted/50 text-foreground'}`}>{label}</button>
+              ))}
+            </div>
+          </div>
           <div className="overflow-auto max-h-[420px]">
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-xs uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-3">Invoice</th><th className="text-left px-4 py-3">Subscriber</th><th className="text-left px-4 py-3">Period</th><th className="text-left px-4 py-3">Amounts</th><th className="text-left px-4 py-3">Status</th></tr></thead>
               <tbody>
-                {invoices.map((inv:any) => (
+                {filteredInvoices.map((inv:any) => (
                   <tr key={inv.id} className={`border-t border-border/70 cursor-pointer hover:bg-muted/30 transition-colors ${payForm.invoice_id===inv.id?'bg-primary/5':''}`} onClick={()=>setPayForm(f=>({...f, invoice_id: inv.id, amount: String(inv.due_amount || inv.total_amount || '')}))}>
                     <td className="px-4 py-3"><div className="font-semibold">{inv.invoice_number}</div><div className="text-xs text-muted-foreground">{inv.bill_month || '-'} {inv.prorated ? <span className="text-cyan-400 font-medium">• prorated</span> : null}</div></td>
                     <td className="px-4 py-3"><div className="font-medium">{inv.subscriber_name || '-'}</div><div className="text-xs text-muted-foreground font-mono">{inv.client_code || ''} {inv.username ? `• ${inv.username}`:''}</div></td>
                     <td className="px-4 py-3 text-xs"><div>{inv.period_start || '-'} → {inv.period_end || '-'}</div><div className="text-muted-foreground">Due {inv.due_date || '-'}</div></td>
                     <td className="px-4 py-3 text-xs"><div>Total {money(inv.total_amount||inv.amount)}</div><div className="text-muted-foreground">Paid <span className="text-emerald-400">{money(inv.paid_amount)}</span> • Due <span className={Number(inv.due_amount||0)>0?'text-amber-400 font-medium':''}>{money(inv.due_amount)}</span></div></td>
-                    <td className="px-4 py-3 text-xs"><span className={`px-2 py-0.5 rounded-full border font-semibold ${inv.status==='PAID'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':inv.status==='OVERDUE'?'bg-red-500/10 text-red-400 border-red-500/20':inv.status==='PARTIAL'?'bg-amber-500/10 text-amber-400 border-amber-500/20':inv.status==='PENDING'?'bg-blue-500/10 text-blue-400 border-blue-500/20':'bg-muted text-muted-foreground border-border'}`}>{inv.status}</span></td>
+                    <td className="px-4 py-3 text-xs">
+                      <div className="flex flex-col items-start gap-1.5">
+                        <span className={`px-2 py-0.5 rounded-full border font-semibold ${inv.status==='PAID'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':inv.status==='OVERDUE'?'bg-red-500/10 text-red-400 border-red-500/20':inv.status==='PARTIAL'?'bg-amber-500/10 text-amber-400 border-amber-500/20':inv.status==='PENDING'?'bg-blue-500/10 text-blue-400 border-blue-500/20':'bg-muted text-muted-foreground border-border'}`}>{inv.status}</span>
+                        {Number(inv.due_amount || 0) > 0 && String(inv.status).toUpperCase() !== 'PAID' && (
+                          <div className="flex flex-wrap gap-1.5" onClick={e=>e.stopPropagation()}>
+                            <a href={`/billing/adjust-bill?invoice_id=${encodeURIComponent(inv.id)}`} className="px-2 py-0.5 rounded-md border border-border hover:bg-muted/50 text-foreground">Adjust</a>
+                            <a href={`/billing/waivers?invoice_id=${encodeURIComponent(inv.id)}`} className="px-2 py-0.5 rounded-md border border-border hover:bg-muted/50 text-foreground">Waive</a>
+                          </div>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))}
-                {!invoices.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No invoices yet. Run "Generate Batch Invoices" (supports prorated mid-month for new subscribers).</td></tr>}
+                {!filteredInvoices.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">{invoices.length ? 'No invoices match the selected filter.' : 'No invoices yet. Run "Generate Batch Invoices" (supports prorated mid-month for new subscribers).'}</td></tr>}
               </tbody>
             </table>
           </div>
@@ -212,7 +279,7 @@ export default function BillingPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-        <div className="rounded-2xl border border-border bg-card overflow-hidden">
+        <div id="billing-due" className="rounded-2xl border border-border bg-card overflow-hidden scroll-mt-24">
           <div className="px-4 py-3 border-b border-border font-semibold flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-400"/>Due / Suspension Control (warning → grace → isolation/walled garden)</div>
           <div className="overflow-auto max-h-[360px]">
             <table className="w-full text-xs">
@@ -235,14 +302,17 @@ export default function BillingPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-border bg-card overflow-hidden">
-          <div className="px-4 py-3 border-b border-border font-semibold flex items-center gap-2"><Wallet className="w-4 h-4 text-primary"/>Recent Payments & Suspension Logs</div>
+        <div id="billing-payments" className="rounded-2xl border border-border bg-card overflow-hidden scroll-mt-24">
+          <div className="px-4 py-3 border-b border-border font-semibold flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2"><Wallet className="w-4 h-4 text-primary"/>Recent Payments & Suspension Logs</div>
+            <button onClick={() => setPaymentsTodayOnly(v => !v)} className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${paymentsTodayOnly ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border hover:bg-muted/50'}`}>{paymentsTodayOnly ? "Showing: Today" : "Filter: Today"}</button>
+          </div>
           <div className="grid grid-rows-2 h-[360px]">
             <div className="overflow-auto border-b border-border/70">
               <table className="w-full text-xs"><thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-2">Time</th><th className="text-left px-4 py-2">Ref/Invoice</th><th className="text-left px-4 py-2">Gateway</th><th className="text-left px-4 py-2">Amount</th><th className="text-left px-4 py-2">Status</th></tr></thead>
                 <tbody>
-                  {payments.slice(0,30).map((p:any)=>(<tr key={p.id} className="border-t border-border/70"><td className="px-4 py-2 text-muted-foreground">{p.created_at?new Date(p.created_at).toLocaleString():'-'}</td><td className="px-4 py-2"><div className="font-medium">{p.payment_ref}</div><div className="text-muted-foreground">{p.invoice_number || ''} {p.full_name?`• ${p.full_name}`:''}</div></td><td className="px-4 py-2 uppercase">{p.gateway}</td><td className="px-4 py-2">{money(p.amount, p.currency==='USD'?'$':'৳')}</td><td className="px-4 py-2"><span className={p.status==='COMPLETED'?'text-emerald-400':p.status==='FAILED'?'text-red-400':'text-amber-300'}>{p.status}</span></td></tr>))}
-                  {!payments.length && <tr><td colSpan={5} className="px-4 py-4 text-center text-muted-foreground">No payments yet.</td></tr>}
+                  {filteredPayments.slice(0,30).map((p:any)=>(<tr key={p.id} className="border-t border-border/70"><td className="px-4 py-2 text-muted-foreground">{p.created_at?new Date(p.created_at).toLocaleString():'-'}</td><td className="px-4 py-2"><div className="font-medium">{p.payment_ref}</div><div className="text-muted-foreground">{p.invoice_number || ''} {p.full_name?`• ${p.full_name}`:''}</div></td><td className="px-4 py-2 uppercase">{p.gateway}</td><td className="px-4 py-2">{money(p.amount, p.currency==='USD'?'$':'৳')}</td><td className="px-4 py-2"><span className={p.status==='COMPLETED'?'text-emerald-400':p.status==='FAILED'?'text-red-400':'text-amber-300'}>{p.status}</span></td></tr>))}
+                  {!filteredPayments.length && <tr><td colSpan={5} className="px-4 py-4 text-center text-muted-foreground">{payments.length ? 'No payments match the current filter.' : 'No payments yet.'}</td></tr>}
                 </tbody>
               </table>
             </div>

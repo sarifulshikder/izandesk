@@ -25,7 +25,7 @@ export function MobileBottomNav() {
   return (
     <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-card/90 backdrop-blur-lg border-t border-border px-3 py-2 flex items-center justify-around shadow-2xl">
       {navs.map((item) => {
-        const isActive = pathname === item.href;
+        const isActive = item.href === '/' ? pathname === '/' : pathname === item.href || pathname.startsWith(item.href + '/');
         const Icon = item.icon;
 
         return (

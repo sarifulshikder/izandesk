@@ -33,10 +33,13 @@ export default function SubscribersPage() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [type, setType] = useState('');
+  const [clientView, setClientView] = useState<'compact' | 'detailed'>('compact');
 
   useEffect(() => {
     const s = searchParams?.get('status') || '';
     if (s) setStatus(s);
+    const v = String(searchParams?.get('view') || '').toLowerCase();
+    if (v === 'all-info' || v === 'detailed' || v === 'all') setClientView('detailed');
   }, [searchParams]);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -487,6 +490,19 @@ export default function SubscribersPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight">Subscribers (BSS Core)</h1>
           <p className="text-sm text-muted-foreground">Wizard onboarding, PPPoE profiles, map-based location, auto address fill, KYC & topology — {total} total</p>
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {[
+              ['', 'All'],
+              ['ACTIVE', 'Active'],
+              ['EXPIRED', 'Expired'],
+              ['SUSPENDED', 'Suspended'],
+              ['PENDING', 'Pending'],
+            ].map(([k, label]) => (
+              <button key={k || 'all'} onClick={() => setStatus(k)} className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${status === k ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border hover:bg-muted/50 text-foreground'}`}>{label}</button>
+            ))}
+            <Link href="/gis" className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-border bg-card hover:bg-muted/50 text-foreground inline-flex items-center gap-1"><MapPin className="w-3.5 h-3.5"/>Client Locations (GIS)</Link>
+            <button onClick={() => setClientView(v => v === 'detailed' ? 'compact' : 'detailed')} className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${clientView === 'detailed' ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border hover:bg-muted/50 text-foreground'}`}>All Client Info</button>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={load} className="px-3 py-2 rounded-xl border border-border bg-card text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
@@ -538,32 +554,45 @@ export default function SubscribersPage() {
         </select>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-2 rounded-2xl border border-border bg-card overflow-hidden">
+      <div className={`grid grid-cols-1 ${clientView === 'detailed' ? '' : 'xl:grid-cols-3'} gap-5`}>
+        <div className={`${clientView === 'detailed' ? '' : 'xl:col-span-2'} rounded-2xl border border-border bg-card overflow-hidden`}>
           <div className="overflow-auto">
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-muted-foreground text-xs uppercase">
                 <tr>
                   <th className="text-center px-4 py-3 w-10"><input type="checkbox" checked={selectedIds.length === rows.length && rows.length > 0} onChange={selectedIds.length === rows.length ? clearSelection : selectAll} className="w-4 h-4"/></th>
                   <th className="text-left px-4 py-3">Client</th>
+                  <th className="text-left px-4 py-3">Contact</th>
+                  {clientView === 'detailed' && <th className="text-left px-4 py-3">Address</th>}
                   <th className="text-left px-4 py-3">Connection</th>
                   <th className="text-left px-4 py-3">Package</th>
+                  {clientView === 'detailed' && <th className="text-left px-4 py-3">Billing</th>}
                   <th className="text-left px-4 py-3">Location/Topology</th>
                   <th className="text-left px-4 py-3">Status</th>
                   <th className="text-right px-4 py-3">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {loading ? <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">Loading subscribers...</td></tr> :
-                 rows.length === 0 ? <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No subscribers found. Add one with the wizard.</td></tr> :
+                {loading ? <tr><td colSpan={clientView === 'detailed' ? 10 : 8} className="px-4 py-8 text-center text-muted-foreground">Loading subscribers...</td></tr> :
+                 rows.length === 0 ? <tr><td colSpan={clientView === 'detailed' ? 10 : 8} className="px-4 py-8 text-center text-muted-foreground">No subscribers found. Add one with the wizard.</td></tr> :
                  rows.map(r => (
                   <tr key={r.id} className="border-t border-border/70 hover:bg-muted/30 cursor-pointer" onClick={(e)=>{ if(!(e.target as HTMLElement).closest('button,input')) openDetail(r.id); }}>
                     <td className="px-4 py-3 text-center"><input type="checkbox" checked={selectedIds.includes(r.id)} onChange={(e)=>{ e.stopPropagation(); toggleSelect(r.id); }} className="w-4 h-4"/></td>
                     <td className="px-4 py-3">
                       <div className="font-semibold text-foreground">{r.full_name}</div>
                       <div className="text-xs text-primary font-mono">{r.client_code}</div>
-                      <div className="text-xs text-muted-foreground">{r.phone || r.email || '-'}</div>
+                      {clientView !== 'detailed' && <div className="text-xs text-muted-foreground">{r.phone || r.email || '-'}</div>}
                     </td>
+                    <td className="px-4 py-3">
+                      <div className="text-xs">{r.phone || '-'}</div>
+                      <div className="text-xs text-muted-foreground truncate max-w-[180px]" title={r.email || ''}>{r.email || '-'}</div>
+                    </td>
+                    {clientView === 'detailed' && (
+                      <td className="px-4 py-3">
+                        <div className="text-xs max-w-[240px] truncate" title={r.address || ''}>{r.address || '-'}</div>
+                        <div className="text-xs text-muted-foreground">{[r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || '-'}</div>
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <div className="text-xs font-medium">{r.connection_type}</div>
                       <div className="text-xs text-muted-foreground">{r.username ? `PPPoE: ${r.username}` : (r.subscriber_type || 'HOME')}</div>
@@ -573,6 +602,12 @@ export default function SubscribersPage() {
                       <div className="text-xs">{r.package_name || '-'}</div>
                       <div className="text-xs text-muted-foreground">{r.bandwidth_mbps ? `${r.bandwidth_mbps} Mbps` : ''} {r.monthly_bill ? `• ৳${r.monthly_bill}` : ''}</div>
                     </td>
+                    {clientView === 'detailed' && (
+                      <td className="px-4 py-3">
+                        <div className="text-xs">Bill: {r.monthly_bill != null ? `৳${Number(r.monthly_bill).toLocaleString()}` : '-'}</div>
+                        <div className={`text-xs font-medium ${Number(r.current_due || 0) > 0 ? 'text-amber-400' : 'text-muted-foreground'}`}>Due: ৳{Number(r.current_due || 0).toLocaleString()}</div>
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <div className="text-xs">{[r.area_name, r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || `${r.area_name_db || r.area_name || '-'}`}</div>
                       <div className="text-xs text-muted-foreground">{r.distribution_box_name || r.distribution_box_code || '-'} {r.latitude ? '• 📍' : ''}</div>

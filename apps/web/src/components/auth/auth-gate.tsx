@@ -8,8 +8,8 @@ import { LoginScreen } from './login-screen';
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   const pathname = usePathname();
-  // Public/self-contained routes (customer portal, walled garden notice) do not require admin auth
-  if (pathname?.startsWith('/portal') || pathname === '/walled-garden') {
+  // Public/self-contained routes (customer portal, walled garden notice, password recovery) do not require admin auth
+  if (pathname?.startsWith('/portal') || pathname === '/walled-garden' || pathname === '/forgot-password') {
     return <>{children}</>;
   }
 

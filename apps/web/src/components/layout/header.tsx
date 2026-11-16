@@ -60,11 +60,11 @@ export function Header() {
 
       {/* Right Controls */}
       <div className="flex items-center gap-1.5 sm:gap-3 shrink-0 ml-auto sm:ml-0">
-        {/* Live Network Health Indicator */}
+        {/* Network/AAA status indicator */}
         <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-semibold">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+          <span className="w-2 h-2 rounded-full bg-emerald-500" />
           <Radio className="w-3.5 h-3.5" />
-          <span>Core AAA Live</span>
+          <span>System Online</span>
         </div>
 
         {/* Role Switcher Dropdown (Allows testing all roles in Phase 1) */}
@@ -132,30 +132,18 @@ export function Header() {
           <button
             onClick={() => setNotificationOpen(!isNotificationOpen)}
             className="p-2 rounded-xl text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted border border-border transition-all relative"
+            title="Notifications"
           >
             <Bell className="w-4 h-4" />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-primary animate-pulse" />
           </button>
 
           {isNotificationOpen && (
             <div className="absolute right-0 mt-2 w-80 rounded-2xl bg-card border border-border shadow-2xl p-3 z-50">
               <div className="flex items-center justify-between pb-2 mb-2 border-b border-border text-xs font-semibold">
-                <span>Recent System Alerts</span>
-                <span className="text-[10px] text-primary">3 New</span>
+                <span>Notifications</span>
               </div>
-              <div className="space-y-2 text-xs">
-                <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                  <div className="font-semibold">bKash Webhook Verified</div>
-                  <div className="text-[11px] text-muted-foreground">Client #IZN-00142 paid BDT 1,200. Reconnected in 1.4s.</div>
-                </div>
-                <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400">
-                  <div className="font-semibold">Optical Power Warning</div>
-                  <div className="text-[11px] text-muted-foreground">ONU at Pon0/2 dropped to -26.4 dBm. Field alert sent.</div>
-                </div>
-                <div className="p-2 rounded-lg bg-primary/10 border border-primary/20 text-primary">
-                  <div className="font-semibold">Hot-Reload Plugin Active</div>
-                  <div className="text-[11px] text-muted-foreground">Plugin Kernel initialized with 4 loaded modules.</div>
-                </div>
+              <div className="text-xs text-muted-foreground p-2 rounded-lg bg-muted/30 border border-border/60">
+                No new alerts. Live operational alerts will appear here as monitoring integrations report events.
               </div>
             </div>
           )}

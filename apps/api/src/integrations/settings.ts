@@ -32,6 +32,7 @@ export const SETTINGS_CATEGORIES: Record<string, { label: string; description: s
   branding: { label: 'Branding', description: 'Portal/login appearance and white-label fields.' },
   billing: { label: 'Billing', description: 'Due policy, late fees and auto-suspension.' },
   network: { label: 'Network', description: 'Default device/management parameters.' },
+  acs: { label: 'ACS / TR-069', description: 'GenieACS (TR-069/CWMP) integration for CPE management.' },
 };
 
 export const SETTINGS_SCHEMA: SettingDef[] = [
@@ -98,6 +99,11 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { key: 'network.snmp_default_community', category: 'network', label: 'Default SNMP Community', type: 'password', default: 'public', secret: true },
   { key: 'network.default_ssh_port', category: 'network', label: 'Default SSH Port', type: 'number', min: 1, max: 65535, default: 22 },
   { key: 'network.olt_poll_interval_sec', category: 'network', label: 'OLT Poll Interval (seconds)', type: 'number', min: 10, max: 3600, default: 60 },
+
+  // ---- acs / tr-069 ----
+  { key: 'acs.genieacs_url', category: 'acs', label: 'GenieACS NBI URL', type: 'string', default: '', description: 'GenieACS Northbound Interface base URL (e.g. http://genieacs:7557 or http://<server>:7557). Env GENIEACS_URL is used as fallback if not set here.' },
+  { key: 'acs.genieacs_user', category: 'acs', label: 'GenieACS Username', type: 'string', default: '', description: 'Optional HTTP Basic auth username for GenieACS NBI.' },
+  { key: 'acs.genieacs_pass', category: 'acs', label: 'GenieACS Password', type: 'password', default: '', secret: true, description: 'Optional HTTP Basic auth password for GenieACS NBI.' },
 ];
 
 export function defFor(key: string): SettingDef | undefined {

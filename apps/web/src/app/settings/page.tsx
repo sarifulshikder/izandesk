@@ -15,7 +15,7 @@ type Field = {
 type CategoryMeta = { label: string; description: string };
 
 const TAB_ICONS: Record<string, any> = {
-  general: Building2, security: Shield, notifications: Bell, branding: Palette, billing: Receipt, network: NetworkIcon,
+  general: Building2, security: Shield, notifications: Bell, branding: Palette, billing: Receipt, network: NetworkIcon, acs: NetworkIcon,
 };
 
 export default function SettingsPage() {

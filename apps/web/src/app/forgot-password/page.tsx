@@ -1,0 +1,31 @@
+import Link from 'next/link';
+
+export default function ForgotPasswordPage() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-4">
+      <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 sm:p-8 shadow-xl space-y-4">
+        <div>
+          <h1 className="text-xl font-bold">Forgot password</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Staff password resets are managed by your system administrator for security.
+          </p>
+        </div>
+        <div className="text-sm text-muted-foreground space-y-2">
+          <p>If you cannot sign in:</p>
+          <ul className="list-disc pl-5 space-y-1">
+            <li>Contact your Super Admin or NOC lead to reset your account password.</li>
+            <li>If you are a subscriber, use the <Link href="/portal" className="text-primary hover:underline">Customer Self-Care Portal</Link> and the portal password reset/change options available there.</li>
+          </ul>
+        </div>
+        <div className="pt-2 flex gap-2">
+          <Link href="/" className="inline-flex items-center justify-center px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:opacity-95">
+            Back to sign in
+          </Link>
+          <Link href="/portal" className="inline-flex items-center justify-center px-4 py-2.5 rounded-xl border border-border bg-card text-sm font-semibold hover:bg-muted/50">
+            Open portal
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}

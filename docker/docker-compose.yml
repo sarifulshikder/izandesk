@@ -106,7 +106,7 @@ services:
       - "3001:3000"
 
   mongo:
-    image: mongo:6
+    image: mongo:4.4
     container_name: izandesk-mongo
     restart: unless-stopped
     profiles: ["acs"]

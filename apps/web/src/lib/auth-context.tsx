@@ -9,7 +9,7 @@ interface AuthContextType {
   token: string | null;
   loading: boolean;
   error: string | null;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, remember?: boolean) => Promise<void>;
   logout: () => void;
   theme: 'dark' | 'light';
   toggleTheme: () => void;
@@ -94,7 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     init();
   }, []);
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string, remember = true) => {
     setError(null);
     setLoading(true);
     try {
@@ -105,7 +105,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setToken(res.token);
       setUser(res.user);
       setActiveRole(res.user.role);
-      if (typeof window !== 'undefined') localStorage.setItem(TOKEN_KEY, res.token);
+      if (typeof window !== 'undefined') {
+        if (remember) localStorage.setItem(TOKEN_KEY, res.token);
+        else localStorage.removeItem(TOKEN_KEY);
+      }
     } catch (e: any) {
       setError(e?.message || 'Login failed');
       throw e;
