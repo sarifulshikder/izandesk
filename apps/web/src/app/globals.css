@@ -563,3 +563,13 @@ h1.text-2xl.font-black {
 /* Subtle animation pulses */
 @keyframes subtle-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .8; transform: scale(.98); } }
 .pulse-active { animation: subtle-pulse 3s infinite ease-in-out; }
+
+/* Print: show only the report content (SRZone-style Print buttons). */
+@media print {
+  .sidebar, .topbar, .mobile-bottom-nav, .page-tabs, button,
+  .dropdown-menu, .modal-backdrop, .no-print { display: none !important; }
+  html, body, .page { overflow: visible !important; height: auto !important; }
+  .card { break-inside: avoid; box-shadow: none !important; border-color: #bbb !important; }
+  .table { font-size: 10px; }
+  .print-only { display: block !important; }
+}

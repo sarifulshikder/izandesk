@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { apiFetch } from '@/lib/api';
 import { UserRole } from '@izandesk/shared-types';
 import {
   Search, Moon, Sun, Bell, Command, ChevronDown, Radio, Menu,
@@ -9,10 +11,20 @@ import {
 } from 'lucide-react';
 
 export function Header() {
-  const { user, activeRole, switchRole, theme, toggleTheme, setCommandPaletteOpen, toggleMobileMenu, logout } = useAuth();
+  const { user, token, activeRole, switchRole, theme, toggleTheme, setCommandPaletteOpen, toggleMobileMenu, logout } = useAuth();
   const [roleOpen, setRoleOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [userOpen, setUserOpen] = useState(false);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [unread, setUnread] = useState(0);
+  const router = useRouter();
+  const isReseller = user?.role === 'RESELLER';
+  useEffect(() => {
+    if (!isReseller || !token) return;
+    let alive = true;
+    const load = async () => { try { const r = await apiFetch<any>('/api/resellers/me/notification-log?unread=1', {}, token).catch(()=>null); if (alive && r) { setNotifications(r.data || []); setUnread(r.unread || 0); } } catch {} };
+    load(); const t = setInterval(load, 60000); return () => { alive = false; clearInterval(t); };
+  }, [isReseller, token]);
   if (!user || !activeRole) return null;
 
   const roles: { role: UserRole; label: string; desc: string }[] = [
@@ -76,14 +88,17 @@ export function Header() {
       <div className="relative">
         <button onClick={() => { setNotifOpen(!notifOpen); setRoleOpen(false); setUserOpen(false); }} className="topbar-icon-btn relative" title="Notifications">
           <Bell className="w-4 h-4" />
-          <span className="absolute top-1 right-1.5 w-1.5 h-1.5 rounded-full bg-danger" />
+          {unread > 0 && <span className="absolute -top-1 -right-1 min-w-4 h-4 rounded-full bg-danger text-white text-[10px] font-bold flex items-center justify-center px-1">{unread}</span>}
         </button>
         {notifOpen && (
           <div className="dropdown-menu right-0 w-80 p-2">
-            <div className="px-1 pb-2 mb-1 border-b border-border text-xs font-semibold">Notifications</div>
-            <div className="text-xs text-muted-foreground p-2 rounded bg-muted/60 border border-border">
-              No new alerts. Live operational alerts appear here as monitoring integrations report events.
-            </div>
+            <div className="px-1 pb-2 mb-1 border-b border-border text-xs font-semibold flex items-center justify-between">Notifications {isReseller && <button onClick={()=>{ setNotifOpen(false); router.push('/resellers?tab=notifications'); }} className="text-primary text-[11px]">View log →</button>}</div>
+            {isReseller && notifications.length ? notifications.slice(0,6).map(n => (
+              <div key={n.id} className={`px-2 py-1.5 rounded-lg mb-1 ${n.is_read ? '' : 'bg-primary/5'}`}>
+                <div className="text-xs font-semibold truncate">{n.title}</div>
+                <div className="text-[11px] text-muted-foreground truncate">{n.message}</div>
+              </div>
+            )) : <div className="text-xs text-muted-foreground p-2 rounded bg-muted/60 border border-border">No new alerts. Live operational alerts appear here as they are generated.</div>}
           </div>
         )}
       </div>
@@ -103,8 +118,8 @@ export function Header() {
               <div className="text-xs font-semibold truncate">{user.name}</div>
               <div className="text-[10px] text-muted-foreground truncate">{user.email}</div>
             </div>
-            <button className="dropdown-item"><User className="w-4 h-4 text-muted-foreground" />My profile</button>
-            <button className="dropdown-item"><SettingsIcon />Settings</button>
+            <button onClick={()=>{ setUserOpen(false); router.push(isReseller ? '/resellers?tab=dashboard' : '/settings'); }} className="dropdown-item"><User className="w-4 h-4 text-muted-foreground" />My profile</button>
+            <button onClick={()=>{ setUserOpen(false); router.push(isReseller ? '/resellers?tab=notifications' : '/settings'); }} className="dropdown-item"><SettingsIcon />Settings</button>
             <div className="divider my-1" />
             <button onClick={logout} className="dropdown-item text-danger"><LogOut className="w-4 h-4" />Logout</button>
           </div>

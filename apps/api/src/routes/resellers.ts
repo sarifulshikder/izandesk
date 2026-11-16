@@ -359,7 +359,7 @@ router.get('/:id/users', asyncHandler(async (req, res) => {
     params.push(`%${q}%`);
     where += ` AND (lower(COALESCE(s.full_name,'')) LIKE $${params.length} OR lower(COALESCE(s.username,'')) LIKE $${params.length} OR lower(COALESCE(s.client_code,'')) LIKE $${params.length} OR lower(COALESCE(s.phone,'')) LIKE $${params.length} OR lower(COALESCE(s.email,'')) LIKE $${params.length} OR lower(COALESCE(s.address,'')) LIKE $${params.length} OR lower(COALESCE(s.ip_address,'')) LIKE $${params.length} OR lower(COALESCE(s.mac_address,'')) LIKE $${params.length} OR lower(COALESCE(s.nid_number,'')) LIKE $${params.length} OR lower(COALESCE(s.notes,'')) LIKE $${params.length})`;
   }
-  const limit = Math.min(1000, Math.max(20, Number(req.query.limit || 500) || 500));
+  const limit = Math.min(10000, Math.max(20, Number(req.query.limit || 500) || 500));
   // zone/area are FK IDs on subscribers — resolve their names via joins (s.zone/s.area do not exist).
   const r = await pool.query(`SELECT s.*, z.name AS zone, a.name AS area,
       (SELECT upper(ss.status) FROM subscriber_sessions ss WHERE ss.subscriber_id=s.id ORDER BY ss.updated_at DESC LIMIT 1) AS online_status
@@ -867,7 +867,8 @@ router.put('/:id/profile', asyncHandler(async (req, res) => {
   }
   const b = req.body || {};
   const fields: string[] = []; const vals: any[] = [];
-  const allowed = ['company_name', 'email', 'phone', 'address', 'brand_name', 'logo_url', 'primary_color', 'secondary_color', 'portal_title', 'notes'];
+  const allowed = ['company_name', 'email', 'phone', 'address', 'brand_name', 'logo_url', 'primary_color', 'secondary_color', 'portal_title', 'notes',
+    'avatar_url', 'notify_expiry', 'notify_payment', 'notify_system'];
   for (const key of allowed) {
     if (b[key] !== undefined) { vals.push(b[key] === '' ? null : b[key]); fields.push(`${key}=$${vals.length}`); }
   }
@@ -1098,6 +1099,16 @@ router.delete('/:id/branches/:branchId', asyncHandler(async (req, res) => {
 }));
 
 // ---- Persisted notifications ----------------------------------------------
+router.get('/me/notification-log', asyncHandler(async (req, res) => {
+  const rid = await resolveResellerIdForUser(req);
+  if (!rid) return res.status(403).json({ message: 'No reseller account linked' });
+  req.params.id = rid;
+  const limit = Math.min(50, Math.max(5, Number(req.query.limit || 10) || 10));
+  const rows = (await pool.query('SELECT * FROM reseller_notifications WHERE reseller_id=$1 ORDER BY created_at DESC LIMIT $2', [rid, limit])).rows;
+  const u = (await pool.query('SELECT COUNT(*)::int AS n FROM reseller_notifications WHERE reseller_id=$1 AND is_read=false', [rid])).rows[0]?.n || 0;
+  res.json({ data: rows, unread: u });
+}));
+
 router.get('/:id/notification-log', asyncHandler(async (req, res) => {
   if (!(await ensureResellerAccess(req, res, req.params.id))) return;
   const limit = Math.min(500, Math.max(20, Number(req.query.limit || 200) || 200));
