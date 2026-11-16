@@ -2,6 +2,32 @@
 set -euo pipefail
 
 API="http://localhost:4000"
+
+clear_demo() {
+  echo "== Clearing demo billing & CRM data =="
+  cd /home/server/izandesk/apps/api
+  node <<'NODE'
+const { Pool } = require('pg');
+const pool = new Pool({ host: 'localhost', port: 5432, database: 'izandesk', user: 'izandesk_user', password: 'izandesk_secret_password' });
+(async () => {
+  await pool.query('DELETE FROM invoice_items');
+  await pool.query("DELETE FROM payments");
+  await pool.query("DELETE FROM invoices");
+  await pool.query("DELETE FROM tickets");
+  await pool.query("DELETE FROM leads");
+  await pool.query("DELETE FROM installation_orders");
+  console.log('Cleared: invoice_items, payments, invoices, tickets, leads, installation_orders');
+  await pool.end();
+})();
+NODE
+  echo "Done."
+}
+
+if [ "${1:-}" = "clear" ] || [ "${1:-}" = "--clear" ]; then
+  clear_demo
+  exit 0
+fi
+
 TOKEN=$(curl -s -X POST "$API/api/auth/login" -H 'Content-Type: application/json' -d '{"email":"admin@izandesk.com","password":"admin123"}' | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(JSON.parse(d).token)}catch(e){console.error('login failed');process.exit(1)}})")
 if [ -z "$TOKEN" ]; then echo "No token"; exit 1; fi
 
@@ -104,6 +130,7 @@ function postJson(url, headers, body) {
   await pool.end();
 })();
 NODE
+
 echo "== 5) Create tickets =="
 SUB1=$(cd /home/server/izandesk/apps/api && node <<'NODE'
 const { Pool } = require('pg');
