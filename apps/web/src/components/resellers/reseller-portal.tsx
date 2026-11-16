@@ -2,12 +2,14 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
+import { parityTabs, ResellerParityPanel, type ParityTab } from '@/components/resellers/reseller-parity';
 import {
   LayoutDashboard, Users, Wifi, Wallet, ArrowLeftRight, Receipt, RadioTower, RefreshCw,
   Search, ArrowUpRight, ArrowDownLeft, Building2, Plus, UserCheck,
-  UserX, Clock3, Ban, Activity, Phone, Mail, CreditCard, ChevronRight, PlugZap,
+  UserX, Clock3, Ban, Activity, Phone, Mail, CreditCard, ChevronRight, PlugZap, Eye,
   ScrollText, Download, MessageSquare, Send, X, Edit3, CalendarPlus, CheckSquare, Square, FileText, UserPlus, KeyRound, Save, BarChart3, Trash2, AlertCircle
 } from 'lucide-react';
 
@@ -16,6 +18,7 @@ const money = (v: any) => `৳${Number(v || 0).toLocaleString(undefined, { minim
 const dt = (v: any) => v ? new Date(v).toLocaleString() : '-';
 const d = (v: any) => v ? new Date(v).toLocaleDateString() : '-';
 const daysLeft = (v: any) => { if (!v) return null; const t = new Date(v).getTime(); if (isNaN(t)) return null; return Math.ceil((t - Date.now()) / 86400000); };
+const gb = (v: any) => { const b = Number(v || 0); return b >= 1073741824 ? `${(b / 1073741824).toFixed(2)} GB` : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${b} B`; };
 
 const tabs = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -26,8 +29,10 @@ const tabs = [
   { key: 'payments', label: 'Payments', icon: Receipt },
   { key: 'onus', label: 'ONU List', icon: RadioTower },
   { key: 'logs', label: 'Logs', icon: ScrollText },
+  ...parityTabs,
 ] as const;
 type TabKey = typeof tabs[number]['key'];
+const parityKeys = new Set<string>(parityTabs.map(t => t.key));
 
 function Card({ label, value, icon: Icon, tone = 'default', sub, onClick }: { label: string; value: any; icon: any; tone?: string; sub?: string; onClick?: ()=>void }) {
   const tones: Record<string, string> = { default: 'border-border bg-card', green: 'border-emerald-500/20 bg-emerald-500/5', amber: 'border-amber-500/20 bg-amber-500/5', red: 'border-red-500/20 bg-red-500/5', blue: 'border-cyan-500/20 bg-cyan-500/5', slate: 'border-slate-500/20 bg-slate-500/5', purple: 'border-violet-500/20 bg-violet-500/5' };
@@ -55,13 +60,32 @@ function MiniBars({ labels, values, colorClass }: { labels: string[]; values: nu
 
 export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const { token, user } = useAuth();
-  const [tab, setTab] = useState<TabKey>('dashboard');
+  const [tab, setTabState] = useState<TabKey>('dashboard');
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // Sidebar links use /resellers?tab=... — keep the portal tab in sync with the URL.
+  const setTab = useCallback((t: TabKey) => {
+    setTabState(t);
+    const base = typeof window !== 'undefined' ? window.location.pathname : '/resellers';
+    router.replace(t === 'dashboard' ? base : `${base}?tab=${t}`, { scroll: false });
+  }, [router]);
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    setTabState(t && tabs.some(x => x.key === t) ? t as TabKey : 'dashboard');
+  }, [searchParams]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [dashboard, setDashboard] = useState<AnyObj | null>(null);
   const [charts, setCharts] = useState<AnyObj | null>(null);
   const [notifications, setNotifications] = useState<AnyObj[]>([]);
+  const [bandwidth, setBandwidth] = useState<AnyObj[]>([]);
+  const [history, setHistory] = useState<AnyObj | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [dismissed, setDismissed] = useState<string[]>([]);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileForm, setProfileForm] = useState<AnyObj>({});
+  const [profileSaving, setProfileSaving] = useState(false);
   const [widgets, setWidgets] = useState<Record<string, boolean>>(() => { try { const v = localStorage.getItem('resellerPortalWidgets'); return v ? JSON.parse(v) : { kpis:true, charts:true, profile:true, overview:true, alerts:true }; } catch { return { kpis:true, charts:true, profile:true, overview:true, alerts:true }; } });
   const [users, setUsers] = useState<AnyObj[]>([]);
   const [sessions, setSessions] = useState<AnyObj[]>([]);
@@ -72,6 +96,8 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const [onus, setOnus] = useState<AnyObj[]>([]);
   const [onuAssign, setOnuAssign] = useState<Record<string, string>>({});
   const [showUnlinkedOnus, setShowUnlinkedOnus] = useState(false);
+  const [onuFilters, setOnuFilters] = useState<Record<string, string>>({});
+  const [showOnuFilters, setShowOnuFilters] = useState(false);
   const [logs, setLogs] = useState<AnyObj>({ audit: [], auth: [], wallet: [] });
   const [logQ, setLogQ] = useState('');
   const [logKind, setLogKind] = useState<'all' | 'wallet' | 'audit' | 'auth'>('all');
@@ -80,6 +106,10 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const [globalOpen, setGlobalOpen] = useState(false);
   const [globalBusy, setGlobalBusy] = useState(false);
   const [userQ, setUserQ] = useState(''); const [userStatus, setUserStatus] = useState('');
+  const [userFilters, setUserFilters] = useState<Record<string, string>>({});
+  const [showUserFilters, setShowUserFilters] = useState(false);
+  const [userLimit, setUserLimit] = useState('500');
+  const [hiddenCols, setHiddenCols] = useState<Record<string, boolean>>({});
   const [payKind, setPayKind] = useState<'all' | 'online' | 'invoice'>('all'); const [payQ, setPayQ] = useState(''); const [payStatus, setPayStatus] = useState(''); const [payGateway, setPayGateway] = useState(''); const [payMethod, setPayMethod] = useState(''); const [payType, setPayType] = useState(''); const [payApproval, setPayApproval] = useState('');
   const [rechargeAmount, setRechargeAmount] = useState(''); const [showBalance, setShowBalance] = useState(false);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
@@ -91,6 +121,9 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [sessionSelected, setSessionSelected] = useState<Record<string, boolean>>({});
   const [editUser, setEditUser] = useState<AnyObj | null>(null); const [editForm, setEditForm] = useState<AnyObj>({});
+  const [viewUser, setViewUser] = useState<AnyObj | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AnyObj | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [editPay, setEditPay] = useState<AnyObj | null>(null); const [editPayForm, setEditPayForm] = useState<AnyObj>({});
   const [addOpen, setAddOpen] = useState(false); const [addForm, setAddForm] = useState<AnyObj>({ full_name:'', username:'', password:'', phone:'', email:'', package_name:'', bandwidth_mbps:'', monthly_bill:'', price_override:'', custom_package_note:'', extended_expiry:false, branch_name:'', connection_type:'PPPOE', status:'PENDING', address:'' });
 
@@ -100,18 +133,27 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const canRecharge = ['SUPER_ADMIN', 'BILLING_OPERATOR'].includes(String(user?.role));
   const canMessage = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(user?.role));
   const canManageResellerUsers = ['SUPER_ADMIN', 'BILLING_OPERATOR'].includes(String(user?.role));
+  // Resellers may onboard their own subscribers — the API scopes them to this reseller.
+  const canAddSubscriber = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'RESELLER'].includes(String(user?.role));
 
-  const loadDashboard = useCallback(async () => { if (!token) return; const [d,c,n] = await Promise.all([apiFetch<any>(`/api/resellers/${resellerId}/dashboard`, {}, token), apiFetch<any>(`/api/resellers/${resellerId}/charts`, {}, token).catch(()=>({data:null})), apiFetch<any>(`/api/resellers/${resellerId}/notifications`, {}, token).catch(()=>({data:[]}))]); setDashboard(d.data); setCharts(c.data); setNotifications(n.data || []); }, [token, resellerId]);
+  const loadDashboard = useCallback(async () => { if (!token) return; const [d,c,n,bw,h] = await Promise.all([
+    apiFetch<any>(`/api/resellers/${resellerId}/dashboard`, {}, token),
+    apiFetch<any>(`/api/resellers/${resellerId}/charts`, {}, token).catch(()=>({data:null})),
+    apiFetch<any>(`/api/resellers/${resellerId}/notifications`, {}, token).catch(()=>({data:[]})),
+    apiFetch<any>(`/api/resellers/${resellerId}/top-bandwidth`, {}, token).catch(()=>({data:[]})),
+    apiFetch<any>(`/api/resellers/${resellerId}/history`, {}, token).catch(()=>({data:null})),
+  ]); setDashboard(d.data); setCharts(c.data); setNotifications(n.data || []); setBandwidth(bw.data || []); setHistory(h.data || null); }, [token, resellerId]);
+  useEffect(() => { if (!autoRefresh || tab !== 'dashboard') return; const t = setInterval(() => { loadDashboard().catch(()=>{}); }, 60000); return () => clearInterval(t); }, [autoRefresh, tab, loadDashboard]);
   useEffect(() => { try { localStorage.setItem('resellerPortalWidgets', JSON.stringify(widgets)); } catch {} }, [widgets]);
-  const loadUsers = useCallback(async () => { if (!token) return; const qs = new URLSearchParams(); if (userQ) qs.set('q', userQ); if (userStatus) qs.set('status', userStatus); const r = await apiFetch<any>(`/api/resellers/${resellerId}/users${qs.toString() ? `?${qs}` : ''}`, {}, token); setUsers(r.data || []); setSelected({}); }, [token, resellerId, userQ, userStatus]);
+  const loadUsers = useCallback(async () => { if (!token) return; const qs = new URLSearchParams(); if (userQ) qs.set('q', userQ); if (userStatus) qs.set('status', userStatus); Object.entries(userFilters).forEach(([k, v]) => { if (v) qs.set(k, v); }); qs.set('limit', userLimit); const r = await apiFetch<any>(`/api/resellers/${resellerId}/users${qs.toString() ? `?${qs}` : ''}`, {}, token); setUsers(r.data || []); setSelected({}); }, [token, resellerId, userQ, userStatus, userFilters, userLimit]);
   const loadSessions = useCallback(async () => { if (!token) return; const r = await apiFetch<any>(`/api/resellers/${resellerId}/sessions`, {}, token); setSessions(r.data || []); setSessionSelected({}); }, [token, resellerId]);
   const loadBalance = useCallback(async () => { if (!token) return; const r = await apiFetch<any>(`/api/resellers/${resellerId}/balance-report`, {}, token); setBalance(r.data); }, [token, resellerId]);
   const loadSharing = useCallback(async () => { if (!token) return; const r = await apiFetch<any>(`/api/resellers/${resellerId}/sharing-report`, {}, token); setSharing(r.data || []); }, [token, resellerId]);
   const loadPayments = useCallback(async () => { if (!token) return; const qs = new URLSearchParams({ kind: payKind }); if (payQ) qs.set('q', payQ); if (payStatus) qs.set('status', payStatus); if (payGateway) qs.set('gateway', payGateway); if (payMethod) qs.set('method', payMethod); if (payType) qs.set('payment_type', payType); if (payApproval) qs.set('approval', payApproval); const r = await apiFetch<any>(`/api/resellers/${resellerId}/payments?${qs.toString()}`, {}, token); setPayments(r.data || []); setPaySummary(r.summary || {}); }, [token, resellerId, payKind, payQ, payStatus, payGateway, payMethod, payType, payApproval]);
-  const loadOnus = useCallback(async (unlinked = showUnlinkedOnus) => { if (!token) return; const qs = unlinked ? '?unlinked=1' : ''; const r = await apiFetch<any>(`/api/resellers/${resellerId}/onus${qs}`, {}, token); const linked = r.data || []; const extra = r.unlinked || []; setOnus(unlinked ? [...linked, ...extra] : linked); }, [token, resellerId, showUnlinkedOnus]);
+  const loadOnus = useCallback(async (unlinked = showUnlinkedOnus) => { if (!token) return; const qs = new URLSearchParams(); if (unlinked) qs.set('unlinked', '1'); Object.entries(onuFilters).forEach(([k, v]) => { if (v) qs.set(k, v); }); const r = await apiFetch<any>(`/api/resellers/${resellerId}/onus${qs.toString() ? `?${qs}` : ''}`, {}, token); const linked = r.data || []; const extra = r.unlinked || []; setOnus(unlinked ? [...linked, ...extra] : linked); }, [token, resellerId, showUnlinkedOnus, onuFilters]);
   const loadLogs = useCallback(async () => { if (!token) return; const qs = new URLSearchParams(); if (logQ) qs.set('q', logQ); if (logKind && logKind !== 'all') qs.set('kind', logKind); const r = await apiFetch<any>(`/api/resellers/${resellerId}/logs${qs.toString() ? `?${qs}` : ''}`, {}, token); setLogs(r.data || { audit: [], auth: [], wallet: [] }); }, [token, resellerId, logQ, logKind]);
 
-  const loadTab = useCallback(async (t: TabKey) => { setLoading(true); setErr(null); try { if (t === 'dashboard') await loadDashboard(); if (t === 'users') await Promise.all([loadUsers(), dashboard ? Promise.resolve() : loadDashboard().catch(()=>{})]); if (t === 'sessions') await loadSessions(); if (t === 'balance') await loadBalance(); if (t === 'sharing') await loadSharing(); if (t === 'payments') await loadPayments(); if (t === 'onus') await Promise.all([loadOnus(), users.length ? Promise.resolve() : loadUsers().catch(()=>{})]); if (t === 'logs') await loadLogs(); } catch (e: any) { setErr(e.message || 'Failed to load'); } finally { setLoading(false); } }, [loadDashboard, loadUsers, loadSessions, loadBalance, loadSharing, loadPayments, loadOnus, loadLogs, dashboard, users.length]);
+  const loadTab = useCallback(async (t: TabKey) => { if (parityKeys.has(t)) return; setLoading(true); setErr(null); try { if (t === 'dashboard') await loadDashboard(); if (t === 'users') await Promise.all([loadUsers(), dashboard ? Promise.resolve() : loadDashboard().catch(()=>{})]); if (t === 'sessions') await loadSessions(); if (t === 'balance') await loadBalance(); if (t === 'sharing') await loadSharing(); if (t === 'payments') await loadPayments(); if (t === 'onus') await Promise.all([loadOnus(), users.length ? Promise.resolve() : loadUsers().catch(()=>{})]); if (t === 'logs') await loadLogs(); } catch (e: any) { setErr(e.message || 'Failed to load'); } finally { setLoading(false); } }, [loadDashboard, loadUsers, loadSessions, loadBalance, loadSharing, loadPayments, loadOnus, loadLogs, dashboard, users.length]);
   useEffect(() => { loadTab('dashboard'); }, [resellerId]); // eslint-disable-line
   useEffect(() => { if (tab !== 'dashboard') loadTab(tab); }, [tab, payKind]); // eslint-disable-line
   useEffect(() => { if (tab === 'payments') { const t = setTimeout(() => loadPayments().catch(()=>{}), 250); return () => clearTimeout(t); } }, [payQ, payStatus, payGateway, payMethod, payType, payApproval]); // eslint-disable-line
@@ -156,6 +198,11 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const batchStatus = async (action: 'activate'|'suspend', ids: string[]) => { if (!token || !ids.length) return; let reason = action === 'suspend' ? (prompt('Suspend reason (optional):', 'Manual suspend') || undefined) : undefined; if (reason === undefined && action==='suspend') reason = 'Manual suspend'; setErr(null); setMsg(null); setActionBusy(`batch:${action}`); try { const r = await apiFetch<any>('/api/subscribers/batch', { method: 'POST', body: JSON.stringify({ action, ids, params: reason ? { reason } : {} }) }, token); const ok = (r.results||[]).filter((x:any)=>x.ok).length; setMsg(`${action === 'activate' ? 'Activated' : 'Suspended'} ${ok}/${ids.length} subscriber(s).`); await Promise.all([loadUsers().catch(()=>{}), loadDashboard().catch(()=>{}), loadSessions().catch(()=>{})]); } catch (e:any) { setErr(e.message); } finally { setActionBusy(null); } };
   const extendExpiry = async (sub: AnyObj, extraDays = 30) => { if (!token) return; setErr(null); setMsg(null); setActionBusy(`ext:${sub.id}`); try { const base = sub.expiry_date ? new Date(sub.expiry_date) : new Date(); if (isNaN(base.getTime())) base.setTime(Date.now()); base.setDate(base.getDate() + extraDays); const expiry_date = base.toISOString().slice(0,10); await apiFetch<any>(`/api/subscribers/${sub.id}`, { method: 'PUT', body: JSON.stringify({ expiry_date }) }, token); setMsg(`Extended ${sub.full_name || sub.username} by ${extraDays} days (new expiry: ${expiry_date}).`); await loadUsers().catch(()=>{}); } catch (e:any) { setErr(e.message); } finally { setActionBusy(null); } };
   const openEdit = (s: AnyObj) => { setEditUser(s); setEditForm({ id: s.id, full_name: s.full_name||'', username: s.username||'', new_password:'', phone: s.phone||'', email: s.email||'', address: s.address||'', package_name: s.package_name||'', bandwidth_mbps: s.bandwidth_mbps ?? '', monthly_bill: s.monthly_bill ?? '', price_override: s.price_override ?? '', custom_package_note: s.custom_package_note || '', extended_expiry: !!s.extended_expiry, branch_name: s.branch_name || '', status: s.status||'ACTIVE', expiry_date: s.expiry_date ? String(s.expiry_date).slice(0,10) : '' }); };
+  const deleteSubscriber = async () => { if (!token || !deleteTarget) return; setDeleting(true); setErr(null); setMsg(null); try {
+    const r = await apiFetch<any>(`/api/subscribers/${deleteTarget.id}`, { method: 'DELETE' }, token);
+    setMsg(`Deleted ${deleteTarget.full_name || deleteTarget.username}.`);
+    setDeleteTarget(null); await Promise.all([loadUsers().catch(()=>{}), loadDashboard().catch(()=>{})]);
+  } catch (e: any) { setErr(e.message || 'Delete failed'); setDeleteTarget(null); } finally { setDeleting(false); } };
   const saveEdit = async () => { if (!token || !editUser) return; setErr(null); setMsg(null); setActionBusy('edit'); try { const payload: AnyObj = { full_name: editForm.full_name, status: editForm.status, phone: editForm.phone, email: editForm.email, address: editForm.address, package_name: editForm.package_name, custom_package_note: editForm.custom_package_note || null, branch_name: editForm.branch_name || null, extended_expiry: !!editForm.extended_expiry, expiry_date: editForm.expiry_date || null }; if (editForm.username && editForm.username !== editUser.username) payload.username = editForm.username; if (editForm.new_password) payload.password = editForm.new_password; if (editForm.monthly_bill !== '' && editForm.monthly_bill !== undefined) payload.monthly_bill = Number(editForm.monthly_bill); if (editForm.bandwidth_mbps !== '' && editForm.bandwidth_mbps !== undefined) payload.bandwidth_mbps = Number(editForm.bandwidth_mbps); if (editForm.price_override !== '' && editForm.price_override !== undefined && editForm.price_override !== null) payload.price_override = Number(editForm.price_override); else payload.price_override = null; await apiFetch<any>(`/api/subscribers/${editUser.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token); setMsg(`Updated ${editForm.full_name || editUser.username}${editForm.new_password ? ' (password reset)' : ''}${payload.username ? ' (username changed)' : ''}.`); setEditUser(null); await loadUsers().catch(()=>{}); } catch (e:any) { setErr(e.message); } finally { setActionBusy(null); } };
 
   const loadTemplates = async () => { if (!token) return; try { const r = await apiFetch<any>('/api/messaging/templates', {}, token); setTemplates(r.data || []); } catch { setTemplates([]); } };
@@ -189,6 +236,8 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const savePayment = async () => { if (!token || !editPay) return; setErr(null); setMsg(null); setActionBusy('editpay'); try { await apiFetch<any>(`/api/resellers/${resellerId}/payments/${editPay.id}`, { method: 'PATCH', body: JSON.stringify(editPayForm) }, token); setMsg('Payment updated.'); setEditPay(null); await loadPayments().catch(()=>{}); } catch (e:any) { setErr(e.message); } finally { setActionBusy(null); } };
 
   const stats = dashboard?.stats || {}; const walletInfo = dashboard?.wallet || { balance: reseller?.wallet_balance || 0 };
+  const openProfile = () => { setProfileForm({ company_name: reseller?.company_name || '', email: reseller?.email || '', phone: reseller?.phone || '', address: reseller?.address || '', brand_name: reseller?.brand_name || '', portal_title: reseller?.portal_title || '', notes: reseller?.notes || '' }); setProfileOpen(true); };
+  const saveProfile = async () => { if (!token || !reseller?.id) return; setProfileSaving(true); setErr(null); try { await apiFetch<any>(`/api/resellers/${reseller.id}/profile`, { method: 'PUT', body: JSON.stringify(profileForm) }, token); setMsg('Profile updated.'); setProfileOpen(false); await loadDashboard().catch(()=>{}); } catch (e: any) { setErr(e.message); } finally { setProfileSaving(false); } };
   const tabDataForExport = () => { if (tab === 'users') return users; if (tab === 'sessions') return sessions; if (tab === 'balance') return (balance?.transactions || []); if (tab === 'sharing') return sharing; if (tab === 'payments') return filteredPayments; if (tab === 'onus') return onus; if (tab === 'logs') return [...(logs.audit||[]), ...(logs.wallet||[])]; return []; };
 
   return (
@@ -219,6 +268,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
             )}
           </div>
           <button onClick={() => setShowBalance(v => !v)} className="px-3 py-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm font-semibold inline-flex items-center gap-2"><Wallet className="w-4 h-4" /> {showBalance ? money(walletInfo.balance ?? reseller?.wallet_balance) : 'Tap for Balance'}</button>
+          <button onClick={openProfile} className="btn btn-outline inline-flex items-center gap-2"><Building2 className="w-4 h-4" />Profile</button>
           <button onClick={() => downloadCsv(`reseller-${tab}-${resellerId}.csv`, tabDataForExport())} className="btn btn-outline inline-flex items-center gap-2"><Download className="w-4 h-4" />Export</button>
           <button onClick={() => loadTab(tab)} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
         </div>
@@ -232,12 +282,12 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-sm text-muted-foreground">Customizable dashboard: toggle widgets to focus on what matters.</div>
-            <div className="flex flex-wrap gap-1.5 text-xs">{[['kpis','KPIs'],['charts','Charts'],['alerts','Alerts'],['profile','Profile'],['overview','Overview']].map(([k,label]) => (<button key={k} onClick={()=>setWidgets(w=>({...w,[k]:!w[k]}))} className={`px-2.5 py-1.5 rounded-lg border ${widgets[k]!==false?'bg-primary/10 border-primary/30 text-primary':'border-border text-muted-foreground'}`}>{label}</button>))}</div>
+            <div className="flex flex-wrap gap-1.5 text-xs">{autoRefresh && <span className="px-2.5 py-1.5 rounded-lg border border-success/30 text-success inline-flex items-center gap-1"><span className="status-dot online" />Auto 60s</span>}{[['kpis','KPIs'],['charts','Charts'],['alerts','Alerts'],['profile','Profile'],['overview','Overview']].map(([k,label]) => (<button key={k} onClick={()=>setWidgets(w=>({...w,[k]:!w[k]}))} className={`px-2.5 py-1.5 rounded-lg border ${widgets[k]!==false?'bg-primary/10 border-primary/30 text-primary':'border-border text-muted-foreground'}`}>{label}</button>))}<button onClick={()=>setAutoRefresh(v=>!v)} className={`px-2.5 py-1.5 rounded-lg border ${autoRefresh?'bg-success/10 border-success/30 text-success':'border-border text-muted-foreground'}`}>Auto-refresh 60s</button></div>
           </div>
           {widgets.alerts !== false && !!notifications.length && (
             <div className="card p-4 space-y-2">
-              <h2 className="font-bold flex items-center gap-2"><AlertCircle className="w-4 h-4 text-amber-400" />Notifications & Alerts <span className="text-xs text-muted-foreground font-normal">({notifications.length})</span></h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">{notifications.slice(0,12).map((n,i)=>(<button key={i} onClick={()=>{ if(n.subscriber_id){ setUserQ(''); setUserStatus(''); setTab('users'); } else if(n.payment_id){ setTab('payments'); } else if(n.type==='LOW_BALANCE'){ setTab('balance'); } }} className={`text-left p-3 rounded-xl border ${n.severity==='error'?'border-red-500/30 bg-red-500/5':n.severity==='warning'?'border-amber-500/30 bg-amber-500/5':'border-cyan-500/20 bg-cyan-500/5'} hover:brightness-110`}><div className="text-sm font-semibold">{n.title}</div><div className="text-xs text-muted-foreground">{n.message}</div><div className="text-[10px] mt-1 text-muted-foreground">{n.type}</div></button>))}</div>
+              <h2 className="font-bold flex items-center gap-2"><AlertCircle className="w-4 h-4 text-amber-400" />Notifications & Alerts <span className="text-xs text-muted-foreground font-normal">({notifications.filter(n => !dismissed.includes(String(n.title))).length})</span><button onClick={()=>setDismissed(notifications.map(n=>String(n.title)))} className="btn btn-outline btn-sm ml-auto">Clear All</button></h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">{notifications.filter(n=>!dismissed.includes(String(n.title))).slice(0,12).map((n,i)=>(<button key={i} onClick={()=>{ if(n.subscriber_id){ setUserQ(''); setUserStatus(''); setTab('users'); } else if(n.payment_id){ setTab('payments'); } else if(n.type==='LOW_BALANCE'){ setTab('balance'); } }} className={`text-left p-3 rounded-xl border ${n.severity==='error'?'border-red-500/30 bg-red-500/5':n.severity==='warning'?'border-amber-500/30 bg-amber-500/5':'border-cyan-500/20 bg-cyan-500/5'} hover:brightness-110`}><div className="text-sm font-semibold">{n.title}</div><div className="text-xs text-muted-foreground">{n.message}</div><div className="text-[10px] mt-1 text-muted-foreground">{n.type}</div></button>))}</div>
             </div>
           )}
           {widgets.kpis !== false && <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
@@ -260,6 +310,22 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
             <div className="card p-4"><div className="font-semibold text-sm mb-2 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-emerald-400"/>Renewals (6m)</div><MiniBars labels={charts.months||[]} values={charts.renewals||[]} colorClass="bg-emerald-500" /></div>
             <div className="card p-4"><div className="font-semibold text-sm mb-2 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-violet-400"/>Collections (6m)</div><MiniBars labels={charts.months||[]} values={(charts.payments_amount||[]).map((v:any)=>Math.round(Number(v||0)))} colorClass="bg-violet-500" /><div className="text-[10px] text-muted-foreground mt-1">Amount (BDT, rounded)</div></div>
           </div>}
+          {widgets.charts !== false && <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="card p-4 lg:col-span-2"><h2 className="font-bold mb-3 flex items-center gap-2"><Activity className="w-4 h-4 text-cyan-400" />Top Bandwidth Users (This Month)</h2>
+              {!!bandwidth.length ? <div className="space-y-2">{bandwidth.slice(0,8).map((b: any, i: number) => {
+                const max = Math.max(1, ...bandwidth.map((x: any) => Number(x.total_bytes || 0)));
+                return <div key={b.id || i} className="flex items-center gap-3 text-xs"><span className="w-4 text-muted-foreground">{i + 1}</span><span className="w-32 truncate font-medium">{b.full_name || b.username || '-'}</span><div className="flex-1 h-2 rounded-full bg-muted/40 overflow-hidden"><div className="h-full bg-cyan-500" style={{ width: `${Math.round((Number(b.total_bytes || 0) / max) * 100)}%` }} /></div><span className="w-20 text-right font-semibold">{gb(b.total_bytes)}</span></div>;
+              })}</div> : <div className="text-xs text-muted-foreground py-4 text-center">No traffic data yet.</div>}
+            </div>
+            <div className="card p-4"><h2 className="font-bold mb-3 flex items-center gap-2"><ScrollText className="w-4 h-4 text-primary" />History</h2>
+              <div className="space-y-3 text-xs">{[
+                ['Registrations', [['Today', history?.today?.registered], ['Yesterday', history?.yesterday?.registered], ['This month', history?.month?.registered], ['Last month', history?.last_month?.registered]]],
+                ['Expirations', [['Today', history?.today?.expired], ['Tomorrow', history?.next_7?.expired], ['This month', history?.month?.expired]]],
+                ['Renewals', [['Today', history?.today?.renewed], ['Yesterday', history?.yesterday?.renewed], ['This month', history?.month?.renewed]]],
+                ['Invoice payments', [['Today', history?.today?.paid], ['Yesterday', history?.yesterday?.paid], ['This month', history?.month?.paid]]],
+              ].map(([title, rows]: any) => <div key={title}><div className="font-semibold mb-1">{title}</div>{rows.map(([label, val]: any) => <div key={label} className="flex justify-between border-b border-border/40 py-0.5"><span className="text-muted-foreground">{label}</span><span className="font-semibold">{val ?? 0}</span></div>)}</div>)}</div>
+            </div>
+          </div>}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {widgets.profile !== false && <div className="card p-4 space-y-3"><h2 className="font-bold flex items-center gap-2"><Building2 className="w-4 h-4 text-primary" />Reseller Profile</h2><div className="text-sm space-y-2">{[['Code', reseller?.code], ['Company', reseller?.company_name], ['Email', reseller?.email], ['Phone', reseller?.phone], ['Tier', reseller?.tier], ['Buying Margin', `${Number(reseller?.buying_margin_percent || 0)}%`], ['Commission', `${Number(reseller?.commission_percent || 0)}%`], ['Subdomain', reseller?.subdomain ? `${reseller.subdomain}.` : '-'], ['Custom Domain', reseller?.custom_domain || '-']].map(([k,v]: any) => (<div key={k} className="flex justify-between gap-3 border-b border-border/40 pb-1.5"><span className="text-muted-foreground">{k}</span><span className="font-medium text-right break-all">{String(v ?? '-')}</span></div>))}</div></div>}
             {widgets.overview !== false && <div className="card p-4 lg:col-span-2"><h2 className="font-bold mb-3">Status Overview</h2><div className="space-y-2">{[['Active', stats.active||0,'bg-emerald-500'],['Online', stats.online||0,'bg-cyan-500'],['Expired', stats.expired||0,'bg-amber-500'],['Expiring (3d)', stats.expiring_3d||0,'bg-orange-500'],['Suspended', stats.suspended||0,'bg-red-500'],['Pending', stats.pending||0,'bg-slate-500']].map(([label,val,color]: any) => { const total = Math.max(Number(stats.total||0), 1); const pct = Math.min(100, Math.round((Number(val)/total)*100)); return <div key={label}><div className="flex justify-between text-xs mb-1"><span className="text-muted-foreground">{label}</span><span className="font-semibold">{val} <span className="text-muted-foreground">({pct}%)</span></span></div><div className="h-2 rounded-full bg-muted/40 overflow-hidden"><div className={`h-full ${color}`} style={{width:`${pct}%`}} /></div></div>; })}</div><div className="mt-4 p-3 rounded-xl border border-border bg-muted/10 text-xs text-muted-foreground">Partner-scoped portal: dashboard charts, global search (name/user/phone/IP/MAC/NID), bulk ops, disconnect/CoA, renewals, wallet/sharing, payments breakdown/filters, ONU, logs, messaging templates & delivery reports.</div></div>}
@@ -274,9 +340,31 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
             <div className="flex flex-wrap gap-2">
               <div className="relative"><Search className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" /><input className="pl-8 pr-3 py-2 rounded-xl border border-border bg-background text-sm w-56" placeholder="Search name/user/phone/IP/MAC..." value={userQ} onChange={e=>setUserQ(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') loadUsers(); }} /></div>
               <select className="px-3 py-2 rounded-xl border border-border bg-background text-sm" value={userStatus} onChange={e=>setUserStatus(e.target.value)}><option value="">All Status</option>{['ACTIVE','EXPIRED','SUSPENDED','PENDING','TERMINATED','DISABLED'].map(s=> <option key={s} value={s}>{s}</option>)}</select>
+              <button onClick={() => setShowUserFilters(v => !v)} className="btn btn-outline">More Filters</button>
               <button onClick={loadUsers} className="btn btn-outline">Apply</button>
-              {canManageResellerUsers && <button onClick={()=>setAddOpen(true)} className="btn btn-primary inline-flex items-center gap-1"><UserPlus className="w-4 h-4" />Add User</button>}
+              {canAddSubscriber && <button onClick={()=>setAddOpen(true)} className="btn btn-primary inline-flex items-center gap-1"><UserPlus className="w-4 h-4" />Add Subscriber</button>}
             </div>
+          </div>
+          {showUserFilters && <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 p-3 rounded-xl border border-border bg-muted/20">
+            {[
+              ['online','Connection','ONLINE/OFFLINE'], ['profile','Package','package name'],
+              ['from','Created from (YYYY-MM-DD)',''], ['to','Created to (YYYY-MM-DD)',''],
+              ['expiry_from','Expiry from (YYYY-MM-DD)',''], ['expiry_to','Expiry to (YYYY-MM-DD)',''],
+              ['zone','Zone',''], ['area','Area',''], ['notes','Notes',''],
+            ].map(([key,label,ph]) => <label key={key} className="block"><span className="form-label">{label}</span><input className="form-control" placeholder={ph} value={userFilters[key] || ''} onChange={e => setUserFilters(f => ({ ...f, [key]: e.target.value }))} /></label>)}
+            {[
+              ['custom_price','Custom Price'], ['custom_bandwidth','Custom Bandwidth'], ['extended','Extended Expiry'], ['static_ip','Static IP'], ['has_onu','Has ONU'],
+            ].map(([key,label]) => <label key={key} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={userFilters[key] === '1'} onChange={e => setUserFilters(f => ({ ...f, [key]: e.target.checked ? '1' : '' }))} />{label}</label>)}
+            <label className="block"><span className="form-label">Rows per page</span><select className="form-control" value={userLimit} onChange={e => setUserLimit(e.target.value)}>{['100','500','1000'].map(n => <option key={n}>{n}</option>)}</select></label>
+            <div className="flex items-end"><button onClick={() => { setUserFilters({}); setUserLimit('500'); loadUsers(); }} className="btn btn-outline btn-sm">Reset Filters</button></div>
+          </div>}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-muted-foreground">Columns:</span>
+            <button onClick={() => setHiddenCols(h => ({ ...h, phone: !h.phone }))} className={`filter-chip ${!hiddenCols.phone ? 'active' : ''}`}>Contact</button>
+            <button onClick={() => setHiddenCols(h => ({ ...h, address: !h.address }))} className={`filter-chip ${!hiddenCols.address ? 'active' : ''}`}>Address</button>
+            <button onClick={() => setHiddenCols(h => ({ ...h, package_name: !h.package_name }))} className={`filter-chip ${!hiddenCols.package_name ? 'active' : ''}`}>Package</button>
+            <button onClick={() => setHiddenCols(h => ({ ...h, expiry_date: !h.expiry_date }))} className={`filter-chip ${!hiddenCols.expiry_date ? 'active' : ''}`}>Expiry</button>
+            <span className="text-muted-foreground ml-auto">Rows: {users.length}</span>
           </div>
           {selectedIds.length > 0 && (<div className="flex flex-wrap items-center gap-2 p-2 rounded-xl border border-primary/30 bg-primary/5 text-xs">
               <span className="font-semibold">{selectedIds.length} selected</span>
@@ -288,21 +376,23 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
             </div>)}
           <div className="overflow-auto"><table className="w-full text-xs min-w-[1200px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border">
               <th className="text-left py-2 px-2"><button onClick={()=>{ if(allSelected) setSelected({}); else { const m: any={}; users.forEach(u=>m[u.id]=true); setSelected(m);} }} className="p-0.5">{allSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}</button></th>
-              <th className="text-left py-2 px-2">Customer</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Package</th><th className="text-left py-2 px-2">Bill/Due</th><th className="text-left py-2 px-2">Expiry</th><th className="text-left py-2 px-2">Contact</th><th className="text-left py-2 px-2">Address/Zone</th><th className="text-left py-2 px-2">Actions</th>
+              <th className="text-left py-2 px-2">Customer</th><th className="text-left py-2 px-2">Status</th>{!hiddenCols.package_name && <th className="text-left py-2 px-2">Package</th>}<th className="text-left py-2 px-2">Bill/Due</th>{!hiddenCols.expiry_date && <th className="text-left py-2 px-2">Expiry</th>}{!hiddenCols.phone && <th className="text-left py-2 px-2">Contact</th>}{!hiddenCols.address && <th className="text-left py-2 px-2">Address/Zone</th>}<th className="text-left py-2 px-2">Actions</th>
             </tr></thead><tbody>
               {users.map(s => { const left = daysLeft(s.expiry_date); const expSoon = left != null && left >= 0 && left <= 3; return (
                 <tr key={s.id} className="border-b border-border/50 hover:bg-muted/20">
                   <td className="py-2 px-2"><button onClick={()=>setSelected(p=>({...p,[s.id]:!p[s.id]}))} className="p-0.5">{selected[s.id] ? <CheckSquare className="w-4 h-4 text-primary" /> : <Square className="w-4 h-4" />}</button></td>
                   <td className="py-2 px-2"><div className="font-semibold">{s.full_name || '-'}</div><div className="text-muted-foreground font-mono">{s.client_code || s.username || '-'}</div><div className="text-muted-foreground">{s.username}</div></td>
                   <td className="py-2 px-2">{statusBadge(s.status)}</td>
-                  <td className="py-2 px-2"><div>{s.package_name || '-'}</div><div className="text-muted-foreground">{s.connection_type || s.provisioning_mode || '-'}</div></td>
+                  {!hiddenCols.package_name && <td className="py-2 px-2"><div>{s.package_name || '-'}</div><div className="text-muted-foreground">{s.connection_type || s.provisioning_mode || '-'}</div></td>}
                   <td className="py-2 px-2"><div>{money(s.monthly_bill)}</div><div className="text-amber-400 font-semibold">Due {money(s.current_due)}</div></td>
-                  <td className="py-2 px-2"><div className={expSoon ? 'text-amber-400 font-semibold' : ''}>{d(s.expiry_date)}</div><div className="text-muted-foreground">{left==null?'': left<0?`${Math.abs(left)}d overdue`: `${left}d left`}</div></td>
-                  <td className="py-2 px-2"><div className="flex items-center gap-1"><Phone className="w-3 h-3" />{s.phone || '-'}</div><div className="flex items-center gap-1 text-muted-foreground truncate max-w-[180px]"><Mail className="w-3 h-3" />{s.email || '-'}</div></td>
-                  <td className="py-2 px-2"><div className="truncate max-w-[200px]">{s.address || '-'}</div><div className="text-muted-foreground">{[s.zone,s.area].filter(Boolean).join(' / ') || '-'}</div></td>
+                  {!hiddenCols.expiry_date && <td className="py-2 px-2"><div className={expSoon ? 'text-amber-400 font-semibold' : ''}>{d(s.expiry_date)}</div><div className="text-muted-foreground">{left==null?'': left<0?`${Math.abs(left)}d overdue`: `${left}d left`}</div></td>}
+                  {!hiddenCols.phone && <td className="py-2 px-2"><div className="flex items-center gap-1"><Phone className="w-3 h-3" />{s.phone || '-'}</div><div className="flex items-center gap-1 text-muted-foreground truncate max-w-[180px]"><Mail className="w-3 h-3" />{s.email || '-'}</div></td>}
+                  {!hiddenCols.address && <td className="py-2 px-2"><div className="truncate max-w-[200px]">{s.address || '-'}</div><div className="text-muted-foreground">{[s.zone,s.area].filter(Boolean).join(' / ') || '-'}</div></td>}
                   <td className="py-2 px-2"><div className="flex flex-wrap gap-1.5">
                     <button disabled={actionBusy===`renew:${s.id}`} onClick={()=>renew(s.id)} className="btn btn-primary btn-sm"><CreditCard className="w-3 h-3" />Renew</button>
+                    <button onClick={()=>setViewUser(s)} className="btn btn-outline btn-sm"><Eye className="w-3 h-3" />View</button>
                     <button onClick={()=>openEdit(s)} className="btn btn-outline btn-sm"><Edit3 className="w-3 h-3" />Edit</button>
+                    {canAddSubscriber && <button disabled={!!actionBusy} onClick={()=>setDeleteTarget(s)} className="btn btn-outline btn-sm text-danger"><Trash2 className="w-3 h-3" />Delete</button>}
                     <button disabled={actionBusy===`ext:${s.id}`} onClick={()=>extendExpiry(s,30)} className="btn btn-outline btn-sm disabled:opacity-50" title="Extend +30 days"><CalendarPlus className="w-3 h-3" />+30d</button>
                     {String(s.status).toUpperCase()!=='ACTIVE' ? <button onClick={()=>batchStatus('activate',[s.id])} className="px-2 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-400 text-[11px] font-semibold">Activate</button> : <button onClick={()=>batchStatus('suspend',[s.id])} className="px-2 py-1.5 rounded-lg border border-red-500/30 text-red-400 text-[11px] font-semibold">Suspend</button>}
                     {canMessage && <button onClick={()=>openMessage(s)} className="btn btn-outline btn-sm"><MessageSquare className="w-3 h-3" />Msg</button>}
@@ -310,7 +400,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
                   </div></td>
                 </tr>
               ); })}
-              {!users.length && <tr><td colSpan={9} className="py-8 text-center text-muted-foreground">No subscribers found for this reseller.</td></tr>}
+              {!users.length && <tr><td colSpan={9 - Object.values(hiddenCols).filter(Boolean).length} className="py-8 text-center text-muted-foreground">No subscribers found for this reseller.</td></tr>}
             </tbody></table></div>
         </div>
       )}
@@ -322,10 +412,10 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
           </div>
           <div className="overflow-auto"><table className="w-full text-xs min-w-[1040px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border">
               <th className="text-left py-2 px-2"><button onClick={()=>{ if(allSessionsSelected) setSessionSelected({}); else { const m:any={}; sessions.forEach((s,i)=>m[sessionKey(s,i)]=true); setSessionSelected(m);} }} className="p-0.5">{allSessionsSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}</button></th>
-              <th className="text-left py-2 px-2">User</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">IP / MAC</th><th className="text-left py-2 px-2">Package</th><th className="text-left py-2 px-2">Rx/Tx (bps)</th><th className="text-left py-2 px-2">Uptime</th><th className="text-left py-2 px-2">Updated</th><th className="text-left py-2 px-2">Action</th>
+              <th className="text-left py-2 px-2">User</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">IP / MAC</th><th className="text-left py-2 px-2">Package</th><th className="text-left py-2 px-2">NAS / Device / Port</th><th className="text-left py-2 px-2">Rx/Tx (bps)</th><th className="text-left py-2 px-2">Uptime</th><th className="text-left py-2 px-2">Updated</th><th className="text-left py-2 px-2">Action</th>
             </tr></thead><tbody>
-              {sessions.map((s, i) => { const k=sessionKey(s,i); return (<tr key={k} className="border-b border-border/50"><td className="py-2 px-2"><button onClick={()=>setSessionSelected(p=>({...p,[k]:!p[k]}))} className="p-0.5">{sessionSelected[k]?<CheckSquare className="w-4 h-4 text-primary"/>:<Square className="w-4 h-4"/>}</button></td><td className="py-2 px-2"><div className="font-semibold">{s.full_name || '-'}</div><div className="text-muted-foreground font-mono">{s.client_code || s.username}</div></td><td className="py-2 px-2">{statusBadge(s.status||'UNKNOWN')}</td><td className="py-2 px-2"><div>{s.ip_address || '-'}</div><div className="text-muted-foreground">{s.mac_address || '-'}</div></td><td className="py-2 px-2">{s.package_name || '-'}</td><td className="py-2 px-2"><div>↓ {Number(s.rx_bps||0).toLocaleString()}</div><div>↑ {Number(s.tx_bps||0).toLocaleString()}</div></td><td className="py-2 px-2">{s.uptime_sec ? `${Math.floor(Number(s.uptime_sec)/3600)}h ${Math.floor((Number(s.uptime_sec)%3600)/60)}m` : '-'}</td><td className="py-2 px-2 text-muted-foreground">{dt(s.updated_at)}</td><td className="py-2 px-2"><div className="flex flex-wrap gap-1.5"><button disabled={actionBusy===`dc:${s.username || s.subscriber_id}`} onClick={()=>disconnect(s)} className="px-2.5 py-1.5 rounded-lg border border-red-500/30 text-red-400 text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-50"><PlugZap className="w-3 h-3" />{actionBusy===`dc:${s.username || s.subscriber_id}`?'...':'Disconnect'}</button><button disabled={actionBusy===`ping:${s.subscriber_id}`} onClick={()=>pingTarget({ ...s, id: s.subscriber_id })} className="btn btn-outline btn-sm"><Activity className="w-3 h-3" />Ping</button></div></td></tr>); })}
-              {!sessions.length && <tr><td colSpan={9} className="py-8 text-center text-muted-foreground">No session data available.</td></tr>}
+              {sessions.map((s, i) => { const k=sessionKey(s,i); return (<tr key={k} className="border-b border-border/50"><td className="py-2 px-2"><button onClick={()=>setSessionSelected(p=>({...p,[k]:!p[k]}))} className="p-0.5">{sessionSelected[k]?<CheckSquare className="w-4 h-4 text-primary"/>:<Square className="w-4 h-4"/>}</button></td><td className="py-2 px-2"><div className="font-semibold">{s.full_name || '-'}</div><div className="text-muted-foreground font-mono">{s.client_code || s.username}</div></td><td className="py-2 px-2">{statusBadge(s.status||'UNKNOWN')}</td><td className="py-2 px-2"><div>{s.ip_address || '-'}</div><div className="text-muted-foreground">{s.mac_address || '-'}</div></td><td className="py-2 px-2">{s.package_name || '-'}</td><td className="py-2 px-2"><div>{s.device || s.nas_ip || '-'}</div><div className="text-muted-foreground">{s.nas_port || ''} {s.nas_ip ? String(s.nas_ip) : ''}</div></td><td className="py-2 px-2"><div>↓ {Number(s.rx_bps||0).toLocaleString()}</div><div>↑ {Number(s.tx_bps||0).toLocaleString()}</div></td><td className="py-2 px-2">{s.uptime_sec ? `${Math.floor(Number(s.uptime_sec)/3600)}h ${Math.floor((Number(s.uptime_sec)%3600)/60)}m` : '-'}</td><td className="py-2 px-2 text-muted-foreground">{dt(s.updated_at)}</td><td className="py-2 px-2"><div className="flex flex-wrap gap-1.5"><button disabled={actionBusy===`dc:${s.username || s.subscriber_id}`} onClick={()=>disconnect(s)} className="px-2.5 py-1.5 rounded-lg border border-red-500/30 text-red-400 text-[11px] font-semibold inline-flex items-center gap-1 disabled:opacity-50"><PlugZap className="w-3 h-3" />{actionBusy===`dc:${s.username || s.subscriber_id}`?'...':'Disconnect'}</button><button disabled={actionBusy===`ping:${s.subscriber_id}`} onClick={()=>pingTarget({ ...s, id: s.subscriber_id })} className="btn btn-outline btn-sm"><Activity className="w-3 h-3" />Ping</button></div></td></tr>); })}
+              {!sessions.length && <tr><td colSpan={10} className="py-8 text-center text-muted-foreground">No session data available.</td></tr>}
             </tbody></table></div>
         </div>
       )}
@@ -338,7 +428,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
         </div>
       )}
 
-      {tab === 'sharing' && (<div className="card p-4 space-y-3"><h2 className="font-bold flex items-center gap-2"><ArrowLeftRight className="w-4 h-4 text-primary" />Partner Sharing Report</h2><p className="text-xs text-muted-foreground">Derived from reseller wallet renewals (retail vs wholesale/margin). Partner share = charged to reseller wallet; ISP share = retail − partner share.</p><div className="overflow-auto"><table className="w-full text-xs min-w-[1000px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Date</th><th className="text-left py-2 px-2">User</th><th className="text-left py-2 px-2">Package</th><th className="text-left py-2 px-2">Plan Price</th><th className="text-left py-2 px-2">Partner Share</th><th className="text-left py-2 px-2">ISP Share</th><th className="text-left py-2 px-2">Margin %</th><th className="text-left py-2 px-2">Payment Ref</th><th className="text-left py-2 px-2">Renewed By</th></tr></thead><tbody>{sharing.map((r: any) => (<tr key={r.id} className="border-b border-border/50"><td className="py-2 px-2 text-muted-foreground whitespace-nowrap">{dt(r.date)}</td><td className="py-2 px-2"><div className="font-medium">{r.full_name || '-'}</div><div className="text-muted-foreground font-mono">{r.client_code || r.username}</div></td><td className="py-2 px-2">{r.package_name || '-'}</td><td className="py-2 px-2">{money(r.retail)}</td><td className="py-2 px-2 text-emerald-400 font-semibold">{money(r.partner_share)}</td><td className="py-2 px-2 text-cyan-400 font-semibold">{money(r.isp_share)}</td><td className="py-2 px-2">{Number(r.margin_percent || 0)}%</td><td className="py-2 px-2 font-mono text-muted-foreground">{r.payment_ref || '-'}</td><td className="py-2 px-2 text-muted-foreground">{r.created_by || '-'}</td></tr>))}{!sharing.length && <tr><td colSpan={9} className="py-8 text-center text-muted-foreground">No sharing/renewal records found.</td></tr>}</tbody></table></div></div>)}
+      {tab === 'sharing' && (<div className="card p-4 space-y-3"><h2 className="font-bold flex items-center gap-2"><ArrowLeftRight className="w-4 h-4 text-primary" />Partner Sharing Report</h2><p className="text-xs text-muted-foreground">Derived from reseller wallet renewals (retail vs wholesale/margin). Partner share = charged to reseller wallet; ISP share = retail − partner share.</p><div className="overflow-auto"><table className="w-full text-xs min-w-[1000px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Date</th><th className="text-left py-2 px-2">User</th><th className="text-left py-2 px-2">Package</th><th className="text-left py-2 px-2">Invoice</th><th className="text-left py-2 px-2">Plan Price</th><th className="text-left py-2 px-2">Offer / VAT</th><th className="text-left py-2 px-2">Total Invoice</th><th className="text-left py-2 px-2">Partner Share</th><th className="text-left py-2 px-2">ISP Share</th><th className="text-left py-2 px-2">Margin %</th><th className="text-left py-2 px-2">Payment Ref</th><th className="text-left py-2 px-2">Renewed By</th></tr></thead><tbody>{sharing.map((r: any) => (<tr key={r.id} className="border-b border-border/50"><td className="py-2 px-2 text-muted-foreground whitespace-nowrap">{dt(r.date)}</td><td className="py-2 px-2"><div className="font-medium">{r.full_name || '-'}</div><div className="text-muted-foreground font-mono">{r.client_code || r.username}</div></td><td className="py-2 px-2">{r.package_name || '-'}</td><td className="py-2 px-2 font-mono">{r.invoice_number || '-'}</td><td className="py-2 px-2">{money(r.retail)}</td><td className="py-2 px-2">{money(r.invoice_discount)} / {money(r.invoice_vat)}</td><td className="py-2 px-2">{money(r.invoice_total || r.retail)}</td><td className="py-2 px-2 text-emerald-400 font-semibold">{money(r.partner_share)}</td><td className="py-2 px-2 text-cyan-400 font-semibold">{money(r.isp_share)}</td><td className="py-2 px-2">{Number(r.margin_percent || 0)}%</td><td className="py-2 px-2 font-mono text-muted-foreground">{r.payment_ref || '-'}</td><td className="py-2 px-2 text-muted-foreground">{r.created_by || '-'}</td></tr>))}{!sharing.length && <tr><td colSpan={12} className="py-8 text-center text-muted-foreground">No sharing/renewal records found.</td></tr>}</tbody></table></div></div>)}
 
       {tab === 'payments' && (
         <div className="space-y-4">
@@ -364,7 +454,17 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
         </div>
       )}
 
-      {tab === 'onus' && (<div className="card p-4 space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold flex items-center gap-2"><RadioTower className="w-4 h-4 text-primary" />ONU List <span className="text-xs text-muted-foreground font-normal">({onus.length})</span></h2><div className="flex items-center gap-2 flex-wrap"><div className="text-xs text-muted-foreground">Assign/link an ONU to one of this reseller’s subscribers (scoped).</div>{canManageResellerUsers && <button onClick={async ()=>{ const next = !showUnlinkedOnus; setShowUnlinkedOnus(next); await loadOnus(next).catch(()=>{}); }} className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold ${showUnlinkedOnus ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/10' : 'border-border'}`}>{showUnlinkedOnus ? 'Showing Unlinked/Discovered' : 'Show Unlinked/Discovered'}</button>}</div></div><div className="overflow-auto"><table className="w-full text-xs min-w-[1100px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Subscriber</th><th className="text-left py-2 px-2">ONU/Serial</th><th className="text-left py-2 px-2">OLT/Port</th><th className="text-left py-2 px-2">RX Power</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Last Sync</th><th className="text-left py-2 px-2">Assign / Link</th></tr></thead><tbody>{onus.map((o: any, i: number) => (<tr key={o.id || i} className="border-b border-border/50"><td className="py-2 px-2"><div className="font-medium">{o.subscriber_name || (o._unlinked ? <span className="text-amber-400">Unlinked / Discovered</span> : '-')}</div><div className="text-muted-foreground font-mono">{o.client_code || o.username || ''}</div></td><td className="py-2 px-2"><div>{o.onu_name || o.name || '-'}</div><div className="text-muted-foreground font-mono">{o.serial_number || o.onu_serial || o.mac_address || '-'}</div></td><td className="py-2 px-2"><div>{o.olt_name || o.olt_id || '-'}</div><div className="text-muted-foreground">{[o.slot, o.port, o.onu_id].filter(v=>v!=null).join('/') || '-'}</div></td><td className="py-2 px-2">{o.rx_power ?? o.rx_dbm ?? o.onu_rx_power ?? '-'}</td><td className="py-2 px-2">{statusBadge(o.status || o.onu_status || '-')}</td><td className="py-2 px-2 text-muted-foreground">{dt(o.last_sync || o.last_sync_time || o.updated_at)}</td><td className="py-2 px-2"><div className="flex items-center gap-1.5"><select className="p-1.5 rounded-lg border border-border bg-background text-xs max-w-[220px]" value={onuAssign[o.id] || o.subscriber_id || ''} onChange={e=>setOnuAssign(p=>({...p,[o.id]:e.target.value}))}><option value="">Select subscriber...</option>{users.map(u=> <option key={u.id} value={u.id}>{u.full_name || u.username} ({u.client_code || u.username})</option>)}</select><button disabled={actionBusy===`onu:${o.id}`} onClick={()=>assignOnu(o.id)} className="btn btn-primary btn-sm">{actionBusy===`onu:${o.id}`?'...':'Assign'}</button></div>{o._unlinked && !canManageResellerUsers && <div className="text-[10px] text-muted-foreground mt-1">Admin/billing required</div>}</td></tr>))}{!onus.length && <tr><td colSpan={7} className="py-8 text-center text-muted-foreground">No ONU records found. {canManageResellerUsers ? 'Try “Show Unlinked/Discovered” to assign discovered ONUs to reseller subscribers.' : 'No linked ONU records found for this reseller’s subscribers.'}</td></tr>}</tbody></table></div></div>)}
+      {tab === 'onus' && (<div className="card p-4 space-y-3"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold flex items-center gap-2"><RadioTower className="w-4 h-4 text-primary" />ONU List <span className="text-xs text-muted-foreground font-normal">({onus.length})</span></h2><div className="flex items-center gap-2 flex-wrap"><div className="text-xs text-muted-foreground">Assign/link an ONU to one of this reseller’s subscribers (scoped).</div>{canManageResellerUsers && <button onClick={async ()=>{ const next = !showUnlinkedOnus; setShowUnlinkedOnus(next); await loadOnus(next).catch(()=>{}); }} className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold ${showUnlinkedOnus ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/10' : 'border-border'}`}>{showUnlinkedOnus ? 'Showing Unlinked/Discovered' : 'Show Unlinked/Discovered'}</button>}</div></div>
+        <div className="flex items-center gap-2 flex-wrap"><button onClick={()=>setShowOnuFilters(v=>!v)} className="btn btn-outline btn-sm">Advanced ONU Filters</button><button onClick={()=>loadOnus()} className="btn btn-outline btn-sm">Refresh</button></div>
+        {showOnuFilters && <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 p-3 rounded-xl border border-border bg-muted/20">
+          {[
+            ['serial','Serial Number',''], ['mac','MAC Address',''], ['match','User Match',''], ['port','PON Port',''],
+            ['olt_id','OLT ID',''], ['status','Status (UP/DOWN)',''], ['rx_min','RX min (dBm)',''], ['rx_max','RX max (dBm)',''],
+            ['dist_min','Distance min (m)',''], ['dist_max','Distance max (m)',''],
+          ].map(([key,label,ph]) => <label key={key} className="block"><span className="form-label">{label}</span><input className="form-control" placeholder={ph} value={onuFilters[key] || ''} onChange={e=>setOnuFilters(f=>({...f,[key]:e.target.value}))} /></label>)}
+          <div className="flex items-end gap-2"><button onClick={()=>loadOnus()} className="btn btn-primary btn-sm">Apply</button><button onClick={()=>{ setOnuFilters({}); loadOnus(); }} className="btn btn-outline btn-sm">Reset</button></div>
+        </div>}
+        <div className="overflow-auto"><table className="w-full text-xs min-w-[1100px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Subscriber</th><th className="text-left py-2 px-2">ONU/Serial</th><th className="text-left py-2 px-2">OLT/Port</th><th className="text-left py-2 px-2">RX Power</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Last Sync</th><th className="text-left py-2 px-2">Assign / Link</th></tr></thead><tbody>{onus.map((o: any, i: number) => (<tr key={o.id || i} className="border-b border-border/50"><td className="py-2 px-2"><div className="font-medium">{o.subscriber_name || (o._unlinked ? <span className="text-amber-400">Unlinked / Discovered</span> : '-')}</div><div className="text-muted-foreground font-mono">{o.client_code || o.username || ''}</div></td><td className="py-2 px-2"><div>{o.onu_name || o.name || '-'}</div><div className="text-muted-foreground font-mono">{o.serial_number || o.onu_serial || o.mac_address || '-'}</div></td><td className="py-2 px-2"><div>{o.olt_name || o.olt_id || '-'}</div><div className="text-muted-foreground">{[o.slot, o.port, o.onu_id].filter(v=>v!=null).join('/') || '-'}</div></td><td className="py-2 px-2">{o.rx_power ?? o.rx_dbm ?? o.onu_rx_power ?? '-'}</td><td className="py-2 px-2">{statusBadge(o.status || o.onu_status || '-')}</td><td className="py-2 px-2 text-muted-foreground">{dt(o.last_sync || o.last_sync_time || o.updated_at)}</td><td className="py-2 px-2"><div className="flex items-center gap-1.5"><select className="p-1.5 rounded-lg border border-border bg-background text-xs max-w-[220px]" value={onuAssign[o.id] || o.subscriber_id || ''} onChange={e=>setOnuAssign(p=>({...p,[o.id]:e.target.value}))}><option value="">Select subscriber...</option>{users.map(u=> <option key={u.id} value={u.id}>{u.full_name || u.username} ({u.client_code || u.username})</option>)}</select><button disabled={actionBusy===`onu:${o.id}`} onClick={()=>assignOnu(o.id)} className="btn btn-primary btn-sm">{actionBusy===`onu:${o.id}`?'...':'Assign'}</button></div>{o._unlinked && !canManageResellerUsers && <div className="text-[10px] text-muted-foreground mt-1">Admin/billing required</div>}</td></tr>))}{!onus.length && <tr><td colSpan={7} className="py-8 text-center text-muted-foreground">No ONU records found. {canManageResellerUsers ? 'Try “Show Unlinked/Discovered” to assign discovered ONUs to reseller subscribers.' : 'No linked ONU records found for this reseller’s subscribers.'}</td></tr>}</tbody></table></div></div>)}
 
       {tab === 'logs' && (<div className="space-y-4">
           <div className="card p-4 flex flex-col md:flex-row md:items-end gap-3">
@@ -380,6 +480,8 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
             {(logKind === 'all' || logKind === 'auth') && <div className={`card p-4 ${logKind==='all'?'xl:col-span-2':''}`}><h2 className="font-bold mb-3 flex items-center gap-2"><ScrollText className="w-4 h-4 text-primary" />User Auth / Session Log <span className="text-xs text-muted-foreground font-normal">({(logs.auth||[]).length})</span></h2><div className="overflow-auto max-h-[360px]"><table className="w-full text-xs min-w-[900px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Time</th><th className="text-left py-2 px-2">Username</th><th className="text-left py-2 px-2">IP / MAC</th><th className="text-left py-2 px-2">Start</th><th className="text-left py-2 px-2">Stop</th><th className="text-left py-2 px-2">Status/Cause</th></tr></thead><tbody>{(logs.auth || []).map((l: any, i: number) => (<tr key={l.id || i} className="border-b border-border/50"><td className="py-2 px-2 whitespace-nowrap text-muted-foreground">{dt(l.created_at || l.timestamp || l.acctstarttime)}</td><td className="py-2 px-2 font-mono">{l.username || '-'}</td><td className="py-2 px-2">{l.ip_address || l.framedipaddress || '-'}<div className="text-muted-foreground">{l.mac_address || l.callingstationid || '-'}</div></td><td className="py-2 px-2 text-muted-foreground">{dt(l.acctstarttime || l.start_time)}</td><td className="py-2 px-2 text-muted-foreground">{dt(l.acctstoptime || l.stop_time)}</td><td className="py-2 px-2">{l.status || l.acctterminatecause || l.result || '-'}</td></tr>))}{!(logs.auth||[]).length && <tr><td colSpan={6} className="py-6 text-center text-muted-foreground">No auth/session logs available.</td></tr>}</tbody></table></div></div>}
           </div>
         </div>)}
+
+      {parityKeys.has(tab) && <ResellerParityPanel tab={tab as ParityTab} resellerId={resellerId} />}
 
       {addOpen && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setAddOpen(false)}><div className="w-full max-w-2xl card p-4 space-y-3" onClick={e=>e.stopPropagation()}>
             <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><UserPlus className="w-4 h-4 text-primary" />Add Subscriber (to {reseller?.name || 'reseller'})</h3><button onClick={()=>setAddOpen(false)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
@@ -464,6 +566,42 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
           <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Approval Note</div><textarea className="w-full p-2 rounded-xl border border-border bg-background min-h-[70px]" value={editPayForm.approval_note||''} onChange={e=>setEditPayForm((f:any)=>({...f,approval_note:e.target.value}))} /></label>
         </div>
         <div className="flex justify-end gap-2"><button onClick={()=>setEditPay(null)} className="px-3 py-2 rounded-xl border border-border text-sm">Cancel</button><button disabled={actionBusy==='editpay'} onClick={savePayment} className="btn btn-primary disabled:opacity-50">{actionBusy==='editpay'?'Saving...':'Save'}</button></div>
+      </div></div>)}
+
+      {viewUser && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setViewUser(null)}><div className="w-full max-w-2xl card p-4 space-y-3 max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><Eye className="w-4 h-4 text-primary" />Subscriber Details</h3><button onClick={()=>setViewUser(null)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
+        <div className="text-xs text-muted-foreground">{viewUser.client_code || viewUser.username} • {viewUser.id}</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 text-sm">
+          {[
+            ['Full Name',viewUser.full_name], ['Username',viewUser.username], ['Status',viewUser.status],
+            ['Connection',viewUser.connection_type || viewUser.provisioning_mode], ['Package',viewUser.package_name], ['Bandwidth',viewUser.bandwidth_mbps ? `${viewUser.bandwidth_mbps} Mbps` : '-'],
+            ['Monthly Bill',money(viewUser.monthly_bill)], ['Due',money(viewUser.current_due)], ['Price Override',viewUser.price_override ? money(viewUser.price_override) : '-'],
+            ['Expiry',viewUser.expiry_date ? String(viewUser.expiry_date).slice(0,10) : '-'], ['Next Bill',viewUser.next_bill_date ? String(viewUser.next_bill_date).slice(0,10) : '-'],
+            ['Phone',viewUser.phone], ['Email',viewUser.email], ['IP Address',viewUser.ip_address], ['MAC',viewUser.mac_address],
+            ['Zone',viewUser.zone], ['Area',viewUser.area], ['Address',viewUser.address], ['Branch',viewUser.branch_name],
+            ['Extended Expiry',viewUser.extended_expiry ? 'Yes' : 'No'], ['Notes',viewUser.notes],
+          ].map(([k,v]: any) => <div key={k} className="flex justify-between gap-3 border-b border-border/40 py-1.5"><span className="text-muted-foreground">{k}</span><span className="font-medium text-right break-all">{String(v ?? '-')}</span></div>)}
+        </div>
+        <div className="flex justify-end gap-2"><button onClick={()=>setViewUser(null)} className="px-3 py-2 rounded-xl border border-border text-sm">Close</button>{canAddSubscriber && <button onClick={()=>{ openEdit(viewUser); setViewUser(null); }} className="btn btn-primary"><Edit3 className="w-4 h-4" />Edit</button>}</div>
+      </div></div>)}
+
+      {deleteTarget && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setDeleteTarget(null)}><div className="w-full max-w-md card p-4 space-y-3" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2 text-danger"><Trash2 className="w-4 h-4" />Delete Subscriber</h3><button onClick={()=>setDeleteTarget(null)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
+        <p className="text-sm">Delete <b>{deleteTarget.full_name || deleteTarget.username}</b> ({deleteTarget.client_code || deleteTarget.username})? This cannot be undone.</p>
+        <p className="text-xs text-muted-foreground">Subscribers with invoices or payments cannot be deleted — set them to TERMINATED instead.</p>
+        <div className="flex justify-end gap-2"><button onClick={()=>setDeleteTarget(null)} className="px-3 py-2 rounded-xl border border-border text-sm">Cancel</button><button disabled={deleting} onClick={deleteSubscriber} className="btn btn-danger">{deleting ? 'Deleting...' : 'Delete'}</button></div>
+      </div></div>)}
+
+      {profileOpen && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setProfileOpen(false)}><div className="w-full max-w-xl card p-4 space-y-3 max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><Building2 className="w-4 h-4 text-primary" />My Profile</h3><button onClick={()=>setProfileOpen(false)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
+        <div className="text-xs text-muted-foreground">Update your partner contact details and white-label branding. Wallet balance, tier and margins are managed by the ISP admin.</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+          {[['Company', 'company_name'], ['Email', 'email'], ['Phone', 'phone'], ['Address', 'address'], ['Brand Name', 'brand_name'], ['Portal Title', 'portal_title']].map(([label, key]: any) => (
+            <label key={key} className="block"><div className="text-xs text-muted-foreground mb-1">{label}</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={profileForm[key] || ''} onChange={e=>setProfileForm(f=>({...f,[key]:e.target.value}))} /></label>
+          ))}
+          <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Notes</div><textarea className="w-full p-2 rounded-xl border border-border bg-background min-h-[70px]" value={profileForm.notes || ''} onChange={e=>setProfileForm(f=>({...f,notes:e.target.value}))} /></label>
+        </div>
+        <div className="flex justify-end gap-2"><button onClick={()=>setProfileOpen(false)} className="px-3 py-2 rounded-xl border border-border text-sm">Cancel</button><button disabled={profileSaving} onClick={saveProfile} className="btn btn-primary">{profileSaving ? 'Saving...' : 'Save Profile'}</button></div>
       </div></div>)}
     </div>
   );

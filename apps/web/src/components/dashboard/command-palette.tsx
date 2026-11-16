@@ -45,9 +45,17 @@ const baseResults: SearchResult[] = [
   { id: '7', category: 'Action', title: 'Open Command Palette', subtitle: 'Universal search shortcut: Ctrl/Cmd + K', href: '/', badge: 'Shortcut' },
 ];
 
+const resellerResults: SearchResult[] = [
+  { id: 'rs-portal', category: 'Navigation', title: 'My Portal', subtitle: 'Reseller dashboard, users and reports', href: '/resellers' },
+  { id: 'rs-wallet', category: 'Navigation', title: 'Wallet & Transactions', subtitle: 'Reseller wallet ledger and balance', href: '/resellers/wallet' },
+  { id: 'rs-renew', category: 'Navigation', title: 'Renew Subscriber', subtitle: 'Renew a subscriber from wallet credit', href: '/resellers/renew' },
+  { id: 'rs-tickets', category: 'Navigation', title: 'My Tickets', subtitle: 'Support tickets for this reseller', href: '/tickets' },
+];
+
 export function CommandPalette() {
   const router = useRouter();
-  const { isCommandPaletteOpen, setCommandPaletteOpen } = useAuth();
+  const { user, isCommandPaletteOpen, setCommandPaletteOpen } = useAuth();
+  const results = user?.role === 'RESELLER' ? resellerResults : baseResults;
   const [query, setQuery] = useState('');
 
   useEffect(() => {
@@ -55,14 +63,14 @@ export function CommandPalette() {
   }, [isCommandPaletteOpen]);
 
   const filteredResults = useMemo(() => {
-    if (!query.trim()) return baseResults;
+    if (!query.trim()) return results;
     const q = query.toLowerCase();
-    return baseResults.filter((item) =>
+    return results.filter((item) =>
       item.title.toLowerCase().includes(q) ||
       item.subtitle.toLowerCase().includes(q) ||
       item.category.toLowerCase().includes(q)
     );
-  }, [query]);
+  }, [query, results]);
 
   if (!isCommandPaletteOpen) return null;
 

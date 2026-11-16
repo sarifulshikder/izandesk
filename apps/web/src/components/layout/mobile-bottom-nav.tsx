@@ -3,6 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useAuth } from '@/lib/auth-context';
 import {
   LayoutDashboard,
   Users,
@@ -13,14 +14,23 @@ import {
 
 export function MobileBottomNav() {
   const pathname = usePathname();
+  const { user } = useAuth();
+  const isReseller = user?.role === 'RESELLER';
 
-  const navs = [
+  const adminNavs = [
     { name: 'Home', href: '/', icon: LayoutDashboard },
     { name: 'Clients', href: '/subscribers', icon: Users },
     { name: 'Billing', href: '/billing', icon: CreditCard },
     { name: 'Network', href: '/routers', icon: Network },
     { name: 'Tickets', href: '/tickets', icon: LifeBuoy },
   ];
+  const resellerNavs = [
+    { name: 'Portal', href: '/resellers', icon: LayoutDashboard },
+    { name: 'Wallet', href: '/resellers/wallet', icon: CreditCard },
+    { name: 'Renew', href: '/resellers/renew', icon: Users },
+    { name: 'Tickets', href: '/tickets', icon: LifeBuoy },
+  ];
+  const navs = isReseller ? resellerNavs : adminNavs;
 
   return (
     <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-card border-t border-border px-2 py-1.5 flex items-center justify-around shadow-lg">

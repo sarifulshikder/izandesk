@@ -45,8 +45,8 @@ export function Header() {
         <span>System Online</span>
       </div>
 
-      {/* Role switcher (RBAC preview) */}
-      <div className="relative">
+      {/* Role switcher (RBAC preview) — admins only; resellers must not see admin role options */}
+      {user?.role !== 'RESELLER' && <div className="relative">
         <button onClick={() => { setRoleOpen(!roleOpen); setNotifOpen(false); setUserOpen(false); }} className="topbar-chip" title="Switch user role (RBAC)">
           <ShieldCheck className="w-3.5 h-3.5 text-primary" />
           <span className="hidden sm:inline">{roles.find((r) => r.role === activeRole)?.label}</span>
@@ -67,7 +67,7 @@ export function Header() {
             ))}
           </div>
         )}
-      </div>
+      </div>}
 
       <button onClick={toggleTheme} className="topbar-icon-btn" title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
         {theme === 'dark' ? <Sun className="w-4 h-4 text-warning" /> : <Moon className="w-4 h-4" />}

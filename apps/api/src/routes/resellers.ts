@@ -327,17 +327,38 @@ router.get('/:id/users', asyncHandler(async (req, res) => {
   const id = req.params.id;
   const q = String(req.query.q || '').trim().toLowerCase();
   const status = String(req.query.status || '').trim().toUpperCase();
+  const online = String(req.query.online || '').trim().toUpperCase();
+  const profile = String(req.query.profile || '').trim();
+  const area = String(req.query.area || '').trim();
+  const zone = String(req.query.zone || '').trim();
+  const from = String(req.query.from || ''); const to = String(req.query.to || '');
+  const expiryFrom = String(req.query.expiry_from || ''); const expiryTo = String(req.query.expiry_to || '');
   const params: any[] = [id];
   let where = 'WHERE s.reseller_id=$1';
   if (status) { params.push(status); where += ` AND upper(s.status)=$${params.length}`; }
+  if (online === 'ONLINE' || online === 'OFFLINE') { params.push(online); where += ` AND COALESCE((SELECT upper(ss.status) FROM subscriber_sessions ss WHERE ss.subscriber_id=s.id ORDER BY ss.updated_at DESC LIMIT 1),'OFFLINE')=$${params.length}`; }
+  if (profile) { params.push(profile); where += ` AND s.package_name=$${params.length}`; }
+  if (zone) { params.push(zone); where += ` AND z.name=$${params.length}`; }
+  if (area) { params.push(area); where += ` AND a.name=$${params.length}`; }
+  if (from) { params.push(from); where += ` AND s.created_at::date >= $${params.length}::date`; }
+  if (to) { params.push(to); where += ` AND s.created_at::date <= $${params.length}::date`; }
+  if (expiryFrom) { params.push(expiryFrom); where += ` AND s.expiry_date::date >= $${params.length}::date`; }
+  if (expiryTo) { params.push(expiryTo); where += ` AND s.expiry_date::date <= $${params.length}::date`; }
+  if (String(req.query.custom_price || '') === '1') where += ' AND COALESCE(s.price_override,0) > 0';
+  if (String(req.query.custom_bandwidth || '') === '1') where += ' AND s.bandwidth_mbps IS NOT NULL';
+  if (String(req.query.extended || '') === '1') where += ' AND s.extended_expiry = true';
+  if (String(req.query.static_ip || '') === '1') where += " AND COALESCE(s.ip_address,'') <> ''";
+  if (String(req.query.has_onu || '') === '1') where += ' AND EXISTS (SELECT 1 FROM onus o WHERE o.subscriber_id=s.id)';
   if (q) {
     params.push(`%${q}%`);
-    where += ` AND (lower(COALESCE(s.full_name,'')) LIKE $${params.length} OR lower(COALESCE(s.username,'')) LIKE $${params.length} OR lower(COALESCE(s.client_code,'')) LIKE $${params.length} OR lower(COALESCE(s.phone,'')) LIKE $${params.length} OR lower(COALESCE(s.email,'')) LIKE $${params.length} OR lower(COALESCE(s.address,'')) LIKE $${params.length} OR lower(COALESCE(s.ip_address,'')) LIKE $${params.length} OR lower(COALESCE(s.mac_address,'')) LIKE $${params.length} OR lower(COALESCE(s.nid_number,'')) LIKE $${params.length})`;
+    where += ` AND (lower(COALESCE(s.full_name,'')) LIKE $${params.length} OR lower(COALESCE(s.username,'')) LIKE $${params.length} OR lower(COALESCE(s.client_code,'')) LIKE $${params.length} OR lower(COALESCE(s.phone,'')) LIKE $${params.length} OR lower(COALESCE(s.email,'')) LIKE $${params.length} OR lower(COALESCE(s.address,'')) LIKE $${params.length} OR lower(COALESCE(s.ip_address,'')) LIKE $${params.length} OR lower(COALESCE(s.mac_address,'')) LIKE $${params.length} OR lower(COALESCE(s.nid_number,'')) LIKE $${params.length} OR lower(COALESCE(s.notes,'')) LIKE $${params.length})`;
   }
+  const limit = Math.min(1000, Math.max(20, Number(req.query.limit || 500) || 500));
   // zone/area are FK IDs on subscribers — resolve their names via joins (s.zone/s.area do not exist).
-  const r = await pool.query(`SELECT s.id,s.client_code,s.full_name,s.username,s.phone,s.email,s.status,s.package_name,s.monthly_bill,s.current_due,s.expiry_date,s.created_at,s.provisioning_mode,s.ip_address,s.mac_address,s.address,z.name AS zone,a.name AS area,s.connection_type
+  const r = await pool.query(`SELECT s.*, z.name AS zone, a.name AS area,
+      (SELECT upper(ss.status) FROM subscriber_sessions ss WHERE ss.subscriber_id=s.id ORDER BY ss.updated_at DESC LIMIT 1) AS online_status
     FROM subscribers s LEFT JOIN zones z ON z.id=s.zone_id LEFT JOIN areas a ON a.id=s.area_id
-    ${where} ORDER BY s.created_at DESC LIMIT 500`, params);
+    ${where} ORDER BY s.created_at DESC LIMIT $${params.length + 1}`, [...params, limit]);
   res.json({ data: r.rows, total: r.rowCount });
 }));
 
@@ -349,9 +370,11 @@ router.get('/:id/sessions', asyncHandler(async (req, res) => {
   try {
     const r = await pool.query(`
       SELECT s.id as subscriber_id, s.client_code, s.full_name, s.username, s.package_name,
-             ss.status, ss.ip_address, ss.mac_address, ss.rx_bps, ss.tx_bps, ss.uptime_sec, ss.updated_at, ss.router_id
+             ss.status, ss.ip_address, ss.mac_address, ss.rx_bps, ss.tx_bps, ss.uptime_sec, ss.updated_at, ss.router_id,
+              ss.nas_port, nr.name AS device, nr.host AS nas_ip, nr.id AS nas_id
       FROM subscribers s
       JOIN subscriber_sessions ss ON ss.subscriber_id = s.id
+      LEFT JOIN network_routers nr ON nr.id=ss.router_id
       WHERE s.reseller_id=$1
       ORDER BY (upper(ss.status)='ONLINE') DESC, ss.updated_at DESC NULLS LAST
       LIMIT 500`, [id]);
@@ -399,10 +422,13 @@ router.get('/:id/sharing-report', asyncHandler(async (req, res) => {
   const r = await pool.query(`
     SELECT t.id, t.created_at as date, t.amount as partner_charge, t.balance_after, t.description, t.created_by,
            t.metadata, s.full_name, s.username, s.client_code, s.phone, s.package_name, s.monthly_bill,
-           p.payment_ref, p.amount as paid_amount, p.status as payment_status
+           p.payment_ref, p.amount as paid_amount, p.status as payment_status,
+           i.invoice_number, i.total_amount AS invoice_total, i.discount AS invoice_discount, i.tax AS invoice_vat,
+           i.amount AS invoice_plan_price, i.paid_at
     FROM reseller_wallet_transactions t
     LEFT JOIN subscribers s ON s.id=t.subscriber_id
     LEFT JOIN payments p ON p.id::text = t.reference_id AND t.reference_type='PAYMENT'
+    LEFT JOIN invoices i ON i.id=p.invoice_id
     WHERE t.reseller_id=$1 AND t.type='SUBSCRIBER_RENEWAL'
     ORDER BY t.created_at DESC LIMIT 500`, [id]);
   const rows = r.rows.map((row: any) => {
@@ -457,13 +483,34 @@ router.get('/:id/onus', asyncHandler(async (req, res) => {
   const id = req.params.id;
   const user = getUser(req);
   const includeUnlinked = String(req.query.unlinked || '') === '1' && isAdminLike(String(user.role || ''));
+  const params: any[] = [id];
+  let extra = '';
+  const oltId = String(req.query.olt_id || '');
+  const serial = String(req.query.serial || '').trim().toLowerCase();
+  const mac = String(req.query.mac || '').trim().toLowerCase();
+  const match = String(req.query.match || '').trim().toLowerCase();
+  const status = String(req.query.status || '').trim().toUpperCase();
+  const port = String(req.query.port || '').trim();
+  const rxMin = Number(req.query.rx_min || NaN); const rxMax = Number(req.query.rx_max || NaN);
+  const distMin = Number(req.query.dist_min || NaN); const distMax = Number(req.query.dist_max || NaN);
+  if (oltId) { params.push(oltId); extra += ` AND o.olt_id=$${params.length}`; }
+  if (serial) { params.push(`%${serial}%`); extra += ` AND lower(COALESCE(o.serial_number,'')) LIKE $${params.length}`; }
+  if (mac) { params.push(`%${mac}%`); extra += ` AND lower(COALESCE(o.mac_address,'')) LIKE $${params.length}`; }
+  if (match) { params.push(`%${match}%`); extra += ` AND (lower(COALESCE(s.full_name,'')) LIKE $${params.length} OR lower(COALESCE(s.username,'')) LIKE $${params.length} OR lower(COALESCE(s.client_code,'')) LIKE $${params.length})`; }
+  if (status) { params.push(status); extra += ` AND upper(o.status)=$${params.length}`; }
+  if (port) { params.push(`%${port}%`); extra += ` AND lower(COALESCE(o.pon_port,'')) LIKE $${params.length}`; }
+  if (!isNaN(rxMin)) { params.push(rxMin); extra += ` AND COALESCE(o.rx_power_dbm,0) >= $${params.length}`; }
+  if (!isNaN(rxMax)) { params.push(rxMax); extra += ` AND COALESCE(o.rx_power_dbm,0) <= $${params.length}`; }
+  if (!isNaN(distMin)) { params.push(distMin); extra += ` AND COALESCE(o.distance_m,0) >= $${params.length}`; }
+  if (!isNaN(distMax)) { params.push(distMax); extra += ` AND COALESCE(o.distance_m,0) <= $${params.length}`; }
   try {
     const r = await pool.query(`
-      SELECT o.*, s.full_name as subscriber_name, s.client_code, s.username
+      SELECT o.*, ol.name AS olt_name, s.full_name as subscriber_name, s.client_code, s.username
       FROM onus o
+      LEFT JOIN olts ol ON ol.id=o.olt_id
       JOIN subscribers s ON s.id = o.subscriber_id
-      WHERE s.reseller_id=$1
-      ORDER BY o.updated_at DESC NULLS LAST, o.id DESC LIMIT 500`, [id]);
+      WHERE s.reseller_id=$1 ${extra}
+      ORDER BY o.updated_at DESC NULLS LAST, o.id DESC LIMIT 500`, params);
     let unlinked: any[] = [];
     if (includeUnlinked) {
       try {
@@ -764,6 +811,200 @@ router.get('/:id/charts', asyncHandler(async (req, res) => {
   const byM = (rows:any[], key='c') => Object.fromEntries(rows.map(r=>[r.m, key==='amount'?Number(r.amount||0):Number(r.c||0)]));
   const R = byM(regs), E = byM(exps), N = byM(renews), P = byM(pays), PA = byM(pays,'amount');
   res.json({ data: { months, registrations: months.map(m=>R[m]||0), expirations: months.map(m=>E[m]||0), renewals: months.map(m=>N[m]||0), payments_count: months.map(m=>P[m]||0), payments_amount: months.map(m=>PA[m]||0) } });
+}));
+
+// Partner self-service profile (white-label/contact fields only; balance & tier stay admin-managed)
+router.put('/:id/profile', asyncHandler(async (req, res) => {
+  const user = getUser(req);
+  if (user.role === 'RESELLER') {
+    const rid = await resolveResellerIdForUser(req);
+    if (rid !== req.params.id) return res.status(403).json({ message: 'Forbidden' });
+  } else if (!isAdminLike(String(user.role))) {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+  const b = req.body || {};
+  const fields: string[] = []; const vals: any[] = [];
+  const allowed = ['company_name', 'email', 'phone', 'address', 'brand_name', 'logo_url', 'primary_color', 'secondary_color', 'portal_title', 'notes'];
+  for (const key of allowed) {
+    if (b[key] !== undefined) { vals.push(b[key] === '' ? null : b[key]); fields.push(`${key}=$${vals.length}`); }
+  }
+  if (!fields.length) return res.status(400).json({ message: 'No fields to update' });
+  vals.push(req.params.id);
+  const r = await pool.query(`UPDATE resellers SET ${fields.join(', ')}, updated_at=now() WHERE id=$${vals.length} RETURNING *`, vals);
+  if (!r.rows[0]) return res.status(404).json({ message: 'Reseller not found' });
+  res.json({ ok: true, data: r.rows[0] });
+}));
+
+/* ========================================================================== */
+/* SRZone parity endpoints for partner/reseller portal                        */
+/* ========================================================================== */
+
+// Invoice-level billing overview with financial KPIs (partner-scoped)
+router.get('/:id/billing-overview', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const params: any[] = [req.params.id];
+  let extra = '';
+  const status = String(req.query.status || '').toUpperCase();
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const from = String(req.query.from || '');
+  const to = String(req.query.to || '');
+  const type = String(req.query.payment_type || '').trim().toUpperCase();
+  if (status) { params.push(status); extra += ` AND upper(i.status)=$${params.length}`; }
+  if (q) { params.push(`%${q}%`); extra += ` AND (lower(i.invoice_number) LIKE $${params.length} OR lower(COALESCE(i.username,'')) LIKE $${params.length} OR lower(COALESCE(i.subscriber_name,'')) LIKE $${params.length})`; }
+  if (from) { params.push(from); extra += ` AND i.created_at::date >= $${params.length}::date`; }
+  if (to) { params.push(to); extra += ` AND i.created_at::date <= $${params.length}::date`; }
+  if (type) { params.push(`%${type}%`); extra += ` AND upper(COALESCE(pay.payment_type,'')) LIKE $${params.length}`; }
+  const rows = (await pool.query(`
+    SELECT i.*, s.client_code, s.full_name AS sub_full_name, s.phone AS sub_phone, s.reseller_id,
+           pay.method, pay.gateway, pay.payment_type, pay.trx_id, pay.collector_name, pay.approval_status,
+           pay.verified_at AS paid_at_actual
+    FROM invoices i
+    JOIN subscribers s ON s.id=i.subscriber_id
+    LEFT JOIN LATERAL (
+      SELECT * FROM payments p WHERE p.invoice_id=i.id AND upper(p.status) IN ('COMPLETED','SUCCESS','PAID')
+      ORDER BY COALESCE(p.verified_at,p.created_at) DESC LIMIT 1
+    ) pay ON true
+    WHERE s.reseller_id=$1 ${extra}
+    ORDER BY COALESCE(i.paid_at, i.created_at) DESC LIMIT 500`, params)).rows;
+  const sum = (await pool.query(`
+    SELECT COALESCE(SUM(i.amount),0)::numeric(12,2) AS package_amount,
+           COALESCE(SUM(i.discount),0)::numeric(12,2) AS discount,
+           COALESCE(SUM(i.tax),0)::numeric(12,2) AS tax,
+           COALESCE(SUM(i.total_amount),0)::numeric(12,2) AS final_amount,
+           COALESCE(SUM(i.paid_amount),0)::numeric(12,2) AS paid_amount,
+           COALESCE(SUM(i.due_amount),0)::numeric(12,2) AS due_amount
+    FROM invoices i JOIN subscribers s ON s.id=i.subscriber_id
+    WHERE s.reseller_id=$1 ${extra}`, params).catch(()=>({ rows: [{}] } as any))).rows[0] || {};
+  res.json({ data: rows, summary: sum, total: rows.length });
+}));
+
+// Offline/invoice payments (cash, MFS send-money, referral, wallet deduction)
+router.get('/:id/invoice-payments', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const params: any[] = [req.params.id];
+  let extra = '';
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const status = String(req.query.status || '').toUpperCase();
+  const approval = String(req.query.approval || '').toUpperCase();
+  const type = String(req.query.payment_type || '').trim().toUpperCase();
+  const collector = String(req.query.collector || '').trim().toUpperCase();
+  const from = String(req.query.from || ''); const to = String(req.query.to || '');
+  if (q) { params.push(`%${q}%`); extra += ` AND (lower(COALESCE(p.payment_ref,'')) LIKE $${params.length} OR lower(COALESCE(p.trx_id,'')) LIKE $${params.length} OR lower(COALESCE(i.invoice_number,'')) LIKE $${params.length} OR lower(COALESCE(s.username,'')) LIKE $${params.length})`; }
+  if (status) { params.push(status); extra += ` AND upper(p.status)=$${params.length}`; }
+  if (approval) { params.push(approval); extra += ` AND upper(COALESCE(p.approval_status,'APPROVED'))=$${params.length}`; }
+  if (type) { params.push(`%${type}%`); extra += ` AND upper(COALESCE(p.payment_type,'')) LIKE $${params.length}`; }
+  if (collector) { params.push(`%${collector}%`); extra += ` AND upper(COALESCE(p.collector_name,'')) LIKE $${params.length}`; }
+  if (from) { params.push(from); extra += ` AND COALESCE(p.verified_at,p.created_at)::date >= $${params.length}::date`; }
+  if (to) { params.push(to); extra += ` AND COALESCE(p.verified_at,p.created_at)::date <= $${params.length}::date`; }
+  extra += " AND (p.invoice_id IS NOT NULL OR upper(p.gateway) IN ('RESELLER_WALLET','CASH','MANUAL'))";
+  const rows = (await pool.query(`SELECT p.*, s.full_name, s.client_code, s.username, s.phone, i.invoice_number, i.total_amount AS invoice_amount
+    FROM payments p JOIN subscribers s ON s.id=p.subscriber_id
+    LEFT JOIN invoices i ON i.id=p.invoice_id
+    WHERE s.reseller_id=$1 ${extra} ORDER BY COALESCE(p.verified_at,p.created_at) DESC LIMIT 500`, params)).rows;
+  const sum = (await pool.query(`SELECT
+      COALESCE(SUM(s.monthly_bill),0)::numeric(12,2) AS monthly_bill,
+      COALESCE(SUM(p.amount) FILTER (WHERE upper(COALESCE(p.approval_status,'APPROVED'))='APPROVED'),0)::numeric(12,2) AS approval_collected,
+      COALESCE(SUM(p.amount) FILTER (WHERE upper(COALESCE(p.approval_status,'APPROVED'))<>'APPROVED'),0)::numeric(12,2) AS due_bill,
+      COALESCE(SUM(p.amount) FILTER (WHERE upper(p.gateway) NOT IN ('RESELLER_WALLET','CASH','MANUAL')),0)::numeric(12,2) AS online_collected,
+      COALESCE(SUM(p.amount) FILTER (WHERE upper(p.status) IN ('COMPLETED','SUCCESS','PAID')),0)::numeric(12,2) AS total_collected
+    FROM payments p JOIN subscribers s ON s.id=p.subscriber_id
+    WHERE s.reseller_id=$1 ${extra}`, params).catch(()=>({ rows: [{}] } as any))).rows[0] || {};
+  res.json({ data: rows, summary: sum, total: rows.length });
+}));
+
+// Gateway/online payments (bKash, Nagad, Rocket, cards, SSLCOMMERZ...)
+router.get('/:id/online-payments', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const params: any[] = [req.params.id];
+  let extra = " AND (upper(p.gateway) NOT IN ('RESELLER_WALLET','CASH','MANUAL') OR lower(COALESCE(p.method,'')) LIKE '%online%')";
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const gateway = String(req.query.gateway || '').trim().toUpperCase();
+  const from = String(req.query.from || ''); const to = String(req.query.to || '');
+  if (q) { params.push(`%${q}%`); extra += ` AND (lower(COALESCE(p.trx_id,'')) LIKE $${params.length} OR lower(COALESCE(p.payer_number,'')) LIKE $${params.length} OR lower(COALESCE(i.invoice_number,'')) LIKE $${params.length} OR lower(COALESCE(s.username,'')) LIKE $${params.length})`; }
+  if (gateway) { params.push(`%${gateway}%`); extra += ` AND upper(COALESCE(p.gateway,'')) LIKE $${params.length}`; }
+  if (from) { params.push(from); extra += ` AND COALESCE(p.verified_at,p.created_at)::date >= $${params.length}::date`; }
+  if (to) { params.push(to); extra += ` AND COALESCE(p.verified_at,p.created_at)::date <= $${params.length}::date`; }
+  const rows = (await pool.query(`SELECT p.*, s.full_name, s.client_code, s.username, s.phone, s.package_name, i.invoice_number,
+      COALESCE(p.payer_info->>'bank_txn_id', p.gateway_response->>'bank_txn_id') AS bank_txn_id,
+      COALESCE(p.payer_info->>'bank_name', p.gateway_response->>'bank_name') AS bank_name,
+      COALESCE(p.payer_info->>'payment_mode', p.gateway_response->>'payment_mode') AS payment_mode
+    FROM payments p JOIN subscribers s ON s.id=p.subscriber_id
+    LEFT JOIN invoices i ON i.id=p.invoice_id
+    WHERE s.reseller_id=$1 ${extra} ORDER BY COALESCE(p.verified_at,p.created_at) DESC LIMIT 500`, params)).rows;
+  const sum = (await pool.query(`SELECT COALESCE(SUM(p.amount),0)::numeric(12,2) AS total_collected, COUNT(*)::int AS txn_count
+    FROM payments p JOIN subscribers s ON s.id=p.subscriber_id
+    WHERE s.reseller_id=$1 ${extra}`, params).catch(()=>({ rows: [{}] } as any))).rows[0] || {};
+  res.json({ data: rows, summary: sum, total: rows.length });
+}));
+
+// RADIUS auth/accounting log (radacct is the source of truth for AAA events)
+router.get('/:id/radius-log', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const params: any[] = [req.params.id];
+  let extra = '';
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const status = String(req.query.status || '').toUpperCase();
+  const from = String(req.query.from || ''); const to = String(req.query.to || '');
+  if (q) { params.push(`%${q}%`); extra += ` AND (lower(COALESCE(ra.username,'')) LIKE $${params.length} OR lower(COALESCE(ra.framedipaddress::text,'')) LIKE $${params.length} OR lower(COALESCE(ra.callingstationid,'')) LIKE $${params.length} OR lower(COALESCE(ra.nasipaddress::text,'')) LIKE $${params.length})`; }
+  if (status === 'ONLINE') extra += ' AND ra.acctstoptime IS NULL';
+  if (status === 'OFFLINE') extra += ' AND ra.acctstoptime IS NOT NULL';
+  if (from) { params.push(from); extra += ` AND ra.acctstarttime::date >= $${params.length}::date`; }
+  if (to) { params.push(to); extra += ` AND ra.acctstarttime::date <= $${params.length}::date`; }
+  const rows = (await pool.query(`SELECT ra.radacctid AS id, ra.username, s.full_name, s.client_code,
+      ra.acctstarttime AS created_at, ra.acctstarttime, ra.acctstoptime, ra.acctupdatetime,
+      ra.framedipaddress AS ip_address, ra.callingstationid AS mac_address,
+      ra.nasipaddress AS nas, ra.nasportid AS nas_port,
+      CASE WHEN ra.acctstoptime IS NULL THEN 'ONLINE' ELSE 'OFFLINE' END AS status,
+      COALESCE(ra.acctterminatecause,'') AS reply_message, ra.acctsessiontime AS session_sec
+    FROM radacct ra JOIN subscribers s ON s.username=ra.username
+    WHERE s.reseller_id=$1 ${extra} ORDER BY ra.acctstarttime DESC NULLS LAST LIMIT 500`, params).catch(()=>({ rows: [] } as any))).rows;
+  res.json({ data: rows, total: rows.length });
+}));
+
+// Login log (authentication attempts / sessions for partner users)
+router.get('/:id/login-log', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const params: any[] = [req.params.id];
+  const rows = (await pool.query(`SELECT a.id, a.created_at, a.action, a.actor_name, a.actor_role, a.entity_type, a.entity_id, a.details
+    FROM audit_logs a WHERE (a.entity_type='reseller' AND a.entity_id=$1::text)
+      OR (a.details::text ILIKE '%' || $1::text || '%')
+    ORDER BY a.created_at DESC LIMIT 500`, params).catch(()=>({ rows: [] } as any))).rows;
+  res.json({ data: rows, total: rows.length });
+}));
+
+// Top bandwidth consumers this month
+router.get('/:id/top-bandwidth', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const rows = (await pool.query(`
+    SELECT s.id, s.full_name, s.username, s.client_code, s.package_name,
+           COALESCE(SUM(COALESCE(ss.rx_bytes,0)+COALESCE(ss.tx_bytes,0)),0)::bigint AS total_bytes,
+           COALESCE(MAX(ss.rx_bps),0)::bigint AS peak_rx_bps,
+           COALESCE(MAX(ss.tx_bps),0)::bigint AS peak_tx_bps
+    FROM subscribers s LEFT JOIN subscriber_sessions ss ON ss.subscriber_id=s.id
+    WHERE s.reseller_id=$1
+    GROUP BY s.id ORDER BY total_bytes DESC LIMIT 10`, [req.params.id]).catch(()=>({ rows: [] } as any))).rows;
+  res.json({ data: rows });
+}));
+
+// Date-range history counts for dashboard history panels
+router.get('/:id/history', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const id = req.params.id;
+  const ranges: Record<string, string> = {
+    today: 'CURRENT_DATE', yesterday: 'CURRENT_DATE - 1',
+    month: 'date_trunc(\'month\', CURRENT_DATE)', last_month: 'date_trunc(\'month\', CURRENT_DATE) - interval \'1 month\'',
+    next_7: '(CURRENT_DATE + interval \'7 day\')::date',
+  };
+  const out: any = {};
+  for (const [key, expr] of Object.entries(ranges)) {
+    const r = await pool.query(`SELECT
+        (SELECT COUNT(*)::int FROM subscribers WHERE reseller_id=$1 AND created_at::date = (${expr})::date) AS registered,
+        (SELECT COUNT(*)::int FROM subscribers WHERE reseller_id=$1 AND expiry_date::date = (${expr})::date) AS expired,
+        (SELECT COUNT(*)::int FROM reseller_wallet_transactions WHERE reseller_id=$1 AND type='SUBSCRIBER_RENEWAL' AND created_at::date = (${expr})::date) AS renewed,
+        (SELECT COUNT(*)::int FROM payments p JOIN subscribers s ON s.id=p.subscriber_id WHERE s.reseller_id=$1 AND upper(p.status) IN ('COMPLETED','SUCCESS','PAID') AND COALESCE(p.verified_at,p.created_at)::date = (${expr})::date) AS paid`, [id]).catch(()=>({ rows: [{}] } as any));
+    out[key] = r.rows[0] || {};
+  }
+  res.json({ data: out });
 }));
 
 export default router;

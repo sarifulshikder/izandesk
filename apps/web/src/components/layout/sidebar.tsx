@@ -33,6 +33,8 @@ function isItemActive(pathname: string, searchParams: URLSearchParams | null, hr
     if (searchParams?.get('new') === '1' || searchParams?.get('action') === 'new' || searchParams?.get('add') === '1') return false;
     return true;
   }
+  // Reseller "My Portal" is only active when no portal tab is selected.
+  if (href === '/resellers') return pathname === '/resellers' && !searchParams?.get('tab');
   if (['/resellers', '/olts', '/routers'].includes(href) && pathname !== href) return false;
   return pathname === href || (href !== '/' && pathname.startsWith(href + '/'));
 }
@@ -45,12 +47,13 @@ export function Sidebar() {
   const [olts, setOlts] = useState<any[]>([]);
   const [routers, setRouters] = useState<any[]>([]);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
-    Dashboard: true, Clients: true, Billing: true, Resellers: false, Network: true, 'OLT & Tools': true,
+    'Reseller Portal': true, 'Partner Finance': true, 'Partner Operations': true, Dashboard: true, Clients: true, Billing: true, Resellers: false, Network: true, 'OLT & Tools': true,
     Support: false, 'Finance & Ops': false, Plugins: false, System: false,
   });
   const [openSub, setOpenSub] = useState<Record<string, boolean>>({
     'Payment Gateways': true, 'All Resellers': true, 'FTTH & OLTs': true, 'Network & Routers': true,
   });
+  const isReseller = user?.role === 'RESELLER';
 
   const loadResellers = useCallback(async () => {
     if (!token) return;
@@ -65,14 +68,18 @@ export function Sidebar() {
     try { setRouters((await apiFetch<any>('/api/network/routers', {}, token)).data || []); } catch { setRouters([]); }
   }, [token]);
 
-  useEffect(() => { loadResellers(); loadOlts(); loadRouters(); }, [loadResellers, loadOlts, loadRouters, pathname]);
+  // Admin-only lookups — resellers have no use for (or access to) the router/OLT lists.
+  useEffect(() => { if (!isReseller) { loadResellers(); loadOlts(); loadRouters(); } }, [loadResellers, loadOlts, loadRouters, pathname, isReseller]);
 
   useEffect(() => {
     const open = (g: string) => setOpenGroups(s => ({ ...s, [g]: true }));
     if (pathname === '/') open('Dashboard');
     if (pathname.startsWith('/subscribers') || pathname.startsWith('/leads') || pathname.startsWith('/installation-orders')) open('Clients');
     if (pathname.startsWith('/billing') || pathname.startsWith('/payments') || pathname.startsWith('/collections')) open('Billing');
-    if (pathname.startsWith('/resellers')) { open('Resellers'); setOpenSub(s => ({ ...s, 'All Resellers': true })); }
+    if (pathname.startsWith('/resellers')) {
+      if (isReseller) { open('Reseller Portal'); open('Partner Finance'); open('Partner Operations'); open('Support'); }
+      else { open('Resellers'); setOpenSub(s => ({ ...s, 'All Resellers': true })); }
+    }
     if (pathname.startsWith('/routers') || pathname.startsWith('/bandwidth') || pathname.startsWith('/radius') || pathname.startsWith('/wireguard') || pathname.startsWith('/acs')) { open('Network'); setOpenSub(s => ({ ...s, 'Network & Routers': true })); }
     if (pathname.startsWith('/olts')) { open('OLT & Tools'); setOpenSub(s => ({ ...s, 'FTTH & OLTs': true })); }
     if (pathname.startsWith('/tickets') || pathname.startsWith('/messaging') || pathname.startsWith('/portal')) open('Support');
@@ -85,6 +92,45 @@ export function Sidebar() {
 
   const toggleGroup = (label: string) => setOpenGroups(s => ({ ...s, [label]: !s[label] }));
   const toggleSub = (label: string) => setOpenSub(s => ({ ...s, [label]: !s[label] }));
+
+  // Resellers only see their own portal, wallet/renew actions and their tickets.
+  const resellerGroups: NavGroup[] = [
+    {
+      label: 'Reseller Portal',
+      items: [
+        { name: 'My Portal', href: '/resellers', icon: LayoutDashboard },
+        { name: 'Users', href: '/resellers?tab=users', icon: Users },
+        { name: 'Online Users', href: '/resellers?tab=sessions', icon: Activity },
+        { name: 'ONU List', href: '/resellers?tab=onus', icon: Package },
+        { name: 'Logs', href: '/resellers?tab=logs', icon: ScrollText },
+      ],
+    },
+    {
+      label: 'Partner Finance',
+      items: [
+        { name: 'Balance Report', href: '/resellers?tab=balance', icon: Wallet },
+        { name: 'Sharing Report', href: '/resellers?tab=sharing', icon: Landmark },
+        { name: 'Billing Overview', href: '/resellers?tab=billing', icon: BarChart3 },
+        { name: 'Invoice Payments', href: '/resellers?tab=invoice-payments', icon: CreditCard },
+        { name: 'Online Payments', href: '/resellers?tab=online-payments', icon: CreditCard },
+        { name: 'Wallet & Transactions', href: '/resellers/wallet', icon: Wallet },
+      ],
+    },
+    {
+      label: 'Partner Operations',
+      items: [
+        { name: 'Renew Subscriber', href: '/resellers/renew', icon: CreditCard },
+        { name: 'RADIUS Log', href: '/resellers?tab=radius-log', icon: Radio },
+        { name: 'Login Log', href: '/resellers?tab=login-log', icon: ShieldCheck },
+      ],
+    },
+    {
+      label: 'Support',
+      items: [
+        { name: 'My Tickets', href: '/tickets', icon: LifeBuoy },
+      ],
+    },
+  ];
 
   const sidebarGroups: NavGroup[] = [
     {
@@ -211,6 +257,8 @@ export function Sidebar() {
     },
   ];
 
+  const groups = isReseller ? resellerGroups : sidebarGroups;
+
   return (
     <>
       <aside
@@ -234,7 +282,7 @@ export function Sidebar() {
         </div>
 
         <div className="sidebar-scroll">
-          {sidebarGroups.map((group) => (
+          {groups.map((group) => (
             <div key={group.label} className="sidebar-section">
               <button onClick={() => toggleGroup(group.label)} className="sidebar-section-title">
                 <span>{group.label}</span>
