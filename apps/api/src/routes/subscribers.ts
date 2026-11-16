@@ -497,6 +497,13 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const p = await buildPayload(b, null);
+  // A reseller may only create subscribers under their own account — never under a
+  // reseller_id supplied by the client (the reseller portal used to send one explicitly).
+  const scope = await resellerScope(req);
+  if (scope.restricted) {
+    if (!scope.uuid) throw new ValidationError('No reseller account linked to this login');
+    p.reseller_id = scope.uuid;
+  }
 
   let clientCode = nullableStr(b.client_code);
   if (clientCode) {

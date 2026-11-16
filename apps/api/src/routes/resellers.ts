@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
-import { recalcSubscriberDue } from '../integrations/billing';
+import { recalcSubscriberDue, reactivateSubscriber } from '../integrations/billing';
 
 const router: Router = Router();
 
@@ -56,6 +56,9 @@ router.post('/', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.name) return res.status(400).json({ message: 'name is required' });
   const code = b.code || generateResellerCode(b.name);
+  // Prevent duplicate codes/subdomains — white-label routing resolves resellers by these values.
+  const dup = await pool.query('SELECT id FROM resellers WHERE lower(code)=lower($1) OR ($2::text IS NOT NULL AND lower(subdomain)=lower($2)) LIMIT 1', [String(code), b.subdomain ? String(b.subdomain).toLowerCase().trim() : null]);
+  if (dup.rows[0]) return res.status(409).json({ message: 'A reseller with this code or subdomain already exists' });
   const r = await pool.query(`INSERT INTO resellers(code,name,company_name,tier,parent_reseller_id,email,phone,subdomain,custom_domain,brand_name,logo_url,primary_color,secondary_color,portal_title,status,wallet_balance,credit_limit,commission_percent,buying_margin_percent,address,notes)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING *`,
     [code,b.name,b.company_name||null,b.tier||'STANDARD',b.parent_reseller_id||null,b.email||null,b.phone||null,b.subdomain?String(b.subdomain).toLowerCase().trim():null,b.custom_domain||null,b.brand_name||b.company_name||b.name,b.logo_url||null,b.primary_color||null,b.secondary_color||null,b.portal_title||`${b.name} Portal`,b.status||'ACTIVE',Number(b.wallet_balance||0),Number(b.credit_limit||0),Number(b.commission_percent||0),Number(b.buying_margin_percent||0),b.address||null,b.notes||null]);
@@ -66,7 +69,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   const user = getUser(req);
   if (!['SUPER_ADMIN','BILLING_OPERATOR'].includes(user.role)) return res.status(403).json({ message: 'Insufficient permissions' });
   const b = req.body || {};
-  const r = await pool.query(`UPDATE resellers SET name=COALESCE($1,name), company_name=$2, tier=COALESCE($3,tier), parent_reseller_id=$4, email=$5, phone=$6, subdomain=$7, custom_domain=$8, brand_name=$9, logo_url=$10, primary_color=$11, secondary_color=$12, portal_title=$13, status=COALESCE($14,status), credit_limit=COALESCE($15,credit_limit), commission_percent=COALESCE($16,commission_percent), buying_margin_percent=COALESCE($17,buying_margin_percent), address=$18, notes=$19, updated_at=now() WHERE id=$20 RETURNING *`,
+  const r = await pool.query(`UPDATE resellers SET name=COALESCE($1,name), company_name=$2, tier=COALESCE($3,tier), parent_reseller_id=$4, email=$5, phone=$6, subdomain=$7, custom_domain=$8, brand_name=COALESCE($9,brand_name), logo_url=COALESCE($10,logo_url), primary_color=COALESCE($11,primary_color), secondary_color=COALESCE($12,secondary_color), portal_title=COALESCE($13,portal_title), status=COALESCE($14,status), credit_limit=COALESCE($15,credit_limit), commission_percent=COALESCE($16,commission_percent), buying_margin_percent=COALESCE($17,buying_margin_percent), address=$18, notes=$19, updated_at=now() WHERE id=$20 RETURNING *`,
     [b.name,b.company_name||null,b.tier,b.parent_reseller_id||null,b.email||null,b.phone||null,b.subdomain?String(b.subdomain).toLowerCase().trim():null,b.custom_domain||null,b.brand_name||null,b.logo_url||null,b.primary_color||null,b.secondary_color||null,b.portal_title||null,b.status,b.credit_limit,b.commission_percent,b.buying_margin_percent,b.address||null,b.notes||null,req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Reseller not found' });
   res.json({ data: r.rows[0] });
@@ -119,11 +122,9 @@ router.get('/:id/wallet', asyncHandler(async (req, res) => {
 
 router.post('/:id/wallet/recharge', asyncHandler(async (req, res) => {
   const user = getUser(req);
-  if (!['SUPER_ADMIN','BILLING_OPERATOR','RESELLER'].includes(user.role)) return res.status(403).json({ message: 'Insufficient permissions' });
-  if (user.role === 'RESELLER') {
-    const rid = await resolveResellerIdForUser(req);
-    if (rid !== req.params.id) return res.status(403).json({ message: 'Forbidden' });
-  }
+  // Recharging a prepaid wallet grants real money — only admin roles may do it.
+  // Reseller self-recharge must go through a payment gateway flow, not a direct credit.
+  if (!['SUPER_ADMIN','BILLING_OPERATOR'].includes(user.role)) return res.status(403).json({ message: 'Insufficient permissions' });
   const amount = Number(req.body?.amount || 0);
   if (!(amount > 0)) return res.status(400).json({ message: 'amount must be > 0' });
   const client = await pool.connect();
@@ -133,6 +134,8 @@ router.post('/:id/wallet/recharge', asyncHandler(async (req, res) => {
     const reseller = rr.rows[0];
     if (!reseller) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'Reseller not found' }); }
     const newBal = Number(reseller.wallet_balance || 0) + amount;
+    const limit = Number(reseller.credit_limit || 0);
+    if (limit > 0 && newBal > limit) { await client.query('ROLLBACK'); return res.status(400).json({ message: `Recharge would exceed credit limit (${limit})` }); }
     await client.query('UPDATE resellers SET wallet_balance=$2, updated_at=now() WHERE id=$1', [reseller.id, newBal]);
     const tx = await client.query(`INSERT INTO reseller_wallet_transactions(reseller_id,type,direction,amount,balance_after,reference_type,reference_id,description,metadata,created_by)
       VALUES($1,'RECHARGE','CREDIT',$2,$3,'MANUAL',$4,$5,$6::jsonb,$7) RETURNING *`,
@@ -155,6 +158,9 @@ router.post('/:id/renew-subscriber', asyncHandler(async (req, res) => {
   if (!subscriber_id) return res.status(400).json({ message: 'subscriber_id is required' });
 
   const client = await pool.connect();
+  let charge = 0, retail = 0, marginPct = 0, wholesale = 0, newBal = 0, newSubDue = 0;
+  let expiryDate: string | null = null, pref = '';
+  let payment: any = null, walletTx: any = null, resellerId = '', packageName: string | null = null;
   try {
     await client.query('BEGIN');
     const rr = await client.query('SELECT * FROM resellers WHERE id=$1 FOR UPDATE', [req.params.id]);
@@ -165,51 +171,88 @@ router.post('/:id/renew-subscriber', asyncHandler(async (req, res) => {
     const sr = await client.query('SELECT * FROM subscribers WHERE id=$1 FOR UPDATE', [subscriber_id]);
     const sub = sr.rows[0];
     if (!sub) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'Subscriber not found' }); }
-    // attach subscriber to reseller if not set
-    if (!sub.reseller_id) {
-      await client.query('UPDATE subscribers SET reseller_id=$2, updated_at=now() WHERE id=$1', [sub.id, reseller.id]);
-      sub.reseller_id = reseller.id;
-    } else if (String(sub.reseller_id) !== String(reseller.id) && user.role === 'RESELLER') {
+    // A subscriber owned by another reseller can never be paid for from this wallet.
+    if (sub.reseller_id && String(sub.reseller_id) !== String(reseller.id)) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Subscriber belongs to a different reseller' });
+    }
+    // Resellers cannot claim unassigned subscribers by renewing them; admins may attach.
+    if (user.role === 'RESELLER' && !sub.reseller_id) {
       await client.query('ROLLBACK');
       return res.status(403).json({ message: 'Subscriber does not belong to this reseller' });
     }
+    if (!sub.reseller_id) {
+      await client.query('UPDATE subscribers SET reseller_id=$2, updated_at=now() WHERE id=$1', [sub.id, reseller.id]);
+    }
+    resellerId = String(reseller.id);
+    packageName = sub.package_name || null;
 
-    const retail = Number(sub.monthly_bill || 0);
-    const marginPct = Number(reseller.buying_margin_percent || 0);
-    const wholesale = +(retail * (1 - marginPct / 100)).toFixed(2);
-    const charge = wholesale > 0 ? wholesale : retail;
+    retail = Number(sub.monthly_bill || 0);
+    marginPct = Number(reseller.buying_margin_percent || 0);
+    wholesale = +(retail * (1 - marginPct / 100)).toFixed(2);
+    charge = wholesale > 0 ? wholesale : retail;
+    if (!(charge > 0)) { await client.query('ROLLBACK'); return res.status(400).json({ message: 'Subscriber has no billable package' }); }
     if (Number(reseller.wallet_balance || 0) < charge) {
       await client.query('ROLLBACK');
       return res.status(400).json({ message: `Insufficient wallet balance. Required ${charge}, available ${Number(reseller.wallet_balance||0)}` });
     }
 
-    // apply as subscriber credit/payment (auto-deduction from reseller wallet)
-    const newSubDue = Math.max(0, Number(sub.current_due || 0) - Number(charge));
-    await client.query("UPDATE subscribers SET current_due=$2::numeric, status=CASE WHEN $2::numeric <= 0 THEN 'ACTIVE' ELSE status END, updated_at=now() WHERE id=$1", [sub.id, newSubDue]);
-    // create payment record tied to reseller wallet renewal
-    const pref = `RWAL-${Date.now()}-${Math.floor(Math.random()*1000)}`;
-    const pay = await client.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, trx_id, payer_info, gateway_response, verified_at)
-      VALUES($1,NULL,$2::uuid,'RESELLER_WALLET','WALLET_DEDUCTION',$3::numeric,'BDT','COMPLETED',$4,$5::jsonb,$6::jsonb,now()) RETURNING *`,
-      [pref, sub.id, Number(charge), pref, JSON.stringify({ reseller_id: reseller.id, reseller_name: reseller.name }), JSON.stringify({ type: 'RESELLER_RENEWAL', retail, marginPct, wholesale: charge })]);
-    // wallet debit
-    const newBal = +(Number(reseller.wallet_balance || 0) - Number(charge)).toFixed(2);
-    await client.query('UPDATE resellers SET wallet_balance=$2::numeric, updated_at=now() WHERE id=$1', [reseller.id, newBal]);
-    const wtx = await client.query(`INSERT INTO reseller_wallet_transactions(reseller_id,type,direction,amount,balance_after,reference_type,reference_id,subscriber_id,description,metadata,created_by)
-      VALUES($1::uuid,'SUBSCRIBER_RENEWAL','DEBIT',$2::numeric,$3::numeric,'PAYMENT',$4::uuid,$5::uuid,$6,$7::jsonb,$8) RETURNING *`,
-      [reseller.id, Number(charge), newBal, pay.rows[0].id, sub.id, `Renewed ${sub.full_name || sub.client_code || sub.username} (retail ${retail}, margin ${marginPct}%, charged ${charge})`, JSON.stringify({ retail, marginPct, wholesale: charge }), user.email || user.id || 'system']);
+    // Apply the payment to the oldest open invoices so due recalculation stays consistent.
+    // The old code only decremented subscribers.current_due, which was then overwritten by
+    // recalcSubscriberDue() — the wallet was debited but the subscriber's due came back.
+    const open = await client.query(`SELECT * FROM invoices WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE') AND GREATEST(due_amount,0) > 0 ORDER BY COALESCE(due_date, issue_date, created_at) ASC, created_at ASC`, [sub.id]);
+    let remaining = charge;
+    for (const inv of open.rows) {
+      if (remaining <= 0) break;
+      const total = Number(inv.total_amount || inv.amount || 0);
+      const paidBefore = Number(inv.paid_amount || 0);
+      const take = +Math.min(remaining, Math.max(0, total - paidBefore)).toFixed(2);
+      if (!(take > 0)) continue;
+      const paid = +(paidBefore + take).toFixed(2);
+      const dueAfter = +Math.max(0, total - paid).toFixed(2);
+      await client.query(`UPDATE invoices SET paid_amount=$2, due_amount=$3, status=$4, paid_at=CASE WHEN $4='PAID' THEN COALESCE(paid_at, now()) ELSE paid_at END, updated_at=now() WHERE id=$1`,
+        [inv.id, paid, dueAfter, dueAfter <= 0 ? 'PAID' : 'PARTIAL']);
+      remaining = +(remaining - take).toFixed(2);
+    }
+    const dueRes = await client.query(`SELECT COALESCE(SUM(GREATEST(due_amount,0)),0)::numeric(12,2) AS due FROM invoices WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE')`, [sub.id]);
+    newSubDue = Number(dueRes.rows[0]?.due || 0);
 
-    const ispShare = +(retail - Number(charge)).toFixed(2);
-    await client.query(`INSERT INTO reseller_share_entries(reseller_id, subscriber_id, payment_ref, wallet_transaction_id, retail_amount, partner_share, isp_share, margin_percent, package_name, period_month, metadata)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,date_trunc('month', now())::date,$10::jsonb)`,
-      [reseller.id, sub.id, pref, wtx.rows[0].id, retail, Number(charge), ispShare >= 0 ? ispShare : 0, marginPct, sub.package_name || null, JSON.stringify({ retail, marginPct, wholesale: charge })]).catch(()=>{});
+    // A renewal must extend the service period (at least 30 days from today).
+    const base = sub.expiry_date ? new Date(sub.expiry_date) : new Date();
+    const start = !isNaN(base.getTime()) && base.getTime() > Date.now() ? base : new Date();
+    start.setDate(start.getDate() + 30);
+    expiryDate = start.toISOString().slice(0, 10);
+    await client.query(`UPDATE subscribers SET current_due=$2::numeric, expiry_date=$3, status=CASE WHEN $2::numeric <= 0 THEN 'ACTIVE' ELSE status END, suspension_stage=CASE WHEN $2::numeric <= 0 THEN 'NONE' ELSE suspension_stage END, walled_garden=CASE WHEN $2::numeric <= 0 THEN false ELSE walled_garden END, updated_at=now() WHERE id=$1`,
+      [sub.id, newSubDue, expiryDate]);
+
+    pref = `RWAL-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+    payment = (await client.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, trx_id, payer_info, gateway_response, verified_at)
+      VALUES($1,NULL,$2::uuid,'RESELLER_WALLET','WALLET_DEDUCTION',$3::numeric,'BDT','COMPLETED',$4,$5::jsonb,$6::jsonb,now()) RETURNING *`,
+      [pref, sub.id, charge, pref, JSON.stringify({ reseller_id: reseller.id, reseller_name: reseller.name }), JSON.stringify({ type: 'RESELLER_RENEWAL', retail, marginPct, wholesale: charge })])).rows[0];
+
+    newBal = +(Number(reseller.wallet_balance || 0) - charge).toFixed(2);
+    await client.query('UPDATE resellers SET wallet_balance=$2::numeric, updated_at=now() WHERE id=$1', [reseller.id, newBal]);
+    walletTx = (await client.query(`INSERT INTO reseller_wallet_transactions(reseller_id,type,direction,amount,balance_after,reference_type,reference_id,subscriber_id,description,metadata,created_by)
+      VALUES($1::uuid,'SUBSCRIBER_RENEWAL','DEBIT',$2::numeric,$3::numeric,'PAYMENT',$4,$5::uuid,$6,$7::jsonb,$8) RETURNING *`,
+      [reseller.id, charge, newBal, payment.id, sub.id, `Renewed ${sub.full_name || sub.client_code || sub.username} (retail ${retail}, margin ${marginPct}%, charged ${charge})`, JSON.stringify({ retail, marginPct, wholesale: charge }), user.email || user.id || 'system'])).rows[0];
 
     await client.query('COMMIT');
-    // trigger reactivation/billing recalculation outside tx
-    try { await recalcSubscriberDue(sub.id); } catch {}
-    res.json({ ok: true, charged: charge, retail, margin_percent: marginPct, wholesale, balance: newBal, payment: pay.rows[0], wallet_transaction: wtx.rows[0], subscriber: { id: sub.id, current_due: newSubDue } });
   } catch (e) {
     await client.query('ROLLBACK'); throw e;
   } finally { client.release(); }
+
+  // Best-effort post-commit side effects. These must NOT run inside the wallet transaction:
+  // a failing share-entry insert used to abort the transaction and turn a successful
+  // renewal into a 500 (or, worse, roll back the debit and payment).
+  try { await recalcSubscriberDue(subscriber_id); } catch {}
+  if (newSubDue <= 0) { try { await reactivateSubscriber(subscriber_id, `Reseller wallet renewal ${pref}`); } catch {} }
+  const ispShare = +(retail - charge).toFixed(2);
+  try {
+    await pool.query(`INSERT INTO reseller_share_entries(reseller_id, subscriber_id, payment_ref, wallet_transaction_id, retail_amount, partner_share, isp_share, margin_percent, package_name, period_month, metadata)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,date_trunc('month', now())::date,$10::jsonb)`,
+      [resellerId, subscriber_id, pref, walletTx?.id || null, retail, charge, ispShare >= 0 ? ispShare : 0, marginPct, packageName, JSON.stringify({ retail, marginPct, wholesale: charge })]);
+  } catch {}
+  res.json({ ok: true, charged: charge, retail, margin_percent: marginPct, wholesale, balance: newBal, payment, wallet_transaction: walletTx, subscriber: { id: subscriber_id, current_due: newSubDue, expiry_date: expiryDate } });
 }));
 
 async function ensureResellerAccess(req: any, res: any, resellerId: string) {
@@ -246,7 +289,7 @@ router.get('/:id/dashboard', asyncHandler(async (req, res) => {
       COUNT(*) FILTER (WHERE upper(status)='TERMINATED')::int AS terminated,
       COUNT(*) FILTER (WHERE upper(status)='DISABLED')::int AS disabled,
       COUNT(*) FILTER (WHERE expiry_date IS NOT NULL AND expiry_date::date BETWEEN CURRENT_DATE AND (CURRENT_DATE + INTERVAL '3 day')::date)::int AS expiring_3d,
-      COUNT(*) FILTER (WHERE custom_price IS NOT NULL OR metadata->>'custom_package_price' IS NOT NULL) FILTER (WHERE false) /*placeholder*/ AS custom_price_users
+      COUNT(*) FILTER (WHERE COALESCE(price_override,0) > 0)::int AS custom_price_users
     FROM subscribers WHERE reseller_id=$1`, [id]).catch(()=>({ rows: [{}] } as any)),
     pool.query(`SELECT
       COALESCE(SUM(amount) FILTER (WHERE direction='CREDIT'),0)::numeric(12,2) AS total_credited,

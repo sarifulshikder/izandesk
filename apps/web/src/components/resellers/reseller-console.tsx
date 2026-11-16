@@ -64,7 +64,7 @@ export function ResellerConsole({ mode }: { mode: 'wallet' | 'renew' }) {
     setErr(null); setRenewMsg(null);
     try {
       const r = await apiFetch<any>(`/api/resellers/${selectedId}/renew-subscriber`, { method:'POST', body: JSON.stringify({ subscriber_id: renewSubId }) }, token);
-      setRenewMsg(`Renewed subscriber using reseller credit. Charged ${money(r.charged)} (retail ${money(r.retail)}, margin ${r.margin_percent}%). Wallet balance: ${money(r.balance)}.`);
+      setRenewMsg(`Renewed subscriber using reseller credit. Charged ${money(r.charged)} (retail ${money(r.retail)}, margin ${r.margin_percent}%). Wallet balance: ${money(r.balance)}. New expiry: ${r.subscriber?.expiry_date || '-'}.`);
       setRenewSubId('');
       await load();
     } catch(e:any){ setErr(e.message); }
@@ -115,7 +115,7 @@ export function ResellerConsole({ mode }: { mode: 'wallet' | 'renew' }) {
               <div className="card p-4"><div className="text-xs text-muted-foreground flex items-center gap-1"><Globe className="w-3.5 h-3.5"/>Portal</div><div className="text-sm font-bold mt-2 truncate">{selected.subdomain ? `${selected.subdomain}.` : (selected.custom_domain || 'Not configured')}</div></div>
             </div>
 
-            {mode === 'wallet' && (
+            {mode === 'wallet' && !isReseller && (
               <div className="grid grid-cols-1 gap-4">
                 <div className="card p-4 space-y-3">
                   <h2 className="font-bold flex items-center gap-2"><ArrowUpRight className="w-4 h-4 text-emerald-400"/>Wallet Recharge</h2>
