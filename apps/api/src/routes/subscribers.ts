@@ -22,6 +22,17 @@ import { auditLog, reqActor } from '../integrations/audit';
 import { execFile } from 'child_process';
 
 const router: Router = Router();
+
+// SRZone-parity subscriber columns appended to the base INSERT/UPDATE statements.
+const EXTRA_SUBSCRIBER_TEXT = [
+  'external_customer_id', 'company_name', 'alt_email', 'alt_phone', 'nid_info', 'gps_location',
+  'division', 'block_no', 'cable_serial_no', 'cable_length', 'cable_info', 'onu_info',
+  'onu_owner', 'connection_established_by', 'ipv6_address', 'ipv6_prefix', 'branch_id',
+];
+const EXTRA_SUBSCRIBER_BOOL = ['static_ip', 'mac_lock', 'multi_session', 'bill_cycle_enabled'];
+const EXTRA_SUBSCRIBER_OTHER = ['old_expiry_date', 'excess_amount'];
+const EXTRA_SUBSCRIBER_FIELDS = [...EXTRA_SUBSCRIBER_TEXT, ...EXTRA_SUBSCRIBER_BOOL, ...EXTRA_SUBSCRIBER_OTHER];
+
 const uploadDir = path.resolve(__dirname, '../../../uploads/kyc');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -287,6 +298,12 @@ async function buildPayload(b: any, cur: any) {
   p.extended_expiry = boolVal(get('extended_expiry'), cur?.extended_expiry ?? false);
   p.branch_name = nullableStr(get('branch_name'));
 
+  // SRZone-parity fields
+  for (const key of EXTRA_SUBSCRIBER_TEXT) p[key] = nullableStr(get(key));
+  for (const key of EXTRA_SUBSCRIBER_BOOL) p[key] = boolVal(get(key), cur?.[key] ?? false);
+  p.old_expiry_date = dateVal(get('old_expiry_date'), 'old_expiry_date');
+  p.excess_amount = moneyVal(get('excess_amount') ?? 0, 'excess_amount') ?? 0;
+
   await validateReferences(p);
   const prov = await normalizeProvisioning(b, cur);
   p.provisioning_mode = prov.provisioning_mode;
@@ -315,6 +332,16 @@ async function resellerScope(req: any): Promise<{ restricted: boolean; uuid: str
   if (!code) return { restricted: true, uuid: null };
   const r = await pool.query('SELECT id FROM resellers WHERE id::text=$1 OR lower(code)=lower($1) OR lower(subdomain)=lower($1) LIMIT 1', [code]);
   return { restricted: true, uuid: r.rows[0]?.id || null };
+}
+
+/** Fail fast when a reseller tries to reach a subscriber that is not theirs. */
+async function assertSubscriberOwnership(req: any, res: any, subscriberId: string): Promise<boolean> {
+  const scope = await resellerScope(req);
+  if (!scope.restricted) return true;
+  if (!scope.uuid) { res.status(403).json({ message: 'No reseller account linked to this login' }); return false; }
+  const r = await pool.query('SELECT id FROM subscribers WHERE id=$1 AND reseller_id=$2', [subscriberId, scope.uuid]);
+  if (!r.rows[0]) { res.status(404).json({ message: 'Subscriber not found' }); return false; }
+  return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -520,13 +547,15 @@ router.post('/', asyncHandler(async (req, res) => {
       latitude, longitude, location, ip_address, mac_address, installation_date,
       district, thana, upazila, post_office, village, area_name, ward_no, road_no, house_no, notes,
       billing_cycle_day, expiry_date, due_date, next_bill_date, auto_suspend_enabled, auto_pay_enabled,
-      provisioning_mode, router_id, reseller_id, price_override, custom_package_note, extended_expiry, branch_name
+      provisioning_mode, router_id, reseller_id, price_override, custom_package_note, extended_expiry, branch_name,
+      ${EXTRA_SUBSCRIBER_FIELDS.join(', ')}
     ) VALUES (
       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
       CASE WHEN $18::float IS NOT NULL AND $19::float IS NOT NULL THEN ST_SetSRID(ST_MakePoint($19,$18),4326)::geography ELSE NULL END,
       $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,
       $33,$34,$35,$36,$37,$38,
-      $39,$40,$41,$42,$43,$44,$45
+      $39,$40,$41,$42,$43,$44,$45,
+      ${EXTRA_SUBSCRIBER_FIELDS.map((_, i) => `$${46 + i}`).join(',')}
     ) RETURNING *`;
   const values = [
     clientCode, p.full_name, p.subscriber_type, p.connection_type, p.username, p.password, p.phone, p.email, p.nid_number,
@@ -535,6 +564,7 @@ router.post('/', asyncHandler(async (req, res) => {
     p.district, p.thana, p.upazila, p.post_office, p.village, p.area_name, p.ward_no, p.road_no, p.house_no, p.notes,
     p.billing_cycle_day, p.expiry_date, p.due_date, p.next_bill_date, p.auto_suspend_enabled, p.auto_pay_enabled,
     p.provisioning_mode, p.router_id, p.reseller_id, p.price_override, p.custom_package_note, p.extended_expiry, p.branch_name,
+    ...EXTRA_SUBSCRIBER_FIELDS.map((key) => p[key] ?? null),
   ];
 
   let created: any = null;
@@ -601,6 +631,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
       billing_cycle_day=$32, expiry_date=$33, due_date=$34, next_bill_date=$35, auto_suspend_enabled=$36, auto_pay_enabled=$37,
       provisioning_mode=$38, router_id=$39, reseller_id=$40,
       price_override=$41, custom_package_note=$42, extended_expiry=$43, branch_name=$44,
+      ${EXTRA_SUBSCRIBER_FIELDS.map((key, i) => `${key}=$${46 + i}`).join(',\n      ')},
       updated_at=now()
     WHERE id=$45 RETURNING *`;
   const updated = (await pool.query(updateSql, [
@@ -612,6 +643,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
     p.provisioning_mode, p.router_id, p.reseller_id,
     p.price_override, p.custom_package_note, p.extended_expiry, p.branch_name,
     req.params.id,
+    ...EXTRA_SUBSCRIBER_FIELDS.map((key) => p[key] ?? null),
   ])).rows[0];
 
   // Clean up stale network artifacts when the username or router binding changes.
@@ -697,11 +729,13 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 
 // KYC
 router.get('/:id/kyc', asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const r = await pool.query('SELECT * FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [req.params.id]);
   res.json({ data: r.rows });
 }));
 
 router.post('/:id/kyc', upload.single('file'), asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   if (!req.file) return res.status(400).json({ message: 'file is required' });
   const docType = KYC_DOC_TYPES.includes(str(req.body.doc_type).toUpperCase()) ? str(req.body.doc_type).toUpperCase() : 'OTHER';
   const r = await pool.query(
@@ -713,6 +747,7 @@ router.post('/:id/kyc', upload.single('file'), asyncHandler(async (req, res) => 
 }));
 
 router.delete('/:id/kyc/:docId', asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const r = await pool.query('SELECT * FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, req.params.id]);
   if (r.rows[0]) {
     const fp = path.join(uploadDir, r.rows[0].file_path);
@@ -867,6 +902,8 @@ const IMPORT_FIELDS = [
 ];
 
 router.post('/import/preview', importUpload.single('file'), asyncHandler(async (req, res) => {
+  const importScope = await resellerScope(req);
+  if (importScope.restricted && !importScope.uuid) return res.status(403).json({ message: 'No reseller account linked to this login' });
   if (!req.file) return res.status(400).json({ message: 'file is required' });
 
   const workbook = XLSX.readFile(req.file.path);
@@ -944,7 +981,7 @@ router.post('/import/preview', importUpload.single('file'), asyncHandler(async (
     if (provMode === 'ROUTER' && !routerId && routerName) rowErrors.push(`Row ${rowNum}: router "${routerName}" not found or not API/REST`);
 
     const resellerName = str(row.reseller_id || row['Reseller'] || '');
-    const resellerId = resellerName ? resellerMap.get(resellerName.toLowerCase()) : null;
+    const resellerId = importScope.restricted ? importScope.uuid : (resellerName ? resellerMap.get(resellerName.toLowerCase()) : null);
     if (resellerName && !resellerId) rowErrors.push(`Row ${rowNum}: reseller "${resellerName}" not found`);
 
     const pkgName = str(row.package_name || row['Package'] || '');
@@ -1001,6 +1038,8 @@ router.post('/import/preview', importUpload.single('file'), asyncHandler(async (
 /* ------------------------------------------------------------------ */
 
 router.post('/import/execute', importUpload.single('file'), asyncHandler(async (req, res) => {
+  const importScope = await resellerScope(req);
+  if (importScope.restricted && !importScope.uuid) return res.status(403).json({ message: 'No reseller account linked to this login' });
   if (!req.file) return res.status(400).json({ message: 'file is required' });
   const force = boolVal(req.body.force, false); // skip validation errors if true
 
@@ -1077,7 +1116,7 @@ router.post('/import/execute', importUpload.single('file'), asyncHandler(async (
         auto_pay_enabled: boolVal(row.auto_pay_enabled || row['Auto Pay'], false),
         provisioning_mode: enumValSafe(row.provisioning_mode || row['Provisioning Mode'], ['ROUTER', 'RADIUS'], 'RADIUS'),
         router_id: nullableStr(row.router_id || row['Router']),
-        reseller_id: nullableStr(row.reseller_id || row['Reseller']),
+        reseller_id: importScope.restricted ? importScope.uuid : nullableStr(row.reseller_id || row['Reseller']),
       };
 
       // Validate references
@@ -1085,7 +1124,7 @@ router.post('/import/execute', importUpload.single('file'), asyncHandler(async (
       if (p.zone_id) { const z = zoneMap.get(p.zone_id.toLowerCase()); if (!z) throw new ValidationError(`Zone not found: ${p.zone_id}`); p.zone_id = z; }
       if (p.distribution_box_id) { const b = boxMap.get(p.distribution_box_id.toLowerCase()); if (!b) throw new ValidationError(`Box not found: ${p.distribution_box_id}`); p.distribution_box_id = b; }
       if (p.router_id) { const r = routerMap.get(p.router_id.toLowerCase()); if (!r) throw new ValidationError(`Router not found: ${p.router_id}`); p.router_id = r; }
-      if (p.reseller_id) { const r = resellerMap.get(p.reseller_id.toLowerCase()); if (!r) throw new ValidationError(`Reseller not found: ${p.reseller_id}`); p.reseller_id = r; }
+      if (p.reseller_id && !importScope.restricted) { const r = resellerMap.get(p.reseller_id.toLowerCase()); if (!r) throw new ValidationError(`Reseller not found: ${p.reseller_id}`); p.reseller_id = r; }
       if (p.package_name && !packageSet.has(p.package_name.toLowerCase())) throw new ValidationError(`Package not found: ${p.package_name}`);
 
       // Provisioning normalization
@@ -1211,6 +1250,7 @@ router.post('/batch', asyncHandler(async (req, res) => {
           result = { ok: true };
           break;
         case 'set_reseller':
+          if (scope.restricted) throw new ValidationError('Resellers cannot reassign subscribers to another partner');
           if (!params?.reseller_id) throw new ValidationError('reseller_id required');
           await pool.query('UPDATE subscribers SET reseller_id=$2, updated_at=now() WHERE id=$1', [id, params.reseller_id]);
           result = { ok: true };
@@ -1256,6 +1296,7 @@ function execPing(ip: string, timeoutMs = 1200): Promise<{ ok: boolean; latency_
 }
 
 router.get('/:id/live', asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const id = req.params.id;
   const subRes = await pool.query(`
     SELECT s.id, s.client_code, s.full_name, s.subscriber_type, s.connection_type, s.username, s.password,

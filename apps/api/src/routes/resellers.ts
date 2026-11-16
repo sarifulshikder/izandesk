@@ -1,7 +1,9 @@
 import { Router } from 'express';
+import XLSX = require('xlsx');
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
-import { recalcSubscriberDue, reactivateSubscriber } from '../integrations/billing';
+import { recalcSubscriberDue, reactivateSubscriber, getInvoiceWithItems } from '../integrations/billing';
+import { renderSimpleInvoicePdf } from '../integrations/pdf';
 
 const router: Router = Router();
 
@@ -289,7 +291,11 @@ router.get('/:id/dashboard', asyncHandler(async (req, res) => {
       COUNT(*) FILTER (WHERE upper(status)='TERMINATED')::int AS terminated,
       COUNT(*) FILTER (WHERE upper(status)='DISABLED')::int AS disabled,
       COUNT(*) FILTER (WHERE expiry_date IS NOT NULL AND expiry_date::date BETWEEN CURRENT_DATE AND (CURRENT_DATE + INTERVAL '3 day')::date)::int AS expiring_3d,
-      COUNT(*) FILTER (WHERE COALESCE(price_override,0) > 0)::int AS custom_price_users
+      COUNT(*) FILTER (WHERE COALESCE(price_override,0) > 0)::int AS custom_price_users,
+      COUNT(*) FILTER (WHERE bandwidth_mbps IS NOT NULL)::int AS custom_bandwidth_users,
+      COUNT(*) FILTER (WHERE extended_expiry = true)::int AS extended_users,
+      0::int AS complaints,
+      0::int AS parental_control_users
     FROM subscribers WHERE reseller_id=$1`, [id]).catch(()=>({ rows: [{}] } as any)),
     pool.query(`SELECT
       COALESCE(SUM(amount) FILTER (WHERE direction='CREDIT'),0)::numeric(12,2) AS total_credited,
@@ -419,13 +425,16 @@ router.get('/:id/balance-report', asyncHandler(async (req, res) => {
 router.get('/:id/sharing-report', asyncHandler(async (req, res) => {
   if (!(await ensureResellerAccess(req, res, req.params.id))) return;
   const id = req.params.id;
+  const reseller = await getResellerById(id);
   const r = await pool.query(`
     SELECT t.id, t.created_at as date, t.amount as partner_charge, t.balance_after, t.description, t.created_by,
            t.metadata, s.full_name, s.username, s.client_code, s.phone, s.package_name, s.monthly_bill,
            p.payment_ref, p.amount as paid_amount, p.status as payment_status,
            i.invoice_number, i.total_amount AS invoice_total, i.discount AS invoice_discount, i.tax AS invoice_vat,
-           i.amount AS invoice_plan_price, i.paid_at
+           i.amount AS invoice_plan_price, i.paid_at,
+           rs.name AS partner_name, rs.code AS partner_code
     FROM reseller_wallet_transactions t
+    LEFT JOIN resellers rs ON rs.id=t.reseller_id
     LEFT JOIN subscribers s ON s.id=t.subscriber_id
     LEFT JOIN payments p ON p.id::text = t.reference_id AND t.reference_type='PAYMENT'
     LEFT JOIN invoices i ON i.id=p.invoice_id
@@ -437,7 +446,9 @@ router.get('/:id/sharing-report', asyncHandler(async (req, res) => {
     const marginPct = Number(m.marginPct ?? m.margin_percent ?? 0);
     const wholesale = Number(m.wholesale ?? row.partner_charge ?? 0);
     const ispShare = +(retail - wholesale).toFixed(2);
-    return { ...row, retail, margin_percent: marginPct, partner_share: wholesale, isp_share: ispShare >= 0 ? ispShare : 0 };
+    return { ...row, retail, margin_percent: marginPct, partner_share: wholesale, isp_share: ispShare >= 0 ? ispShare : 0,
+      partner_name: row.partner_name || reseller?.company_name || reseller?.name || '-',
+      partner_amount: wholesale };
   });
   res.json({ data: rows, total: rows.length });
 }));
@@ -572,6 +583,18 @@ router.get('/:id/logs', asyncHandler(async (req, res) => {
       const params: any[] = [id];
       let where = `WHERE ((entity_type='reseller' AND entity_id=$1::text) OR (details::text ILIKE '%' || $1::text || '%'))`;
       if (q) { params.push(like); where += ` AND (lower(COALESCE(action,'')) LIKE $${params.length} OR lower(COALESCE(actor_name,'')) LIKE $${params.length} OR lower(COALESCE(actor_role,'')) LIKE $${params.length} OR lower(COALESCE(entity_type,'')) LIKE $${params.length} OR lower(COALESCE(entity_id,'')) LIKE $${params.length} OR lower(COALESCE(details::text,'')) LIKE $${params.length})`; }
+      const event = String(req.query.event || '').trim().toUpperCase();
+      const manager = String(req.query.manager || '').trim().toLowerCase();
+      const userFilter = String(req.query.user || '').trim().toLowerCase();
+      const agent = String(req.query.agent || '').trim().toLowerCase();
+      const ip = String(req.query.ip || '').trim().toLowerCase();
+      const from = String(req.query.from || ''); const to = String(req.query.to || '');
+      if (event) { params.push(`%${event}%`); where += ` AND upper(COALESCE(action,'')) LIKE $${params.length}`; }
+      if (manager) { params.push(`%${manager}%`); where += ` AND lower(COALESCE(actor_name,'')) LIKE $${params.length}`; }
+      if (userFilter) { params.push(`%${userFilter}%`); where += ` AND lower(COALESCE(details::text,'')) LIKE $${params.length}`; }
+      if (agent || ip) { params.push(`%${agent || ip}%`); where += ` AND lower(COALESCE(details::text,'')) LIKE $${params.length}`; }
+      if (from) { params.push(from); where += ` AND created_at::date >= $${params.length}::date`; }
+      if (to) { params.push(to); where += ` AND created_at::date <= $${params.length}::date`; }
       params.push(limit);
       out.audit = (await pool.query(
         `SELECT id, created_at, actor_name, actor_role, action, entity_type, entity_id, details
@@ -723,7 +746,27 @@ router.get('/:id/notifications', asyncHandler(async (req, res) => {
   if (reseller && Number(reseller.wallet_balance||0) < 500) alerts.push({ type:'LOW_BALANCE', severity:'warning', title:'Low wallet balance', message:`Balance ${moneyLike(reseller.wallet_balance)} is low` });
   const pending = await safe(async () => (await pool.query(`SELECT p.id, p.amount, p.status, s.full_name, s.username FROM payments p JOIN subscribers s ON s.id=p.subscriber_id WHERE s.reseller_id=$1 AND upper(p.status) IN ('PENDING','VERIFYING','INITIATED') ORDER BY p.created_at DESC LIMIT 10`, [id])).rows);
   pending.forEach((p:any)=> alerts.push({ type:'PENDING_PAYMENT', severity:'info', title:`Pending payment: ${p.full_name||p.username}`, message:`${p.status} ৳${Number(p.amount||0)}`, payment_id:p.id }));
-  res.json({ data: alerts.slice(0, 50), total: alerts.length });
+  const resellerRow = await getResellerById(id);
+  const prefs = {
+    expiry: resellerRow?.notify_expiry !== false,
+    payment: resellerRow?.notify_payment !== false,
+    system: resellerRow?.notify_system !== false,
+  };
+  const visible = alerts.filter(a => {
+    if (['EXPIRING','EXPIRED','SUSPENDED'].includes(a.type)) return prefs.expiry;
+    if (a.type === 'PENDING_PAYMENT' || a.type === 'LOW_BALANCE') return prefs.payment;
+    return prefs.system;
+  });
+  // Keep a lightweight persisted notification log (one record per title per day).
+  for (const a of visible.slice(0, 50)) {
+    try {
+      await pool.query(`INSERT INTO reseller_notifications(reseller_id,kind,title,message,severity,metadata)
+        SELECT $1,$2,$3,$4,$5,$6::jsonb
+        WHERE NOT EXISTS (SELECT 1 FROM reseller_notifications WHERE reseller_id=$1 AND title=$3 AND created_at::date=CURRENT_DATE)`,
+        [id, a.type, a.title, a.message || null, a.severity || 'info', JSON.stringify(a)]);
+    } catch {}
+  }
+  res.json({ data: visible.slice(0, 50), total: visible.length });
 }));
 
 // Global cross-entity search (users, payments, sessions, onus)
@@ -1005,6 +1048,289 @@ router.get('/:id/history', asyncHandler(async (req, res) => {
     out[key] = r.rows[0] || {};
   }
   res.json({ data: out });
+}));
+
+/* ========================================================================== */
+/* Full SRZone parity: branches, persisted notifications, customer 360°,       */
+/* gateway top-ups, XLSX export, reconnect and saved layouts                  */
+/* ========================================================================== */
+
+async function assertOwnPartner(req: any, res: any, id: string): Promise<boolean> {
+  const user = getUser(req);
+  if (isAdminLike(user.role)) return true;
+  if (user.role === 'RESELLER') {
+    const rid = await resolveResellerIdForUser(req);
+    if (rid === id) return true;
+    res.status(403).json({ message: 'Forbidden' });
+    return false;
+  }
+  res.status(403).json({ message: 'Insufficient permissions' });
+  return false;
+}
+
+async function assertOwnSubscriber(req: any, res: any, resellerId: string, subscriberId: string): Promise<any | null> {
+  const s = (await pool.query('SELECT * FROM subscribers WHERE id=$1 AND reseller_id=$2', [subscriberId, resellerId])).rows[0];
+  if (!s) { res.status(404).json({ message: 'Subscriber not found in this reseller' }); return null; }
+  return s;
+}
+
+// ---- Branches -------------------------------------------------------------
+router.get('/:id/branches', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const rows = (await pool.query('SELECT * FROM branches WHERE reseller_id=$1 ORDER BY name ASC', [req.params.id])).rows;
+  res.json({ data: rows });
+}));
+
+router.post('/:id/branches', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  const name = String(req.body?.name || '').trim();
+  if (!name) return res.status(400).json({ message: 'name is required' });
+  const r = (await pool.query(`INSERT INTO branches(reseller_id,name,code,address,status)
+    VALUES($1,$2,$3,$4,$5) RETURNING *`,
+    [req.params.id, name, req.body?.code || null, req.body?.address || null, req.body?.status || 'ACTIVE'])).rows[0];
+  res.status(201).json({ ok: true, data: r });
+}));
+
+router.delete('/:id/branches/:branchId', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  await pool.query('DELETE FROM branches WHERE id=$1 AND reseller_id=$2', [req.params.branchId, req.params.id]);
+  res.json({ ok: true });
+}));
+
+// ---- Persisted notifications ----------------------------------------------
+router.get('/:id/notification-log', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const limit = Math.min(500, Math.max(20, Number(req.query.limit || 200) || 200));
+  const unreadOnly = String(req.query.unread || '') === '1';
+  const rows = (await pool.query(`SELECT * FROM reseller_notifications WHERE reseller_id=$1 ${unreadOnly ? 'AND is_read=false' : ''} ORDER BY created_at DESC LIMIT $2`, [req.params.id, limit])).rows;
+  const unread = (await pool.query('SELECT COUNT(*)::int AS n FROM reseller_notifications WHERE reseller_id=$1 AND is_read=false', [req.params.id])).rows[0]?.n || 0;
+  res.json({ data: rows, unread });
+}));
+
+router.post('/:id/notifications/:notifId/read', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  await pool.query('UPDATE reseller_notifications SET is_read=true, read_at=now() WHERE id=$1 AND reseller_id=$2', [req.params.notifId, req.params.id]);
+  res.json({ ok: true });
+}));
+
+router.post('/:id/notifications/read-all', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  await pool.query('UPDATE reseller_notifications SET is_read=true, read_at=now() WHERE reseller_id=$1 AND is_read=false', [req.params.id]);
+  res.json({ ok: true });
+}));
+
+// ---- Saved dashboard/column layouts ---------------------------------------
+router.put('/:id/layout', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  const b = req.body || {};
+  const fields: string[] = []; const vals: any[] = [];
+  if (b.dashboard_layout !== undefined) { vals.push(JSON.stringify(b.dashboard_layout)); fields.push(`dashboard_layout=$${vals.length}::jsonb`); }
+  if (b.column_layout !== undefined) { vals.push(JSON.stringify(b.column_layout)); fields.push(`column_layout=$${vals.length}::jsonb`); }
+  if (!fields.length) return res.status(400).json({ message: 'No layout provided' });
+  vals.push(req.params.id);
+  const r = (await pool.query(`UPDATE resellers SET ${fields.join(', ')}, updated_at=now() WHERE id=$${vals.length} RETURNING dashboard_layout, column_layout`, vals)).rows[0];
+  res.json({ ok: true, data: r });
+}));
+
+// ---- Reconnect (CoA) -------------------------------------------------------
+router.post('/:id/reconnect', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const { username, subscriber_id } = req.body || {};
+  const sub = (await pool.query(`SELECT id, username, router_id FROM subscribers WHERE reseller_id=$1 AND (id::text=$2 OR lower(username)=lower($3)) LIMIT 1`,
+    [req.params.id, String(subscriber_id || ''), String(username || '')])).rows[0];
+  if (!sub) return res.status(404).json({ message: 'Subscriber not found in this reseller' });
+  if (!sub.username) return res.status(400).json({ message: 'Subscriber has no username' });
+  let rt = sub.router_id ? (await pool.query('SELECT name,host,radius_secret,coa_port FROM network_routers WHERE id=$1', [sub.router_id])).rows[0] : null;
+  if (!rt) rt = (await pool.query("SELECT name,host,radius_secret,coa_port FROM network_routers WHERE integration_mode='RADIUS' AND is_enabled=true ORDER BY created_at LIMIT 1")).rows[0];
+  if (!rt?.host || !rt?.radius_secret) return res.status(400).json({ message: 'No RADIUS NAS available for CoA' });
+  let status = 'FAILED', message = '';
+  try {
+    const { sendCoaPacket } = await import('../integrations/radius');
+    const coa = await sendCoaPacket({ host: rt.host, port: Number(rt.coa_port || 3799), secret: String(rt.radius_secret), username: sub.username, action: 'COA', attributes: { 'Reply-Message': 'Reconnect requested from partner portal' } });
+    status = coa.ok ? 'EXECUTED' : 'FAILED';
+    message = coa.ok ? `CoA reconnect sent via ${rt.name || rt.host}` : `CoA no ACK: ${coa.error || coa.code}`;
+  } catch (e: any) { message = `Reconnect failed: ${e.message}`; }
+  const request = (await pool.query(`INSERT INTO coa_requests(subscriber_id,username,router_id,action,attributes,status,response_message,executed_at)
+    VALUES($1,$2,$3,'RECONNECT',$4::jsonb,$5,$6,now()) RETURNING *`,
+    [sub.id, sub.username, sub.router_id || null, JSON.stringify({ source: 'reseller_portal' }), status, message])).rows[0];
+  res.json({ ok: status === 'EXECUTED', request, message });
+}));
+
+// ---- Customer 360° detail --------------------------------------------------
+router.get('/:id/customers/:sid/detail', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const sub = await assertOwnSubscriber(req, res, req.params.id, req.params.sid);
+  if (!sub) return;
+  const pid = req.params.sid;
+  const q = (sql: string) => pool.query(sql, [pid]).catch(() => ({ rows: [] } as any));
+  const [online, invoices, payments, sessions, documents, logs, onu] = await Promise.all([
+    q(`SELECT * FROM subscriber_sessions WHERE subscriber_id=$1 ORDER BY updated_at DESC LIMIT 20`),
+    q(`SELECT * FROM invoices WHERE subscriber_id=$1 ORDER BY created_at DESC LIMIT 50`),
+    q(`SELECT * FROM payments WHERE subscriber_id=$1 ORDER BY created_at DESC LIMIT 50`),
+    q(`SELECT radacctid AS id, username, acctstarttime, acctstoptime, framedipaddress AS ip, acctinputoctets, acctoutputoctets, acctsessiontime, acctterminatecause, nasipaddress AS nas
+       FROM radacct WHERE username=(SELECT username FROM subscribers WHERE id=$1) ORDER BY acctstarttime DESC LIMIT 50`),
+    q(`SELECT * FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC`),
+    q(`SELECT id, created_at, action, actor_name, actor_role, details FROM audit_logs WHERE entity_type='subscriber' AND entity_id=$1 ORDER BY created_at DESC LIMIT 50`),
+    q(`SELECT o.*, ol.name AS olt_name FROM onus o LEFT JOIN olts ol ON ol.id=o.olt_id WHERE o.subscriber_id=$1 ORDER BY o.updated_at DESC`),
+  ]);
+  const months = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - (5 - i));
+    return d.toISOString().slice(0, 7);
+  });
+  const traffic = months.map(m => ({
+    month: m,
+    download_bytes: Number((sessions.rows as any[]).filter(r => String(r.acctstarttime || '').startsWith(m)).reduce((a, r) => a + Number(r.acctinputoctets || 0), 0)),
+    upload_bytes: Number((sessions.rows as any[]).filter(r => String(r.acctstarttime || '').startsWith(m)).reduce((a, r) => a + Number(r.acctoutputoctets || 0), 0)),
+  }));
+  res.json({ data: {
+    basic: sub, online: online.rows, onu: onu.rows, renewal: invoices.rows,
+    traffic, sessions: sessions.rows,
+    finance: { invoices: invoices.rows, payments: payments.rows,
+      total_invoiced: (invoices.rows as any[]).reduce((a, r) => a + Number(r.total_amount || 0), 0),
+      total_paid: (payments.rows as any[]).reduce((a, r) => a + Number(r.amount || 0), 0) },
+    documents: documents.rows, logs: logs.rows,
+  } });
+}));
+
+// Scoped invoice print (PDF) for the customer 360° view
+router.get('/:id/customers/:sid/invoices/:iid/pdf', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const sub = await assertOwnSubscriber(req, res, req.params.id, req.params.sid);
+  if (!sub) return;
+  const inv = await getInvoiceWithItems(req.params.iid);
+  if (!inv || String(inv.subscriber_id) !== String(sub.id)) return res.status(404).json({ message: 'Invoice not found' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="invoice-${inv.invoice_number || inv.id}.pdf"`);
+  res.send(renderSimpleInvoicePdf(inv));
+}));
+
+// ---- Pay Now / Add Money for an owned subscriber ---------------------------
+router.post('/:id/customers/:sid/payment', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  const amount = Number(req.body?.amount || 0);
+  if (!(amount > 0)) return res.status(400).json({ message: 'amount must be > 0' });
+  const mode = String(req.body?.mode || 'PAY').toUpperCase();
+  if (!['PAY', 'ADD'].includes(mode)) return res.status(400).json({ message: 'mode must be PAY or ADD' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const rr = await client.query('SELECT * FROM resellers WHERE id=$1 FOR UPDATE', [req.params.id]);
+    const reseller = rr.rows[0];
+    if (!reseller) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'Reseller not found' }); }
+    const sr = await client.query('SELECT * FROM subscribers WHERE id=$1 AND reseller_id=$2 FOR UPDATE', [req.params.sid, req.params.id]);
+    const sub = sr.rows[0];
+    if (!sub) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'Subscriber not found' }); }
+    if (Number(reseller.wallet_balance || 0) < amount) { await client.query('ROLLBACK'); return res.status(400).json({ message: 'Insufficient wallet balance' }); }
+
+    let remaining = amount;
+    if (mode === 'PAY') {
+      const open = await client.query(`SELECT * FROM invoices WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE') AND GREATEST(due_amount,0)>0 ORDER BY COALESCE(due_date, created_at) ASC`, [sub.id]);
+      for (const inv of open.rows) {
+        if (remaining <= 0) break;
+        const total = Number(inv.total_amount || inv.amount || 0);
+        const take = +Math.min(remaining, Math.max(0, total - Number(inv.paid_amount || 0))).toFixed(2);
+        if (!(take > 0)) continue;
+        const paid = +(Number(inv.paid_amount || 0) + take).toFixed(2);
+        const due = +Math.max(0, total - paid).toFixed(2);
+        await client.query(`UPDATE invoices SET paid_amount=$2, due_amount=$3, status=$4, paid_at=CASE WHEN $4='PAID' THEN COALESCE(paid_at,now()) ELSE paid_at END, updated_at=now() WHERE id=$1`, [inv.id, paid, due, due <= 0 ? 'PAID' : 'PARTIAL']);
+        remaining = +(remaining - take).toFixed(2);
+      }
+    }
+    const dueRow = await client.query(`SELECT COALESCE(SUM(GREATEST(due_amount,0)),0)::numeric(12,2) AS due FROM invoices WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE')`, [sub.id]);
+    const newDue = Number(dueRow.rows[0]?.due || 0);
+    const newExcess = mode === 'ADD' ? +(Number(sub.excess_amount || 0) + amount).toFixed(2) : +(remaining > 0 ? Number(sub.excess_amount || 0) + remaining : Number(sub.excess_amount || 0)).toFixed(2);
+    await client.query('UPDATE subscribers SET current_due=$2, excess_amount=$3, updated_at=now() WHERE id=$1', [sub.id, newDue, newExcess]);
+
+    const pref = `RP-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+    const payment = (await client.query(`INSERT INTO payments(payment_ref,invoice_id,subscriber_id,gateway,method,amount,currency,status,trx_id,payer_info,gateway_response,verified_at)
+      VALUES($1,NULL,$2,'RESELLER_WALLET',$3,$4,'BDT','COMPLETED',$5,$6::jsonb,$7::jsonb,now()) RETURNING *`,
+      [pref, sub.id, String(req.body?.payment_type || 'CASH').toUpperCase(), amount, req.body?.trx_id || pref,
+       JSON.stringify({ reseller_id: reseller.id, mode, notes: req.body?.notes || null }),
+       JSON.stringify({ source: 'RESELLER_PORTAL_PAYMENT', amount, mode })])).rows[0];
+    const newBal = +(Number(reseller.wallet_balance || 0) - amount).toFixed(2);
+    await client.query('UPDATE resellers SET wallet_balance=$2, updated_at=now() WHERE id=$1', [reseller.id, newBal]);
+    await client.query(`INSERT INTO reseller_wallet_transactions(reseller_id,type,direction,amount,balance_after,reference_type,reference_id,subscriber_id,description,metadata,created_by)
+      VALUES($1,'SUBSCRIBER_PAYMENT','DEBIT',$2,$3,'PAYMENT',$4,$5,$6,$7::jsonb,$8)`,
+      [reseller.id, amount, newBal, payment.id, sub.id, `${mode === 'ADD' ? 'Add money' : 'Pay now'} for ${sub.full_name || sub.username}`,
+       JSON.stringify({ mode, payment_type: req.body?.payment_type, trx_id: req.body?.trx_id }), getUser(req).email || 'reseller']);
+    await client.query('COMMIT');
+    res.json({ ok: true, payment, balance: newBal, due: newDue, excess: newExcess });
+  } catch (e: any) { await client.query('ROLLBACK').catch(()=>{}); throw e; }
+  finally { client.release(); }
+}));
+
+// ---- Self-service gateway wallet top-up ------------------------------------
+router.post('/:id/wallet/topups', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  const amount = Number(req.body?.amount || 0);
+  if (!(amount > 0)) return res.status(400).json({ message: 'amount must be > 0' });
+  const gateway = String(req.body?.gateway || '').trim().toUpperCase();
+  if (!gateway) return res.status(400).json({ message: 'gateway is required' });
+  if (req.body?.terms_accepted !== true) return res.status(400).json({ message: 'You must accept the terms and conditions' });
+  const r = (await pool.query(`INSERT INTO wallet_topup_requests(reseller_id,amount,gateway,method,trx_id,payer_number,notes,terms_accepted)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [req.params.id, amount, gateway, req.body?.method || null, req.body?.trx_id || null, req.body?.payer_number || null, req.body?.notes || null, true])).rows[0];
+  res.status(201).json({ ok: true, data: r, message: 'Top-up request submitted for verification.' });
+}));
+
+router.get('/:id/wallet/topups', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const rows = (await pool.query('SELECT * FROM wallet_topup_requests WHERE reseller_id=$1 ORDER BY created_at DESC LIMIT 200', [req.params.id])).rows;
+  res.json({ data: rows });
+}));
+
+async function decideTopup(req: any, res: any, approve: boolean) {
+  if (!isAdminLike(getUser(req).role)) return res.status(403).json({ message: 'Insufficient permissions' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const t = (await client.query('SELECT * FROM wallet_topup_requests WHERE id=$1 FOR UPDATE', [req.params.tid])).rows[0];
+    if (!t) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'Top-up request not found' }); }
+    if (String(t.status) !== 'PENDING') { await client.query('ROLLBACK'); return res.status(400).json({ message: 'Request already processed' }); }
+    if (approve) {
+      const rr = await client.query('SELECT * FROM resellers WHERE id=$1 FOR UPDATE', [t.reseller_id]);
+      const reseller = rr.rows[0];
+      if (!reseller) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'Reseller not found' }); }
+      const newBal = +(Number(reseller.wallet_balance || 0) + Number(t.amount)).toFixed(2);
+      const limit = Number(reseller.credit_limit || 0);
+      if (limit > 0 && newBal > limit) { await client.query('ROLLBACK'); return res.status(400).json({ message: `Top-up would exceed credit limit (${limit})` }); }
+      await client.query('UPDATE resellers SET wallet_balance=$2, updated_at=now() WHERE id=$1', [t.reseller_id, newBal]);
+      await client.query(`INSERT INTO reseller_wallet_transactions(reseller_id,type,direction,amount,balance_after,reference_type,reference_id,description,metadata,created_by)
+        VALUES($1,'WALLET_TOPUP','CREDIT',$2,$3,'TOPUP',$4,$5,$6::jsonb,$7)`,
+        [t.reseller_id, t.amount, newBal, t.id, `Wallet top-up via ${t.gateway}`, JSON.stringify({ trx_id: t.trx_id, gateway: t.gateway }), getUser(req).email || 'admin']);
+      await client.query(`UPDATE wallet_topup_requests SET status='APPROVED', verified_at=now(), verified_by=$2 WHERE id=$1`, [t.id, getUser(req).email || 'admin']);
+      await client.query(`INSERT INTO reseller_notifications(reseller_id,kind,title,message,severity) VALUES($1,'PAYMENT','Wallet top-up approved',$2,'success')`,
+        [t.reseller_id, `Your ${moneyLike(t.amount)} top-up via ${t.gateway} was credited.`]);
+    } else {
+      await client.query(`UPDATE wallet_topup_requests SET status='REJECTED', rejection_reason=$2, verified_at=now(), verified_by=$3 WHERE id=$1`,
+        [t.id, req.body?.reason || 'Rejected by administrator', getUser(req).email || 'admin']);
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true });
+  } catch (e: any) { await client.query('ROLLBACK').catch(()=>{}); throw e; }
+  finally { client.release(); }
+}
+router.post('/:id/wallet/topups/:tid/approve', asyncHandler(async (req, res) => { await decideTopup(req, res, true); }));
+router.post('/:id/wallet/topups/:tid/reject', asyncHandler(async (req, res) => { await decideTopup(req, res, false); }));
+
+// ---- Real XLSX export ------------------------------------------------------
+router.get('/:id/export/xlsx', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const rows = (await pool.query(`SELECT s.client_code, s.full_name, s.username, s.status, s.phone, s.email, s.package_name,
+      s.monthly_bill, s.current_due, s.expiry_date, s.ip_address, s.mac_address, s.address, s.ipv6_address, s.ipv6_prefix,
+      z.name AS zone, a.name AS area, s.created_at
+    FROM subscribers s LEFT JOIN zones z ON z.id=s.zone_id LEFT JOIN areas a ON a.id=s.area_id
+    WHERE s.reseller_id=$1 ORDER BY s.created_at DESC LIMIT 1000`, [req.params.id])).rows;
+  const headers = ['Customer ID','Full Name','Username','Status','Phone','Email','Package','Monthly Bill','Due','Expiry','IPv4','MAC','Address','IPv6','IPv6 Prefix','Zone','Area','Created'];
+  const keys = ['client_code','full_name','username','status','phone','email','package_name','monthly_bill','current_due','expiry_date',
+    'ip_address','mac_address','address','ipv6_address','ipv6_prefix','zone','area','created_at'];
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows.map((r: any) => keys.map(k => r[k] ?? ''))]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Subscribers');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="reseller-subscribers-${req.params.id}.xlsx"`);
+  res.send(buf);
 }));
 
 export default router;

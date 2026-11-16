@@ -1486,6 +1486,95 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_acs_device_actions_action ON acs_device_actions(action);
   `).catch(e => console.error('[DB] ACS schema error', e.message));
 
+  // SRZone parity: richer subscriber/ONU/partner fields, branches, persisted notifications,
+  // column/dashboard layouts and gateway wallet top-up requests (all idempotent).
+  await pool.query(`
+    ALTER TABLE subscribers
+      ADD COLUMN IF NOT EXISTS external_customer_id TEXT,
+      ADD COLUMN IF NOT EXISTS company_name TEXT,
+      ADD COLUMN IF NOT EXISTS alt_email TEXT,
+      ADD COLUMN IF NOT EXISTS alt_phone TEXT,
+      ADD COLUMN IF NOT EXISTS nid_info TEXT,
+      ADD COLUMN IF NOT EXISTS gps_location TEXT,
+      ADD COLUMN IF NOT EXISTS division TEXT,
+      ADD COLUMN IF NOT EXISTS block_no TEXT,
+      ADD COLUMN IF NOT EXISTS cable_serial_no TEXT,
+      ADD COLUMN IF NOT EXISTS cable_length TEXT,
+      ADD COLUMN IF NOT EXISTS cable_info TEXT,
+      ADD COLUMN IF NOT EXISTS onu_info TEXT,
+      ADD COLUMN IF NOT EXISTS onu_owner TEXT,
+      ADD COLUMN IF NOT EXISTS connection_established_by TEXT,
+      ADD COLUMN IF NOT EXISTS static_ip BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS mac_lock BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS multi_session BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS bill_cycle_enabled BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS ipv6_address TEXT,
+      ADD COLUMN IF NOT EXISTS ipv6_prefix TEXT,
+      ADD COLUMN IF NOT EXISTS old_expiry_date DATE,
+      ADD COLUMN IF NOT EXISTS excess_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS branch_id UUID;
+
+    ALTER TABLE onus
+      ADD COLUMN IF NOT EXISTS vendor TEXT,
+      ADD COLUMN IF NOT EXISTS model TEXT,
+      ADD COLUMN IF NOT EXISTS slot_no TEXT,
+      ADD COLUMN IF NOT EXISTS speed TEXT,
+      ADD COLUMN IF NOT EXISTS optical_dbm_temp NUMERIC(8,2),
+      ADD COLUMN IF NOT EXISTS user_id_match TEXT;
+
+    ALTER TABLE resellers
+      ADD COLUMN IF NOT EXISTS avatar_url TEXT,
+      ADD COLUMN IF NOT EXISTS notify_expiry BOOLEAN NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS notify_payment BOOLEAN NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS notify_system BOOLEAN NOT NULL DEFAULT true,
+      ADD COLUMN IF NOT EXISTS dashboard_layout JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS column_layout JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+    CREATE TABLE IF NOT EXISTS branches (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      reseller_id UUID REFERENCES resellers(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      code TEXT,
+      address TEXT,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_branches_reseller ON branches(reseller_id);
+
+    CREATE TABLE IF NOT EXISTS reseller_notifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      reseller_id UUID NOT NULL REFERENCES resellers(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL DEFAULT 'SYSTEM',
+      title TEXT NOT NULL,
+      message TEXT,
+      severity TEXT NOT NULL DEFAULT 'info',
+      is_read BOOLEAN NOT NULL DEFAULT false,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      read_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_reseller_notifications ON reseller_notifications(reseller_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS wallet_topup_requests (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      reseller_id UUID NOT NULL REFERENCES resellers(id) ON DELETE CASCADE,
+      amount NUMERIC(12,2) NOT NULL,
+      gateway TEXT NOT NULL,
+      method TEXT,
+      trx_id TEXT,
+      payer_number TEXT,
+      notes TEXT,
+      terms_accepted BOOLEAN NOT NULL DEFAULT false,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      rejection_reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      verified_at TIMESTAMPTZ,
+      verified_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_wallet_topup_reseller ON wallet_topup_requests(reseller_id, created_at DESC);
+  `).catch(e => console.error('[DB] SRZone parity schema error', e.message));
+
   // Stable client-code sequence (UUID primary keys have no serial sequence).
   // Seed it from the highest numeric suffix already present so new codes never collide.
   await pool.query('CREATE SEQUENCE IF NOT EXISTS subscriber_client_code_seq').catch(() => {});
