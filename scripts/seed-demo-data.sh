@@ -11,7 +11,6 @@ node <<'NODE'
 const { Pool } = require('pg');
 const pool = new Pool({ host: 'localhost', port: 5432, database: 'izandesk', user: 'izandesk_user', password: 'izandesk_secret_password' });
 (async () => {
-  // Set fallback for zero-price packages
   await pool.query(`
     UPDATE subscribers s SET monthly_bill = CASE
       WHEN bp.price::numeric > 0 THEN bp.price
@@ -29,7 +28,6 @@ const pool = new Pool({ host: 'localhost', port: 5432, database: 'izandesk', use
     FROM bandwidth_packages bp
     WHERE s.package_name = bp.name
   `);
-  // Handle any not matched (shouldn't happen), set default
   await pool.query(`UPDATE subscribers SET monthly_bill = 500, updated_at = now() WHERE monthly_bill IS NULL OR monthly_bill::numeric = 0`);
   const r = await pool.query("SELECT COUNT(*)::int c, MIN(monthly_bill::numeric) mn, MAX(monthly_bill::numeric) mx FROM subscribers WHERE monthly_bill::numeric > 0");
   console.log('subscribers with bill:', JSON.stringify(r.rows[0]));
@@ -51,10 +49,9 @@ const pool = new Pool({ host: 'localhost', port: 5432, database: 'izandesk', use
 NODE
 )
 echo "Active subscriber IDs count: $(echo "$IDS" | awk -F, '{print NF}')"
-
 curl -s -X POST "$API/api/billing/invoices/generate" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "{\"subscriber_ids\": $(node -e "const ids=process.argv[1].split(',').filter(Boolean); console.log(JSON.stringify(ids))" "$IDS"), \"cycle_date\": \"$(date +%Y-%m-01)\"}" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(JSON.stringify(JSON.parse(d),null,2).slice(0,1200))}catch(e){console.log(d.slice(0,800))}})"
+  -d "{\"subscriber_ids\": $(node -e "const ids=process.argv[1].split(',').filter(Boolean); console.log(JSON.stringify(ids))" "$IDS"), \"cycle_date\": \"$(date +%Y-%m-01)\"}" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{console.log(JSON.stringify(JSON.parse(d),null,2).slice(0,600))}catch(e){console.log(d.slice(0,400))}})"
 
 echo "== 3) Make a few invoices OVERDUE (direct DB) =="
 cd /home/server/izandesk/apps/api
@@ -62,42 +59,52 @@ node <<'NODE'
 const { Pool } = require('pg');
 const pool = new Pool({ host: 'localhost', port: 5432, database: 'izandesk', user: 'izandesk_user', password: 'izandesk_secret_password' });
 (async () => {
-  // mark 3 oldest UNPAID invoices as OVERDUE and push due_date back
   const r = await pool.query("UPDATE invoices SET status='OVERDUE', due_date = CURRENT_DATE - INTERVAL '10 days', updated_at=now() WHERE id IN (SELECT id FROM invoices WHERE status='UNPAID' ORDER BY created_at LIMIT 3) RETURNING invoice_number, due_amount");
   console.log('overdue set:', r.rows.map(x=>x.invoice_number).join(', '));
   await pool.end();
 })();
 NODE
 
-echo "== 4) Create + confirm a couple of payments =="
-# pick first two invoices
+echo "== 4) Create + confirm a couple of payments (robust) =="
 cd /home/server/izandesk/apps/api
-PAY_DATA=$(node <<'NODE'
+API="$API" TOKEN="$TOKEN" node <<'NODE'
 const { Pool } = require('pg');
-const pool = new Pool({ host: 'localhost', port: 5432, database: 'izandesk', user: 'izandesk_user', password: 'izandesk_secret_password' });
+const http = require('http');
+
+function postJson(url, headers, body) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const data = JSON.stringify(body || {});
+    const req = http.request({
+      hostname: u.hostname, port: u.port || 80, path: u.pathname + u.search,
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), ...headers }
+    }, (res) => {
+      let b = ''; res.on('data', c => b += c); res.on('end', () => { try { resolve({ status: res.statusCode, json: JSON.parse(b) }); } catch { resolve({ status: res.statusCode, raw: b }); } });
+    });
+    req.on('error', reject); req.write(data); req.end();
+  });
+}
+
 (async () => {
-  const r = await pool.query("SELECT id, subscriber_id, due_amount FROM invoices WHERE status IN ('UNPAID','OVERDUE') ORDER BY created_at LIMIT 2");
-  console.log(JSON.stringify(r.rows));
+  const pool = new Pool({ host: 'localhost', port: 5432, database: 'izandesk', user: 'izandesk_user', password: 'izandesk_secret_password' });
+  const api = process.env.API || 'http://localhost:4000';
+  const token = process.env.TOKEN;
+  if (!token) { console.error('no TOKEN'); process.exit(1); }
+  const invs = (await pool.query("SELECT id, subscriber_id, due_amount FROM invoices WHERE status IN ('UNPAID','OVERDUE') ORDER BY created_at LIMIT 2")).rows;
+  console.log('invoices for payment:', invs.length);
+  for (const inv of invs) {
+    try {
+      const co = await postJson(api + '/api/billing/payments/checkout', { Authorization: 'Bearer ' + token }, { gateway: 'cash', invoice_id: inv.id, subscriber_id: inv.subscriber_id, amount: Number(inv.due_amount) });
+      const ref = co.json?.payment?.payment_ref;
+      if (!ref) { console.log('checkout failed for', inv.id, co.status, JSON.stringify(co.json || co.raw).slice(0,120)); continue; }
+      const conf = await postJson(api + '/api/billing/payments/' + ref + '/confirm', { Authorization: 'Bearer ' + token }, { method: 'CASH', amount: Number(inv.due_amount), trx_id: 'CASH-' + Date.now() });
+      console.log('confirmed', ref, 'ok=', conf.json?.ok);
+    } catch (e) { console.log('err', inv.id, e.message); }
+  }
   await pool.end();
 })();
 NODE
-)
-echo "Invoices for payment: $PAY_DATA"
-node -e "const arr=JSON.parse(process.argv[1]); process.stdout.write(arr.map(x=>x.id+'|'+x.subscriber_id+'|'+x.due_amount).join('\\n'))" "$PAY_DATA" | while IFS='|' read -r INV_ID SUB_ID AMT; do
-  [ -z "$INV_ID" ] && continue
-  echo "--- checkout for invoice $INV_ID amount $AMT ---"
-  CO=$(curl -s -X POST "$API/api/billing/payments/checkout" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "{\"gateway\":\"cash\",\"invoice_id\":\"$INV_ID\",\"subscriber_id\":\"$SUB_ID\",\"amount\":$AMT}")
-  REF=$(echo "$CO" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const j=JSON.parse(d);console.log(j.payment?.payment_ref||'')}catch(e){console.log('')}})" )
-  if [ -n "$REF" ]; then
-    echo "confirming $REF ..."
-    curl -s -X POST "$API/api/billing/payments/$REF/confirm" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"method":"CASH","amount":'"$AMT"',"trx_id":"CASH-'"$RANDOM"'"}' | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{const j=JSON.parse(d);console.log('ok:', j.ok, '| dup:', j.duplicate||false)}catch(e){console.log(d.slice(0,200))}})"
-  else
-    echo "checkout failed: $CO" | head -c 200; echo
-  fi
-done
-
-echo "== 5) Create tickets ==";echo "== 5) Create tickets =="
-# pick a subscriber
+echo "== 5) Create tickets =="
 SUB1=$(cd /home/server/izandesk/apps/api && node <<'NODE'
 const { Pool } = require('pg');
 const pool = new Pool({ host: 'localhost', port: 5432, database: 'izandesk', user: 'izandesk_user', password: 'izandesk_secret_password' });
