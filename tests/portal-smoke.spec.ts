@@ -183,6 +183,27 @@ test.describe('mutating flows (opt-in)', () => {
   });
 });
 
+test.describe('reseller mobile bottom nav', () => {
+  test('exposes Complaints and Parental Control with query-aware active state', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await login(page, reseller);
+    const nav = page.locator('nav.lg\\:hidden').first();
+    await expect(nav.getByRole('link', { name: 'Complaints' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Parental' })).toBeVisible();
+
+    await nav.getByRole('link', { name: 'Complaints' }).click();
+    await expect(page).toHaveURL(/tab=complaints/);
+    await expect(nav.getByRole('link', { name: 'Complaints' })).toHaveClass(/bg-primary\/10/);
+
+    await nav.getByRole('link', { name: 'Parental' }).click();
+    await expect(page).toHaveURL(/tab=parental/);
+    await expect(nav.getByRole('link', { name: 'Parental' })).toHaveClass(/bg-primary\/10/);
+
+    const overflow = await nav.evaluate(el => el.scrollWidth > el.clientWidth);
+    expect(overflow, 'bottom nav should fit a phone viewport').toBe(false);
+  });
+});
+
 test.describe('admin subscriber wizard', () => {
   test('Add, Edit and ?new=1 all open the shared wizard', async ({ page }) => {
     await login(page, admin);

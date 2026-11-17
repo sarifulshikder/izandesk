@@ -29,6 +29,8 @@ Target a different host with `E2E_BASE_URL=https://your-host`.
 - Add and Edit open the shared four/five-step wizard for both reseller and admin,
   including the `?new=1` deep link.
 - Dashboard KPI cards navigate to the Complaints and Parental Control modules.
+- The reseller mobile bottom nav exposes both new tabs with query-aware active
+  state and no horizontal overflow at phone widths.
 - A reseller gets `404` for KYC, live status, customer detail and complaint
   creation against a foreign subscriber.
 - (Opt-in) A reseller can create and delete a subscriber through the wizard.
