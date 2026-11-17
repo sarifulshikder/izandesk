@@ -43,6 +43,7 @@ function buildPathSql(b: any): string | null {
 /** Turn Postgres unique violations into a friendly 409 instead of a 500. */
 function conflict(e: any, message: string): never {
   if (String(e?.code) === '23505') throw new ConflictError(message);
+  if (String(e?.code) === '23503') throw new ValidationError('Referenced area/zone/box does not exist');
   throw e;
 }
 
@@ -159,7 +160,7 @@ router.post('/fiber-routes', requireTopologyRole, asyncHandler(async (req, res) 
     INSERT INTO fiber_routes(name,route_type,from_box_id,to_box_id,path,notes)
     VALUES($1,$2,$3,$4, CASE WHEN $5::text IS NOT NULL THEN ST_SetSRID(ST_GeomFromGeoJSON($5),4326)::geography ELSE NULL END,$6)
     RETURNING *, ST_AsGeoJSON(path::geometry) as path_geojson`,
-    [b.name, b.route_type || 'FIBER', b.from_box_id || null, b.to_box_id || null, pathSql, b.notes || null]);
+    [b.name, b.route_type || 'FIBER', b.from_box_id || null, b.to_box_id || null, pathSql, b.notes || null]).catch(e => conflict(e, 'Could not create route'));
   res.status(201).json(r.rows[0]);
 }));
 router.put('/fiber-routes/:id', requireTopologyRole, asyncHandler(async (req, res) => {
@@ -173,7 +174,7 @@ router.put('/fiber-routes/:id', requireTopologyRole, asyncHandler(async (req, re
       notes=$6
     WHERE id=$7 RETURNING *, ST_AsGeoJSON(path::geometry) as path_geojson`,
     [b.name ?? cur.name, b.route_type ?? cur.route_type, b.from_box_id ?? cur.from_box_id,
-     b.to_box_id ?? cur.to_box_id, pathSql, b.notes ?? cur.notes, req.params.id]);
+     b.to_box_id ?? cur.to_box_id, pathSql, b.notes ?? cur.notes, req.params.id]).catch(e => conflict(e, 'Could not update route'));
   res.json(r.rows[0]);
 }));
 router.delete('/fiber-routes/:id', requireTopologyRole, asyncHandler(async (req, res) => {
