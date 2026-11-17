@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import { parityTabs, ResellerParityPanel, type ParityTab } from '@/components/resellers/reseller-parity';
+import { SubscriberFormWizard } from '@/components/subscribers/subscriber-form-wizard';
 import {
   LayoutDashboard, Users, Wifi, Wallet, ArrowLeftRight, Receipt, RadioTower, RefreshCw,
   Search, ArrowUpRight, ArrowDownLeft, Building2, Plus, UserCheck,
@@ -175,7 +176,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const [deleteTarget, setDeleteTarget] = useState<AnyObj | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [editPay, setEditPay] = useState<AnyObj | null>(null); const [editPayForm, setEditPayForm] = useState<AnyObj>({});
-  const [addOpen, setAddOpen] = useState(false); const [addForm, setAddForm] = useState<AnyObj>({ full_name:'', username:'', password:'', phone:'', email:'', package_name:'', bandwidth_mbps:'', monthly_bill:'', price_override:'', custom_package_note:'', extended_expiry:false, branch_name:'', connection_type:'PPPOE', status:'PENDING', address:'' });
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const reseller = dashboard?.reseller || balance?.reseller || null;
   const isResellerUser = user?.role === 'RESELLER';
@@ -371,7 +372,6 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
     setActionBusy(null); if (showMsgLogs) await loadMsgLogs();
   };
   const bulkRenew = async () => { const ids = selectedIds; if (!ids.length) return; if (!confirm(`Renew ${ids.length} selected subscriber(s) using reseller wallet?`)) return; setErr(null); setMsg(null); setActionBusy('bulkrenew'); let ok=0, fail=0; for (const id of ids) { try { await apiFetch<any>(`/api/resellers/${resellerId}/renew-subscriber`, { method: 'POST', body: JSON.stringify({ subscriber_id: id }) }, token); ok++; } catch { fail++; } } setMsg(`Bulk renew: ${ok} ok${fail ? `, ${fail} failed` : ''}.`); await Promise.all([loadUsers().catch(()=>{}), loadBalance().catch(()=>{}), loadDashboard().catch(()=>{})]); setActionBusy(null); };
-  const createSubscriber = async () => { if (!token) return; if (!addForm.full_name || !addForm.username) { setErr('Full name and username are required'); return; } setErr(null); setMsg(null); setActionBusy('addsub'); try { const payload: AnyObj = { ...addForm, reseller_id: resellerId, monthly_bill: addForm.monthly_bill === '' ? 0 : Number(addForm.monthly_bill) }; if (payload.bandwidth_mbps === '' || payload.bandwidth_mbps == null) delete payload.bandwidth_mbps; else payload.bandwidth_mbps = Number(payload.bandwidth_mbps); if (payload.price_override === '' || payload.price_override == null) delete payload.price_override; else payload.price_override = Number(payload.price_override); payload.extended_expiry = !!payload.extended_expiry; if (!payload.password) delete payload.password; const r = await apiFetch<any>('/api/subscribers', { method: 'POST', body: JSON.stringify(payload) }, token); setMsg(`Subscriber created: ${r.client_code || r.username || addForm.username}`); setAddOpen(false); setAddForm({ full_name:'', username:'', password:'', phone:'', email:'', package_name:'', bandwidth_mbps:'', monthly_bill:'', price_override:'', custom_package_note:'', extended_expiry:false, branch_name:'', connection_type:'PPPOE', status:'PENDING', address:'' }); await Promise.all([loadUsers().catch(()=>{}), loadDashboard().catch(()=>{})]); } catch (e:any) { setErr(e.message); } finally { setActionBusy(null); } };
 
   const assignOnu = async (onuId: string) => { if (!token) return; const subscriber_id = onuAssign[onuId]; if (!subscriber_id) { setErr('Select a subscriber to assign ONU'); return; } setErr(null); setMsg(null); setActionBusy(`onu:${onuId}`); try { await apiFetch<any>(`/api/resellers/${resellerId}/onus/${onuId}/assign`, { method: 'POST', body: JSON.stringify({ subscriber_id }) }, token); setMsg('ONU assigned/linked to subscriber.'); await loadOnus().catch(()=>{}); } catch (e:any) { setErr(e.message); } finally { setActionBusy(null); } };
 
@@ -492,7 +492,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
               <button onClick={() => setShowUserFilters(v => !v)} className="btn btn-outline">More Filters</button>
               <button onClick={loadUsers} className="btn btn-outline">Apply</button>
               {canAddSubscriber && <button onClick={()=>setImportOpen(true)} className="btn btn-outline inline-flex items-center gap-1"><FileSpreadsheet className="w-4 h-4" />Import XLSX</button>}
-              {canAddSubscriber && <button onClick={()=>setAddOpen(true)} className="btn btn-primary inline-flex items-center gap-1"><UserPlus className="w-4 h-4" />Add Subscriber</button>}
+              {canAddSubscriber && <button onClick={()=>setWizardOpen(true)} className="btn btn-primary inline-flex items-center gap-1"><UserPlus className="w-4 h-4" />Add Subscriber</button>}
             </div>
           </div>
           {showUserFilters && <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 p-3 rounded-xl border border-border bg-muted/20">
@@ -640,33 +640,19 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
 
       {parityKeys.has(tab) && <ResellerParityPanel tab={tab as ParityTab} resellerId={resellerId} />}
 
-      {addOpen && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setAddOpen(false)}><div className="w-full max-w-2xl card p-4 space-y-3 max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
-            <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><UserPlus className="w-4 h-4 text-primary" />Add Subscriber (to {reseller?.name || 'reseller'})</h3><button onClick={()=>setAddOpen(false)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Full Name *</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.full_name} onChange={e=>setAddForm((f:any)=>({...f,full_name:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Username *</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.username} onChange={e=>setAddForm((f:any)=>({...f,username:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Password</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.password} onChange={e=>setAddForm((f:any)=>({...f,password:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Phone</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.phone} onChange={e=>setAddForm((f:any)=>({...f,phone:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Email</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.email} onChange={e=>setAddForm((f:any)=>({...f,email:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Package Name</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.package_name} onChange={e=>setAddForm((f:any)=>({...f,package_name:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Bandwidth (Mbps)</div><input type="number" className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.bandwidth_mbps} onChange={e=>setAddForm((f:any)=>({...f,bandwidth_mbps:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Monthly Bill</div><input type="number" className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.monthly_bill} onChange={e=>setAddForm((f:any)=>({...f,monthly_bill:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Connection</div><select className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.connection_type} onChange={e=>setAddForm((f:any)=>({...f,connection_type:e.target.value}))}>{['PPPOE','STATIC_IP','DHCP','HOTSPOT','LEASED_LINE_CIR'].map(x=><option key={x} value={x}>{x}</option>)}</select></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Status</div><select className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.status} onChange={e=>setAddForm((f:any)=>({...f,status:e.target.value}))}>{['PENDING','ACTIVE','SUSPENDED','EXPIRED','TERMINATED'].map(x=><option key={x} value={x}>{x}</option>)}</select></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Custom Price Override</div><input type="number" className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.price_override} onChange={e=>setAddForm((f:any)=>({...f,price_override:e.target.value}))} placeholder="Optional" /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Branch</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.branch_name} onChange={e=>setAddForm((f:any)=>({...f,branch_name:e.target.value}))} placeholder="Branch/Area" /></label>
-              <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Custom Package Note</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.custom_package_note} onChange={e=>setAddForm((f:any)=>({...f,custom_package_note:e.target.value}))} placeholder="Optional custom/extended package note" /></label>
-              <label className="flex items-center gap-2 text-sm md:col-span-2"><input type="checkbox" checked={!!addForm.extended_expiry} onChange={e=>setAddForm((f:any)=>({...f,extended_expiry:e.target.checked}))} /> <span>Extended expiry / custom validity flag</span></label>
-              <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Address</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={addForm.address} onChange={e=>setAddForm((f:any)=>({...f,address:e.target.value}))} /></label>
-              <div className="md:col-span-2 border-t border-border pt-2 mt-1 text-xs font-semibold text-muted-foreground">Additional details (SRZone parity)</div>
-              {EXTRA_CUSTOMER_FIELDS.map(([label,key]) => <label key={key} className="block"><div className="text-xs text-muted-foreground mb-1">{label}</div><input type={key==='old_expiry_date'?'date':key==='excess_amount'?'number':'text'} className="w-full p-2 rounded-xl border border-border bg-background" value={addForm[key] || ''} onChange={e=>setAddForm((f:any)=>({...f,[key]:e.target.value}))} /></label>)}
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={!!addForm.static_ip} onChange={e=>setAddForm((f:any)=>({...f,static_ip:e.target.checked}))} />Static IP</label>
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={!!addForm.mac_lock} onChange={e=>setAddForm((f:any)=>({...f,mac_lock:e.target.checked}))} />MAC Lock</label>
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={!!addForm.multi_session} onChange={e=>setAddForm((f:any)=>({...f,multi_session:e.target.checked}))} />Multiple Sessions</label>
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={!!addForm.bill_cycle_enabled} onChange={e=>setAddForm((f:any)=>({...f,bill_cycle_enabled:e.target.checked}))} />Enable Bill Cycle</label>
-            </div>
-            <div className="flex justify-end gap-2"><button onClick={()=>setAddOpen(false)} className="px-3 py-2 rounded-xl border border-border text-sm">Cancel</button><button disabled={actionBusy==='addsub'} onClick={createSubscriber} className="btn btn-primary disabled:opacity-50">{actionBusy==='addsub'?'Creating...':'Create Subscriber'}</button></div>
-          </div></div>)}
+      {wizardOpen && (
+        <SubscriberFormWizard
+          lockedResellerId={resellerId}
+          lockedResellerName={reseller?.name || reseller?.company_name || 'My Reseller Account'}
+          token={token}
+          onCancel={() => setWizardOpen(false)}
+          onSaved={(r: any) => {
+            setMsg(`Subscriber created: ${r?.client_code || r?.username || 'successfully'}`);
+            setWizardOpen(false);
+            Promise.all([loadUsers().catch(()=>{}), loadDashboard().catch(()=>{})]);
+          }}
+        />
+      )}
 
       {editUser && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setEditUser(null)}><div className="w-full max-w-2xl card p-4 space-y-3 max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
             <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><Edit3 className="w-4 h-4 text-primary" />Edit Subscriber</h3><button onClick={()=>setEditUser(null)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
