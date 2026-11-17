@@ -572,11 +572,6 @@ h1.text-2xl.font-black {
 }
 .gis-live-marker { background: transparent !important; border: 0 !important; }
 
-/* Satellite labels: Esri's dark reference text inverted to white with a soft
-   halo so the clean street-style typography stays readable over imagery. */
-.leaflet-gis-labels-pane img.leaflet-tile {
-  filter: invert(1) drop-shadow(0 1px 1px rgba(0, 0, 0, .85)) drop-shadow(0 0 2px rgba(0, 0, 0, .7));
-}
 
 /* Print: show only the report content (SRZone-style Print buttons). */
 @media print {

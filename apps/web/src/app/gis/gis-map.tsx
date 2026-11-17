@@ -3,19 +3,18 @@
 import React, { useEffect, useMemo } from 'react';
 import { DivIcon, latLngBounds, LatLngBounds } from 'leaflet';
 import { HeatLayer as LeafletHeatLayer } from 'leaflet.heat';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, CircleMarker, useMap, Pane } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, CircleMarker, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import 'maplibre-gl/dist/maplibre-gl.css';
 
 // No CDN marker images: boxes use DivIcons and subscribers use CircleMarkers.
 // Point NEXT_PUBLIC_GIS_TILE_URL at an internal tile server for offline/air-gapped
 // deployments, and NEXT_PUBLIC_GIS_CENTER at "lat,lng" for a different region.
 const TILE_URL = process.env.NEXT_PUBLIC_GIS_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const SATELLITE_URL = process.env.NEXT_PUBLIC_GIS_SATELLITE_TILE_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-// Label-only overlay: Esri's reference labels use the same clean sans-serif
-// typography as the streets basemap. CSS inverts them to white over imagery.
-const SATELLITE_LABELS_URL = process.env.NEXT_PUBLIC_GIS_SATELLITE_LABELS_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}';
-// Optional extra overlay (e.g. Esri World_Transportation) — off by default.
-const SATELLITE_ROADS_URL = process.env.NEXT_PUBLIC_GIS_SATELLITE_ROADS_URL || '';
+// Labels come from OpenFreeMap vector tiles via MapLibre (free, no API key),
+// using a locally hosted labels-only style so they match the streets basemap.
+const SATELLITE_LABELS_STYLE = process.env.NEXT_PUBLIC_GIS_SATELLITE_LABELS_STYLE_URL || '/gis-satellite-labels.json';
 const DEFAULT_CENTER: [number, number] = [23.8103, 90.4125];
 const parseCenter = (): [number, number] => {
   const raw = process.env.NEXT_PUBLIC_GIS_CENTER;
@@ -104,6 +103,33 @@ function MapCommands({ focus, fitKey, locateKey, points, onLocateError }: {
   return null;
 }
 
+/** OpenFreeMap vector labels rendered inside the Leaflet map via MapLibre.
+ *  Dynamically imported so the WebGL bundle never touches SSR. */
+function VectorLabels({ enabled }: { enabled: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!enabled) return;
+    let layer: any = null;
+    let disposed = false;
+    (async () => {
+      try {
+        await import('maplibre-gl');
+        const plugin = await import('@maplibre/maplibre-gl-leaflet');
+        if (disposed) return;
+        // Own pane above imagery (tilePane=200) but below markers (overlayPane=400).
+        if (!map.getPane('gisLabels')) map.createPane('gisLabels').style.zIndex = '350';
+        layer = plugin.maplibreGL({ style: SATELLITE_LABELS_STYLE, pane: 'gisLabels' } as any);
+        layer.addTo(map);
+      } catch (e) { console.error('[GIS] vector labels failed to load', e); }
+    })();
+    return () => {
+      disposed = true;
+      if (layer) { try { map.removeLayer(layer); } catch {} }
+    };
+  }, [map, enabled]);
+  return null;
+}
+
 function HeatLayer({ points, visible }: { points: [number, number, number][]; visible: boolean }) {
   const map = useMap();
   useEffect(() => {
@@ -147,16 +173,10 @@ export default function GisMap({
         key={mapStyle}
         url={mapStyle === 'satellite' ? SATELLITE_URL : TILE_URL}
         attribution={mapStyle === 'satellite'
-          ? 'Imagery &copy; Esri, Maxar, Earthstar Geographics &mdash; labels &copy; Esri, HERE, Garmin, OpenStreetMap contributors'
+          ? 'Imagery &copy; Esri, Maxar, Earthstar Geographics &mdash; labels &copy; OpenFreeMap, OpenMapTiles, OpenStreetMap contributors'
           : '&copy; OpenStreetMap contributors'}
       />
-      {mapStyle === 'satellite' && satelliteLabels && (
-        // Custom pane sits above the imagery tile pane (200) but below markers.
-        <Pane name="gis-labels" style={{ zIndex: 350 }}>
-          {SATELLITE_ROADS_URL && <TileLayer key={`roads-${mapStyle}`} pane="gis-labels" url={SATELLITE_ROADS_URL} opacity={0.7} />}
-          <TileLayer key={`labels-${mapStyle}`} pane="gis-labels" url={SATELLITE_LABELS_URL} />
-        </Pane>
-      )}
+      {mapStyle === 'satellite' && satelliteLabels && <VectorLabels enabled />}
       <MapCommands focus={focus} fitKey={fitKey} locateKey={locateKey} points={fitPoints} onLocateError={onLocateError} />
       <BoundsReporter onChange={onBoundsChange} />
       {onPick && <ClickCapture onPick={onPick} />}
