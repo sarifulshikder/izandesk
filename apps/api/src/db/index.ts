@@ -1486,6 +1486,32 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_acs_device_actions_action ON acs_device_actions(action);
   `).catch(e => console.error('[DB] ACS schema error', e.message));
 
+  // GIS governance: an append-only audit trail plus a trash bin that stores the
+  // full deleted row (and its relationships) so topology deletes can be undone.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS topology_audit (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      entity_type TEXT NOT NULL,
+      entity_id TEXT,
+      action TEXT NOT NULL,
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      actor_id TEXT,
+      actor_email TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_topology_audit_created ON topology_audit(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS topology_trash (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      deleted_by TEXT,
+      deleted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_topology_trash_deleted ON topology_trash(deleted_at DESC);
+  `).catch(e => console.error('[DB] topology governance schema error', e.message));
+
   // Collision-safe ticket numbering. Both the admin ticket route and the
   // reseller complaint route use this shared sequence instead of COUNT(*)+1.
   await pool.query(`

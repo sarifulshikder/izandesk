@@ -42,6 +42,7 @@ export interface GisMapProps {
   locateKey?: number;
   selectedBoxId?: string | null;
   mapStyle?: GisMapStyle;
+  readOnly?: boolean;
   heatmap?: boolean;
   liveSessions?: any[];
   onBoundsChange?: (bbox: [number, number, number, number]) => void;
@@ -112,7 +113,7 @@ function HeatLayer({ points, visible }: { points: [number, number, number][]; vi
 
 export default function GisMap({
   data, onPick, draftLine, layers, focus, fitKey, locateKey, selectedBoxId,
-  mapStyle = 'streets', heatmap, liveSessions, onBoundsChange,
+  mapStyle = 'streets', readOnly, heatmap, liveSessions, onBoundsChange,
   onBoxMove, onBoxAction, onSubscriberAction, onRouteAction, onLocateError,
 }: GisMapProps) {
   const center = useMemo(parseCenter, []);
@@ -167,7 +168,7 @@ export default function GisMap({
             key={`b-${p.id}`}
             position={[lat, lng]}
             icon={boxIcon(selected, p.id)}
-            draggable={!!onBoxMove}
+            draggable={!!onBoxMove && !readOnly}
             eventHandlers={onBoxMove ? {
               dragend: (e: any) => { const ll = e.target.getLatLng(); onBoxMove(p.id, ll.lat, ll.lng); },
             } : {}}
@@ -181,8 +182,10 @@ export default function GisMap({
                 {onBoxAction && (
                   <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                     <button onClick={() => onBoxAction(p.id, 'details')} style={btnStyle('#2563eb')}>Details</button>
-                    <button onClick={() => onBoxAction(p.id, 'edit')} style={btnStyle('#7c3aed')}>Edit</button>
-                    <button onClick={() => onBoxAction(p.id, 'delete')} style={btnStyle('#dc2626')}>Delete</button>
+                    {!readOnly && <>
+                      <button onClick={() => onBoxAction(p.id, 'edit')} style={btnStyle('#7c3aed')}>Edit</button>
+                      <button onClick={() => onBoxAction(p.id, 'delete')} style={btnStyle('#dc2626')}>Delete</button>
+                    </>}
                   </div>
                 )}
               </div>
@@ -204,7 +207,7 @@ export default function GisMap({
                 {p.connection_type}{p.username ? ` • ${p.username}` : ''}<br />
                 Status: {p.status}<br />
                 Box: {p.distribution_box_name || '-'}
-                {onSubscriberAction && (
+                {onSubscriberAction && !readOnly && (
                   <div style={{ marginTop: 8 }}>
                     <button onClick={() => onSubscriberAction(p.id, 'trace')} style={btnStyle('#0891b2')}>Trace fiber to this subscriber</button>
                   </div>
@@ -226,7 +229,7 @@ export default function GisMap({
                 {p.from_box_name || '?'} → {p.to_box_name || '?'}<br />
                 {p.route_type}{p.length_m ? ` • ${(Number(p.length_m) / 1000).toFixed(2)} km` : ''}
                 {p.notes ? <><br />{p.notes}</> : null}
-                {onRouteAction && (
+                {onRouteAction && !readOnly && (
                   <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
                     <button onClick={() => onRouteAction(p.id, 'edit')} style={btnStyle('#7c3aed')}>Edit</button>
                     <button onClick={() => onRouteAction(p.id, 'delete')} style={btnStyle('#dc2626')}>Delete</button>

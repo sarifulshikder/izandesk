@@ -11,11 +11,14 @@ import {
 
 const GisMap = dynamic(() => import('./gis-map'), { ssr: false, loading: () => <div className="h-[650px] card flex items-center justify-center text-muted-foreground">Loading map...</div> });
 
-type Mode = 'none' | 'add-box' | 'edit-box' | 'delete-box' | 'add-route' | 'edit-route' | 'delete-route' | 'trace' | 'manage' | 'details' | 'import';
+type Mode = 'none' | 'add-box' | 'edit-box' | 'delete-box' | 'add-route' | 'edit-route' | 'delete-route' | 'trace' | 'manage' | 'details' | 'import' | 'audit' | 'trash';
 type MapStyle = 'streets' | 'satellite';
 
 export default function GisPage() {
   const { token, user } = useAuth();
+  // Billing operators and technicians can browse the map and governance views,
+  // but only admins/NOC may change topology (enforced by the API too).
+  const canWrite = ['SUPER_ADMIN', 'NOC_ENGINEER'].includes(String(user?.role || ''));
   const [data, setData] = useState<any>(null);
   const [mapLimit, setMapLimit] = useState(5000);
   const [areas, setAreas] = useState<any[]>([]);
@@ -51,6 +54,8 @@ export default function GisPage() {
   const [geoQuery, setGeoQuery] = useState('');
   const [geoResults, setGeoResults] = useState<any[]>([]);
   const [geoBusy, setGeoBusy] = useState(false);
+  const [auditRows, setAuditRows] = useState<any[]>([]);
+  const [trashRows, setTrashRows] = useState<any[]>([]);
 
   const load = useCallback(async () => {
     if (!token || user?.role === 'RESELLER') return;
@@ -74,6 +79,24 @@ export default function GisPage() {
   }, [token, user, mapLimit, bbox, showLive]);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadAudit = useCallback(async () => {
+    if (!token) return;
+    try { setAuditRows((await apiFetch<{ data: any[] }>('/api/topology/audit?limit=100', {}, token)).data || []); }
+    catch (e: any) { fail(e); }
+  }, [token]);
+  const loadTrash = useCallback(async () => {
+    if (!token) return;
+    try { setTrashRows((await apiFetch<{ data: any[] }>('/api/topology/trash?limit=100', {}, token)).data || []); }
+    catch (e: any) { fail(e); }
+  }, [token]);
+  const restoreTrash = async (id: string) => {
+    try {
+      const r = await apiFetch<any>(`/api/topology/trash/${id}/restore`, { method: 'POST' }, token);
+      flash(`Restored ${r.entity_type}`);
+      await Promise.all([loadTrash(), load()]);
+    } catch (e: any) { fail(e); }
+  };
 
   const flash = (msg: string) => { setNotice(msg); setError(null); };
   const fail = (e: any) => { setError(e.message || String(e)); setNotice(null); };
@@ -318,7 +341,10 @@ export default function GisPage() {
     <div className="space-y-5">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
-          <h1 className="page-title">Fiber GIS Map &amp; Topology</h1>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="page-title">Fiber GIS Map &amp; Topology</h1>
+            {!canWrite && <span className="text-[11px] font-semibold px-2 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30">Read-only</span>}
+          </div>
           <p className="text-sm text-muted-foreground">PostGIS-backed subscriber pins, distribution boxes and fiber route tracing — {subCount} mapped subscribers • {boxCount} boxes • {routeCount} routes</p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -326,11 +352,15 @@ export default function GisPage() {
           <button onClick={() => setFitKey(k => k + 1)} className="btn btn-outline inline-flex items-center gap-2"><Maximize2 className="w-4 h-4" />Zoom to fit</button>
           <button onClick={locate} className="btn btn-outline inline-flex items-center gap-2"><LocateFixed className="w-4 h-4" />Locate me</button>
           <button onClick={exportGeoJson} className="btn btn-outline inline-flex items-center gap-2"><Download className="w-4 h-4" />Export GeoJSON</button>
-          <button onClick={openNewBox} className="btn btn-primary inline-flex items-center gap-2"><Plus className="w-4 h-4" />Add Box</button>
-          <button onClick={openNewRoute} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><Route className="w-4 h-4" />Draw Route</button>
-          <button onClick={() => { setForm({ name: '', from_box_id: '', subscriber_id: '' }); setDraftPoints([]); setMode('trace'); }} className="px-3 py-2 rounded-xl border border-cyan-500/40 text-cyan-400 text-sm font-semibold inline-flex items-center gap-2"><LocateFixed className="w-4 h-4" />Trace to Subscriber</button>
-          <button onClick={() => { setMode('manage'); setNotice(null); }} className="btn btn-outline inline-flex items-center gap-2"><Building2 className="w-4 h-4" />Areas & Zones</button>
-          <button onClick={openImport} className="btn btn-outline inline-flex items-center gap-2"><Upload className="w-4 h-4" />Import</button>
+          {canWrite && <>
+            <button onClick={openNewBox} className="btn btn-primary inline-flex items-center gap-2"><Plus className="w-4 h-4" />Add Box</button>
+            <button onClick={openNewRoute} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><Route className="w-4 h-4" />Draw Route</button>
+            <button onClick={() => { setForm({ name: '', from_box_id: '', subscriber_id: '' }); setDraftPoints([]); setMode('trace'); }} className="px-3 py-2 rounded-xl border border-cyan-500/40 text-cyan-400 text-sm font-semibold inline-flex items-center gap-2"><LocateFixed className="w-4 h-4" />Trace to Subscriber</button>
+            <button onClick={() => { setMode('manage'); setNotice(null); }} className="btn btn-outline inline-flex items-center gap-2"><Building2 className="w-4 h-4" />Areas & Zones</button>
+            <button onClick={openImport} className="btn btn-outline inline-flex items-center gap-2"><Upload className="w-4 h-4" />Import</button>
+          </>}
+          <button onClick={() => { setMode('audit'); loadAudit(); setNotice(null); }} className="btn btn-outline inline-flex items-center gap-2"><Info className="w-4 h-4" />Audit log</button>
+          <button onClick={() => { setMode('trash'); loadTrash(); setNotice(null); }} className="btn btn-outline inline-flex items-center gap-2"><Trash2 className="w-4 h-4" />Trash</button>
         </div>
       </div>
 
@@ -372,6 +402,7 @@ export default function GisPage() {
           <GisMap
             data={data}
             mapStyle={mapStyle}
+            readOnly={!canWrite}
             heatmap={layers.heat}
             liveSessions={liveSessions}
             onBoundsChange={handleBoundsChange}
@@ -526,10 +557,10 @@ export default function GisPage() {
                 <div className="font-bold text-base">{details.box.name} <span className="text-muted-foreground text-xs">{details.box.code}</span></div>
                 <div className="text-muted-foreground">{details.box.box_type} • {details.box.capacity_ports} ports • {details.box.zone_name || ''} {details.box.area_name ? `, ${details.box.area_name}` : ''}</div>
                 <div className="text-muted-foreground">{details.box.address || 'No address'} • {Number(details.box.latitude).toFixed(5)}, {Number(details.box.longitude).toFixed(5)}</div>
-                <div className="flex gap-2 pt-2">
+                {canWrite && <div className="flex gap-2 pt-2">
                   <button onClick={() => handleBoxAction(details.box.id, 'edit')} className="px-3 py-1.5 rounded-lg bg-violet-600 text-white text-xs font-semibold inline-flex items-center gap-1"><Pencil className="w-3 h-3" />Edit</button>
                   <button onClick={() => handleBoxAction(details.box.id, 'delete')} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold inline-flex items-center gap-1"><Trash2 className="w-3 h-3" />Delete</button>
-                </div>
+                </div>}
               </div>
               <h4 className="font-bold text-xs uppercase tracking-wide text-muted-foreground mt-3">Subscribers ({details.subscribers.length})</h4>
               <div className="max-h-40 overflow-auto mt-1 space-y-1">
@@ -589,6 +620,43 @@ export default function GisPage() {
             </Panel>
           )}
 
+          {mode === 'audit' && (
+            <Panel title="Topology Audit Log" onClose={endMode}>
+              <div className="text-xs text-muted-foreground mb-2">Most recent topology changes across areas, zones, boxes and routes.</div>
+              <div className="max-h-[420px] overflow-auto space-y-1">
+                {auditRows.length === 0 && <div className="text-xs text-muted-foreground">No changes recorded yet.</div>}
+                {auditRows.map(a => (
+                  <div key={a.id} className="p-2 rounded-lg bg-muted/40 text-xs space-y-0.5">
+                    <div className="flex justify-between gap-2">
+                      <span className="font-semibold">{a.action} · {a.entity_type}</span>
+                      <span className="text-muted-foreground shrink-0">{new Date(a.created_at).toLocaleString()}</span>
+                    </div>
+                    <div className="text-muted-foreground truncate">{a.actor_email || a.actor_id || 'system'} — {a.entity_id}</div>
+                    <div className="font-mono text-[11px] truncate">{JSON.stringify(a.details)}</div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {mode === 'trash' && (
+            <Panel title="Deleted Topology (Trash)" onClose={endMode}>
+              <div className="text-xs text-muted-foreground mb-2">Deleted items keep their relationships and can be restored by an admin/NOC user.</div>
+              <div className="max-h-[420px] overflow-auto space-y-1">
+                {trashRows.length === 0 && <div className="text-xs text-muted-foreground">Trash is empty.</div>}
+                {trashRows.map(t => (
+                  <div key={t.id} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-muted/40 text-xs">
+                    <div className="min-w-0">
+                      <div className="font-semibold">{t.entity_type}: {t.name || t.entity_id}</div>
+                      <div className="text-muted-foreground">Deleted {new Date(t.deleted_at).toLocaleString()} by {t.deleted_by || 'unknown'}</div>
+                    </div>
+                    {canWrite && <button onClick={() => restoreTrash(t.id)} className="px-2 py-1 rounded-lg bg-primary text-primary-foreground font-semibold shrink-0">Restore</button>}
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
           {mode === 'none' && (
             <>
               <div className="card p-4">
@@ -600,8 +668,10 @@ export default function GisPage() {
                       <button className="text-left flex-1" onClick={() => { if (b.latitude && b.longitude) flyTo(+b.latitude, +b.longitude, 17); handleBoxAction(b.id, 'details'); }}>
                         <div className="font-semibold">{b.name}</div><div className="text-xs text-muted-foreground">{b.box_type} • {b.subscriber_count || 0} subs • {b.zone_name || ''}</div>
                       </button>
-                      <button onClick={() => handleBoxAction(b.id, 'edit')} className="text-primary" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => handleBoxAction(b.id, 'delete')} className="text-red-400" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                      {canWrite && <>
+                        <button onClick={() => handleBoxAction(b.id, 'edit')} className="text-primary" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => handleBoxAction(b.id, 'delete')} className="text-red-400" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </>}
                     </div>
                   ))}
                 </div>
@@ -613,8 +683,10 @@ export default function GisPage() {
                   {routesList.map((r: any) => (
                     <div key={r.id} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-muted/40 text-sm">
                       <button className="text-left flex-1" onClick={() => openEditRoute(r)}><div className="font-semibold">{r.name}</div><div className="text-xs text-muted-foreground">{r.route_type}{r.length_m ? ` • ${(r.length_m / 1000).toFixed(2)} km` : ''}</div></button>
-                      <button onClick={() => openEditRoute(r)} className="text-primary" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
-                      <button onClick={() => { setForm({ id: r.id, name: r.name }); setMode('delete-route'); }} className="text-red-400" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                      {canWrite && <>
+                        <button onClick={() => openEditRoute(r)} className="text-primary" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => { setForm({ id: r.id, name: r.name }); setMode('delete-route'); }} className="text-red-400" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                      </>}
                     </div>
                   ))}
                 </div>

@@ -41,11 +41,14 @@ not run in CI.
 - A reseller gets `404` for KYC, live status, customer detail and complaint
   creation against a foreign subscriber.
 - GIS: resellers get `403` from every GIS/topology-mutation endpoint (including
-  geocoding and live sessions), viewport `bbox` filtering returns only pins in
-  view, direct URL navigation shows the access-restricted page, and the admin
-  workbench renders its KPIs, layers, Satellite/Streets switch, heatmap and live
-  toggles without API errors or phone-width horizontal overflow.
+  geocoding, live sessions, audit and trash), read-only roles can browse the map
+  and governance views but get `403` on mutations, viewport `bbox` filtering
+  returns only pins in view, direct URL navigation shows the access-restricted
+  page, and the admin workbench renders its KPIs, layers, Satellite/Streets
+  switch, heatmap and live toggles without API errors or phone-width overflow.
 - (Opt-in) A reseller can create and delete a subscriber through the wizard.
 - (Opt-in) An admin can create, edit, drag, undo a drag and delete a GIS box,
   create, rename and delete a GIS area, and bulk-import boxes/routes from a
-  GeoJSON FeatureCollection. All test data is removed afterwards.
+  GeoJSON FeatureCollection, and verify a deleted area is snapshotted into the
+  trash, recorded in the audit log and restorable. All test data is removed
+  afterwards.

@@ -247,6 +247,18 @@ test.describe('GIS authorization', () => {
     for (const path of ['/api/gis/live-sessions', '/api/gis/geocode?q=Mirpur']) {
       expect((await request.get(path, { headers: auth(resellerToken) })).status()).toBe(403);
     }
+    for (const path of ['/api/topology/audit', '/api/topology/trash']) {
+      expect((await request.get(path, { headers: auth(resellerToken) })).status()).toBe(403);
+    }
+
+    // Read-only roles can browse GIS and governance, but cannot mutate topology.
+    const billingToken = await loginToken(request, { email: process.env.E2E_BILLING_EMAIL || 'billing@izandesk.com', password: process.env.E2E_BILLING_PASSWORD || 'billing123' });
+    expect((await request.get('/api/gis/overview', { headers: auth(billingToken) })).status()).toBe(200);
+    expect((await request.get('/api/topology/audit', { headers: auth(billingToken) })).status()).toBe(200);
+    expect((await request.get('/api/topology/trash', { headers: auth(billingToken) })).status()).toBe(200);
+    expect((await request.post('/api/topology/areas', { headers: auth(billingToken), data: { name: 'E2E read-only' } })).status()).toBe(403);
+    expect((await request.post('/api/topology/import', { headers: auth(billingToken), data: { features: [] } })).status()).toBe(403);
+    expect((await request.post('/api/topology/trash/00000000-0000-0000-0000-000000000000/restore', { headers: auth(billingToken) })).status()).toBe(403);
     const outside = await request.get('/api/gis/overview?bbox=90,23,91,24', { headers: auth(adminToken) });
     const inside = await request.get('/api/gis/overview?bbox=89,22,90,23', { headers: auth(adminToken) });
     expect((await outside.json()).subscribers.features.length).toBe(0);
@@ -326,6 +338,24 @@ test.describe('GIS authorization', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
     expect(overflow, 'GIS workbench should not scroll horizontally on a phone').toBe(false);
+  });
+
+  test('billing role sees a read-only workbench with governance views', async ({ page }) => {
+    const apiErrors: string[] = [];
+    // The global system-status widget is admin-only; its 403 is expected here.
+    page.on('response', r => { if (r.status() >= 400 && r.url().includes('/api/') && !r.url().includes('/api/system/diagnostics')) apiErrors.push(`${r.status()}: ${r.url()}`); });
+    await login(page, { email: process.env.E2E_BILLING_EMAIL || 'billing@izandesk.com', password: process.env.E2E_BILLING_PASSWORD || 'billing123' });
+    await gotoStable(page, '/gis');
+    await expect(page.getByText('Read-only')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add Box', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Draw Route' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Audit log' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Trash' })).toBeVisible();
+    await page.getByRole('button', { name: 'Audit log' }).click();
+    await expect(page.getByText('Topology Audit Log')).toBeVisible();
+    await page.getByRole('button', { name: 'Trash' }).click();
+    await expect(page.getByText('Deleted Topology (Trash)')).toBeVisible();
+    expect(apiErrors, `API errors: ${apiErrors.join('; ')}`).toEqual([]);
   });
 });
 
@@ -455,6 +485,34 @@ test.describe('GIS mutating flows (opt-in)', () => {
     } finally {
       if (routeId) await request.delete(`/api/topology/fiber-routes/${routeId}`, { headers });
       if (boxId) await request.delete(`/api/topology/boxes/${boxId}`, { headers });
+    }
+  });
+
+  test('deleted topology lands in trash, is audited, and can be restored', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const name = `E2E gov ${Date.now().toString().slice(-6)}`;
+    let areaId = '';
+    try {
+      const created = await request.post('/api/topology/areas', { headers, data: { name } });
+      expect(created.ok()).toBeTruthy();
+      areaId = (await created.json()).id;
+      const audit = (await (await request.get('/api/topology/audit?limit=20', { headers })).json()).data || [];
+      expect(audit.some((a: any) => a.entity_id === areaId && a.action === 'CREATE')).toBe(true);
+
+      expect((await request.delete(`/api/topology/areas/${areaId}`, { headers })).ok()).toBeTruthy();
+      const trash = (await (await request.get('/api/topology/trash', { headers })).json()).data || [];
+      const entry = trash.find((t: any) => t.entity_id === areaId);
+      expect(entry, 'deleted area should be in trash').toBeTruthy();
+
+      const restored = await request.post(`/api/topology/trash/${entry.id}/restore`, { headers });
+      expect(restored.ok()).toBeTruthy();
+      const areas = (await (await request.get('/api/topology/areas', { headers })).json()).data || [];
+      expect(areas.some((a: any) => a.id === areaId)).toBe(true);
+      const audit2 = (await (await request.get('/api/topology/audit?limit=20', { headers })).json()).data || [];
+      expect(audit2.some((a: any) => a.entity_id === areaId && a.action === 'RESTORE')).toBe(true);
+    } finally {
+      if (areaId) await request.delete(`/api/topology/areas/${areaId}`, { headers });
     }
   });
 });

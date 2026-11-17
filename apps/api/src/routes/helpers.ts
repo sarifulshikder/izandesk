@@ -26,9 +26,15 @@ export class ConflictError extends Error {
  *  topology is ISP-wide infrastructure. The web UI hides these screens from
  *  resellers; this list enforces the same boundary on the API. */
 export const GIS_ROLES = ['SUPER_ADMIN', 'NOC_ENGINEER', 'BILLING_OPERATOR', 'TECHNICIAN'];
+/** Only these roles may create/update/delete topology or import/restore it. */
+export const GIS_WRITE_ROLES = ['SUPER_ADMIN', 'NOC_ENGINEER'];
 
 export function hasGisAccess(req: any): boolean {
   return GIS_ROLES.includes(String(req?.user?.role || ''));
+}
+
+export function hasGisWrite(req: any): boolean {
+  return GIS_WRITE_ROLES.includes(String(req?.user?.role || ''));
 }
 
 /** Remove sensitive/internal fields before returning a subscriber to clients. */
