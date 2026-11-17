@@ -7,9 +7,12 @@
     "dev": "pnpm --filter web dev",
     "dev:all": "pnpm --parallel dev",
     "build": "pnpm --filter web build",
-    "lint": "pnpm --recursive lint"
+    "lint": "pnpm --recursive lint",
+    "test:e2e": "playwright test",
+    "test:e2e:mutations": "E2E_MUTATIONS=1 playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "typescript": "^5.9.3"
   }
 }
