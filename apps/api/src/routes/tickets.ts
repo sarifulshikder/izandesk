@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { dispatchMessage } from '../integrations/messaging';
+import { nextTicketNo } from '../utils/ticket-no';
 
 const router: Router = Router();
 function user(req:any){ return req.user || {}; }
@@ -36,11 +37,6 @@ async function canAccessTicket(req:any, ticketId:string){
 function slaDue(priority: string, from = new Date()) {
   const hours = priority === 'CRITICAL' ? 4 : priority === 'HIGH' ? 8 : priority === 'LOW' ? 48 : 24;
   return new Date(from.getTime() + hours * 3600 * 1000);
-}
-
-async function nextTicketNo() {
-  const c = await pool.query('SELECT COUNT(*)::int AS n FROM tickets');
-  return `TKT-${String((c.rows[0]?.n || 0) + 1).padStart(6,'0')}`;
 }
 
 router.get('/', asyncHandler(async (req, res) => {

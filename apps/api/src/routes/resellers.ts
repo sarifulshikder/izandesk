@@ -4,6 +4,7 @@ import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { recalcSubscriberDue, reactivateSubscriber, getInvoiceWithItems } from '../integrations/billing';
 import { renderSimpleInvoicePdf } from '../integrations/pdf';
+import { nextTicketNo } from '../utils/ticket-no';
 
 const router: Router = Router();
 
@@ -1389,8 +1390,7 @@ router.post('/:id/complaints', asyncHandler(async (req, res) => {
   const priority = String(req.body?.priority || 'MEDIUM').toUpperCase();
   const hours = priority === 'CRITICAL' ? 4 : priority === 'HIGH' ? 8 : priority === 'LOW' ? 48 : 24;
   const slaDueAt = new Date(Date.now() + hours * 3600 * 1000).toISOString();
-  const count = (await pool.query('SELECT COUNT(*)::int AS n FROM tickets')).rows[0]?.n || 0;
-  const ticketNo = `TKT-${String(count + 1).padStart(6, '0')}`;
+  const ticketNo = await nextTicketNo();
   const gps = (siteLat != null && siteLng != null)
     ? `https://www.google.com/maps/search/?api=1&query=${siteLat},${siteLng}`
     : (siteAddress ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(siteAddress)}` : null);

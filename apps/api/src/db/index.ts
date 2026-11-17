@@ -1486,6 +1486,15 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_acs_device_actions_action ON acs_device_actions(action);
   `).catch(e => console.error('[DB] ACS schema error', e.message));
 
+  // Collision-safe ticket numbering. Both the admin ticket route and the
+  // reseller complaint route use this shared sequence instead of COUNT(*)+1.
+  await pool.query(`
+    CREATE SEQUENCE IF NOT EXISTS ticket_no_seq START 1;
+    SELECT setval('ticket_no_seq',
+      COALESCE((SELECT MAX(substring(ticket_no from 5)::int) FROM tickets
+                WHERE ticket_no ~ '^TKT-[0-9]+$'), 0) + 1, false);
+  `).catch(e => console.error('[DB] ticket sequence error', e.message));
+
   // SRZone parity: richer subscriber/ONU/partner fields, branches, persisted notifications,
   // column/dashboard layouts and gateway wallet top-up requests (all idempotent).
   await pool.query(`
