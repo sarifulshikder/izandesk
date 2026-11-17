@@ -8,7 +8,8 @@ dev containers) first.
 
 ```bash
 pnpm test:e2e                 # safe, read-only smoke checks
-pnpm test:e2e:mutations       # also creates and deletes one test subscriber
+pnpm test:e2e:mutations       # also runs the opt-in create/edit/delete/drag flows
+                              # (subscriber, GIS box, GIS area)
 ```
 
 Target a different host with `E2E_BASE_URL=https://your-host`.
@@ -39,4 +40,10 @@ not run in CI.
   state and no horizontal overflow at phone widths.
 - A reseller gets `404` for KYC, live status, customer detail and complaint
   creation against a foreign subscriber.
+- GIS: resellers get `403` from every GIS/topology-mutation endpoint, direct URL
+  navigation shows the access-restricted page, and the admin workbench renders
+  its KPIs, layers and management panels without API errors or phone-width
+  horizontal overflow.
 - (Opt-in) A reseller can create and delete a subscriber through the wizard.
+- (Opt-in) An admin can create, edit, drag, undo a drag and delete a GIS box, and
+  create, rename and delete a GIS area. All test data is removed afterwards.

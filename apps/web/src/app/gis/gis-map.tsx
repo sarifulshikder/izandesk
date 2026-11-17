@@ -16,9 +16,9 @@ const parseCenter = (): [number, number] => {
   const [lat, lng] = raw.split(',').map(Number);
   return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : DEFAULT_CENTER;
 };
-const boxIcon = (selected: boolean) => new DivIcon({
-  className: '',
-  html: `<div style="width:${selected ? 24 : 18}px;height:${selected ? 24 : 18}px;border-radius:5px;background:${selected ? '#8b5cf6' : '#3b82f6'};border:2px solid white;box-shadow:0 0 0 3px rgba(59,130,246,.35)"></div>`,
+const boxIcon = (selected: boolean, id: string) => new DivIcon({
+  className: 'gis-box-marker',
+  html: `<div data-box-id="${id}" style="width:${selected ? 24 : 18}px;height:${selected ? 24 : 18}px;border-radius:5px;background:${selected ? '#8b5cf6' : '#3b82f6'};border:2px solid white;box-shadow:0 0 0 3px rgba(59,130,246,.35)"></div>`,
   iconSize: [selected ? 24 : 18, selected ? 24 : 18],
   iconAnchor: [selected ? 12 : 9, selected ? 12 : 9],
 });
@@ -102,7 +102,7 @@ export default function GisMap({
           <Marker
             key={`b-${p.id}`}
             position={[lat, lng]}
-            icon={boxIcon(selected)}
+            icon={boxIcon(selected, p.id)}
             draggable={!!onBoxMove}
             eventHandlers={onBoxMove ? {
               dragend: (e: any) => { const ll = e.target.getLatLng(); onBoxMove(p.id, ll.lat, ll.lng); },

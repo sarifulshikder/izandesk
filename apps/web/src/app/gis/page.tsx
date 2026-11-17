@@ -38,6 +38,8 @@ export default function GisPage() {
   const [areaName, setAreaName] = useState('');
   const [zoneName, setZoneName] = useState('');
   const [zoneArea, setZoneArea] = useState('');
+  const [renaming, setRenaming] = useState<{ type: 'area' | 'zone'; id: string; name: string } | null>(null);
+  const [undoMove, setUndoMove] = useState<{ id: string; name: string; lat: number; lng: number } | null>(null);
 
   const load = useCallback(async () => {
     if (!token || user?.role === 'RESELLER') return;
@@ -109,10 +111,21 @@ export default function GisPage() {
   };
   const handleBoxMove = async (id: string, lat: number, lng: number) => {
     const b = boxesList.find(x => x.id === id); if (!b) return;
+    const oldLat = Number(b.latitude), oldLng = Number(b.longitude);
+    if (!Number.isFinite(oldLat) || !Number.isFinite(oldLng)) return;
     try {
       await apiFetch(`/api/topology/boxes/${id}`, { method: 'PUT', body: JSON.stringify({ ...b, latitude: lat, longitude: lng }) }, token);
+      setUndoMove({ id, name: b.name, lat: oldLat, lng: oldLng });
       flash(`Moved ${b.name} to ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
       await load();
+    } catch (e: any) { fail(e); }
+  };
+  const undoBoxMove = async () => {
+    if (!undoMove) return;
+    const b = boxesList.find(x => x.id === undoMove.id); if (!b) return;
+    try {
+      await apiFetch(`/api/topology/boxes/${undoMove.id}`, { method: 'PUT', body: JSON.stringify({ ...b, latitude: undoMove.lat, longitude: undoMove.lng }) }, token);
+      setUndoMove(null); flash('Move undone'); await load();
     } catch (e: any) { fail(e); }
   };
 
@@ -196,6 +209,16 @@ export default function GisPage() {
       setZoneName(''); flash('Zone created'); await load();
     } catch (e: any) { fail(e); }
   };
+  const saveRename = async () => {
+    if (!renaming) return;
+    try {
+      if (!renaming.name.trim()) throw new Error('Name is required');
+      await apiFetch(`/api/topology/${renaming.type === 'area' ? 'areas' : 'zones'}/${renaming.id}`,
+        { method: 'PUT', body: JSON.stringify({ name: renaming.name }) }, token);
+      flash(`${renaming.type === 'area' ? 'Area' : 'Zone'} renamed`);
+      setRenaming(null); await load();
+    } catch (e: any) { fail(e); }
+  };
   const removeArea = async (id: string) => {
     if (!window.confirm('Delete this area and its zones?')) return;
     try { await apiFetch(`/api/topology/areas/${id}`, { method: 'DELETE' }, token); flash('Area deleted'); await load(); } catch (e: any) { fail(e); }
@@ -273,6 +296,12 @@ export default function GisPage() {
       {summary.truncated && <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-300 text-sm">Map pin limit reached — showing the first {subCount} geocoded subscribers. Raise “Max pins” to load more.</div>}
       {picked && ['add-box', 'edit-box', 'add-route', 'edit-route', 'trace'].includes(mode) && (
         <div className="text-xs text-muted-foreground">Last map pick: {picked.lat.toFixed(5)}, {picked.lng.toFixed(5)}</div>
+      )}
+      {undoMove && (
+        <div className="p-3 rounded-xl border border-primary/30 bg-primary/10 text-sm flex items-center justify-between gap-3">
+          <span>Moved <b>{undoMove.name}</b> — position changed.</span>
+          <button onClick={undoBoxMove} className="px-3 py-1 rounded-lg bg-primary text-primary-foreground font-semibold text-xs">Undo move</button>
+        </div>
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
@@ -438,7 +467,10 @@ export default function GisPage() {
                   <button onClick={saveArea} className="btn btn-primary">Add</button>
                 </div>
                 <div className="max-h-28 overflow-auto space-y-1">
-                  {areas.map(a => <div key={a.id} className="flex items-center justify-between p-1.5 rounded-lg bg-muted/40"><span>{a.name}</span><button onClick={() => removeArea(a.id)} className="text-red-400 hover:text-red-300"><Trash2 className="w-3.5 h-3.5" /></button></div>)}
+                  {areas.map(a => <NameRow key={a.id} name={a.name} testId={`area-${a.id}`} renaming={renaming?.type === 'area' && renaming.id === a.id ? renaming.name : null}
+                    onStart={() => setRenaming({ type: 'area', id: a.id, name: a.name })}
+                    onChange={v => setRenaming(r => r && { ...r, name: v })} onSave={saveRename} onCancel={() => setRenaming(null)}
+                    onDelete={() => removeArea(a.id)} />)}
                 </div>
                 <div className="flex gap-2 pt-2 border-t border-border">
                   <input value={zoneName} onChange={e => setZoneName(e.target.value)} placeholder="New zone name" className="flex-1 btn btn-outline text-foreground" />
@@ -446,7 +478,10 @@ export default function GisPage() {
                   <button onClick={saveZone} className="btn btn-primary">Add</button>
                 </div>
                 <div className="max-h-28 overflow-auto space-y-1">
-                  {zones.map(z => <div key={z.id} className="flex items-center justify-between p-1.5 rounded-lg bg-muted/40"><span>{z.name} <span className="text-xs text-muted-foreground">/ {z.area_name}</span></span><button onClick={() => removeZone(z.id)} className="text-red-400 hover:text-red-300"><Trash2 className="w-3.5 h-3.5" /></button></div>)}
+                  {zones.map(z => <NameRow key={z.id} name={z.name} sub={`/ ${z.area_name}`} testId={`zone-${z.id}`} renaming={renaming?.type === 'zone' && renaming.id === z.id ? renaming.name : null}
+                    onStart={() => setRenaming({ type: 'zone', id: z.id, name: z.name })}
+                    onChange={v => setRenaming(r => r && { ...r, name: v })} onSave={saveRename} onCancel={() => setRenaming(null)}
+                    onDelete={() => removeZone(z.id)} />)}
                 </div>
               </div>
             </Panel>
@@ -459,7 +494,7 @@ export default function GisPage() {
                 <div className="max-h-48 overflow-auto space-y-1">
                   {boxesList.length === 0 && <div className="text-xs text-muted-foreground">None yet — use “Add Box”.</div>}
                   {boxesList.map(b => (
-                    <div key={b.id} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-muted/40 text-sm">
+                    <div key={b.id} data-box-row={b.id} className="flex items-center justify-between gap-2 p-2 rounded-lg bg-muted/40 text-sm">
                       <button className="text-left flex-1" onClick={() => { if (b.latitude && b.longitude) flyTo(+b.latitude, +b.longitude, 17); handleBoxAction(b.id, 'details'); }}>
                         <div className="font-semibold">{b.name}</div><div className="text-xs text-muted-foreground">{b.box_type} • {b.subscriber_count || 0} subs • {b.zone_name || ''}</div>
                       </button>
@@ -490,6 +525,27 @@ export default function GisPage() {
   );
 }
 
+function NameRow({ name, sub, renaming, testId, onStart, onChange, onSave, onCancel, onDelete }: {
+  name: string; sub?: string; renaming: string | null; testId: string; onStart: () => void; onChange: (v: string) => void;
+  onSave: () => void; onCancel: () => void; onDelete: () => void;
+}) {
+  if (renaming !== null) return (
+    <div data-name-row={testId} className="flex items-center gap-1 p-1 rounded-lg bg-muted/40">
+      <input autoFocus value={renaming} onChange={e => onChange(e.target.value)} className="flex-1 min-w-0 btn btn-outline text-foreground py-1" />
+      <button onClick={onSave} className="px-2 py-1 rounded-lg bg-primary text-primary-foreground text-xs">Save</button>
+      <button onClick={onCancel} className="px-2 py-1 rounded-lg border border-border text-xs">Cancel</button>
+    </div>
+  );
+  return (
+    <div data-name-row={testId} className="flex items-center justify-between p-1.5 rounded-lg bg-muted/40">
+      <span className="min-w-0 truncate">{name} {sub && <span className="text-xs text-muted-foreground">{sub}</span>}</span>
+      <span className="flex gap-2 shrink-0">
+        <button onClick={onStart} className="text-primary hover:text-primary/70" title="Rename"><Pencil className="w-3.5 h-3.5" /></button>
+        <button onClick={onDelete} className="text-red-400 hover:text-red-300" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+      </span>
+    </div>
+  );
+}
 function Kpi({ icon, label, value, hint }: { icon: React.ReactNode; label: string; value: React.ReactNode; hint: string }) {
   return <div className="card p-3"><div className="flex items-center gap-2 text-xs text-muted-foreground">{icon}{label}</div><div className="text-xl font-bold mt-1">{value}</div><div className="text-[11px] text-muted-foreground">{hint}</div></div>;
 }

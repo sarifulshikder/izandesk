@@ -309,3 +309,100 @@ test.describe('GIS authorization', () => {
     expect(overflow, 'GIS workbench should not scroll horizontally on a phone').toBe(false);
   });
 });
+
+test.describe('GIS mutating flows (opt-in)', () => {
+  test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
+
+  test('admin can create, edit, drag, undo and delete a box on the map', async ({ page, request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const stamp = Date.now().toString().slice(-6);
+    const name = `E2E GIS ${stamp}`;
+    const renamed = `${name} edited`;
+    const code = `E2EGIS-${stamp}`;
+    let boxId = '';
+    page.on('dialog', d => d.accept());
+
+    const boxes = async () => (await (await request.get('/api/topology/boxes', { headers })).json()).data as any[];
+    try {
+      await login(page, admin);
+      await gotoStable(page, '/gis');
+
+      await page.getByRole('button', { name: 'Add Box', exact: true }).click();
+      await page.getByLabel('Name').fill(name);
+      await page.getByLabel('Code').fill(code);
+      await page.getByLabel('Latitude').fill('23.770000');
+      await page.getByLabel('Longitude').fill('90.400000');
+      await page.getByRole('button', { name: 'Save Distribution Box' }).click();
+      await expect(page.getByText('Distribution box created')).toBeVisible();
+
+      boxId = (await boxes()).find(b => b.name === name)?.id || '';
+      expect(boxId, 'created box should exist in the API').toBeTruthy();
+
+      // Edit through the side list.
+      await page.locator(`[data-box-row="${boxId}"] button[title="Edit"]`).click();
+      await page.getByLabel('Name').fill(renamed);
+      await page.getByRole('button', { name: 'Save Distribution Box' }).click();
+      await expect(page.getByText('Distribution box updated')).toBeVisible();
+      expect((await boxes()).find(b => b.id === boxId)?.name).toBe(renamed);
+
+      // Drag the marker and verify the new coordinates persisted.
+      const marker = page.locator(`.gis-box-marker:has([data-box-id="${boxId}"])`);
+      await expect(marker).toBeVisible();
+      const bb = await marker.boundingBox();
+      expect(bb).toBeTruthy();
+      await page.mouse.move(bb!.x + bb!.width / 2, bb!.y + bb!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(bb!.x + bb!.width / 2 + 60, bb!.y + bb!.height / 2 + 40, { steps: 12 });
+      await page.mouse.up();
+      await expect(page.getByRole('button', { name: 'Undo move' })).toBeVisible();
+      const moved = (await boxes()).find(b => b.id === boxId)!;
+      expect(Number(moved.latitude)).not.toBe(23.77);
+
+      await page.getByRole('button', { name: 'Undo move' }).click();
+      await expect(page.getByText('Move undone')).toBeVisible();
+      const restored = (await boxes()).find(b => b.id === boxId)!;
+      expect(Number(restored.latitude)).toBeCloseTo(23.77, 4);
+
+      // Delete with confirmation.
+      await page.locator(`[data-box-row="${boxId}"] button[title="Delete"]`).click();
+      await page.getByRole('button', { name: 'Delete', exact: true }).last().click();
+      await expect(page.getByText('Distribution box deleted')).toBeVisible();
+      expect((await boxes()).some(b => b.id === boxId)).toBe(false);
+      boxId = '';
+    } finally {
+      if (boxId) await request.delete(`/api/topology/boxes/${boxId}`, { headers });
+    }
+  });
+
+  test('admin can create, rename and delete an area', async ({ page, request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const stamp = Date.now().toString().slice(-6);
+    const name = `E2E Area ${stamp}`, renamed = `${name} renamed`;
+    let areaId = '';
+    page.on('dialog', d => d.accept());
+    try {
+      await login(page, admin);
+      await gotoStable(page, '/gis');
+      await page.getByRole('button', { name: 'Areas & Zones' }).click();
+      await page.getByPlaceholder('New area name').fill(name);
+      await page.getByRole('button', { name: 'Add', exact: true }).first().click();
+      await expect(page.getByText('Area created')).toBeVisible();
+      areaId = ((await (await request.get('/api/topology/areas', { headers })).json()).data || []).find((a: any) => a.name === name)?.id || '';
+      expect(areaId, 'created area should exist').toBeTruthy();
+
+      await page.locator(`[data-name-row="area-${areaId}"] button[title="Rename"]`).click();
+      await page.locator(`[data-name-row="area-${areaId}"] input`).fill(renamed);
+      await page.locator(`[data-name-row="area-${areaId}"] button`).filter({ hasText: 'Save' }).click();
+      await expect(page.getByText('Area renamed')).toBeVisible();
+      expect(((await (await request.get('/api/topology/areas', { headers })).json()).data || []).find((a: any) => a.id === areaId)?.name).toBe(renamed);
+
+      await page.locator(`[data-name-row="area-${areaId}"] button[title="Delete"]`).click();
+      await expect(page.getByText('Area deleted')).toBeVisible();
+      areaId = '';
+    } finally {
+      if (areaId) await request.delete(`/api/topology/areas/${areaId}`, { headers });
+    }
+  });
+});

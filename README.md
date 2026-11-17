@@ -125,6 +125,7 @@ pnpm --filter web dev     # http://localhost:3000
   - `NEXT_PUBLIC_API_URL=` (empty = same-origin `/api` proxy, recommended)
   - `INTERNAL_API_URL=http://localhost:4000` (Next.js rewrite target)
   - `ALLOWED_DEV_ORIGINS=` comma-separated hosts/IPs/domains for remote dev access (e.g. public NAT IP)
+  - GIS map (admin/ops roles only): `NEXT_PUBLIC_GIS_TILE_URL` overrides the default OpenStreetMap tile source — set it to an internal tile server for offline/air-gapped deployments; `NEXT_PUBLIC_GIS_CENTER="lat,lng"` overrides the initial map centre (default `23.8103,90.4125`). See `apps/web/.env.example`. The map loads at most 10,000 geocoded subscribers per request (configurable in the GIS sidebar); a warning appears when the cap truncates results.
 - **API:** see `apps/api/.env.example`
   - `API_PORT`, `JWT_SECRET`, `WEB_ORIGIN`, `ALLOW_LAN_ORIGINS`
 - **Caddy/HTTPS (optional):** see `docker/.env.example` and `docker/Caddyfile`
