@@ -40,10 +40,25 @@ function scopeFor(scope: { restricted: boolean; uuid: string | null }) {
 }
 
 /** Guard against an unbounded payload when a deployment has many geocoded
- *  subscribers. Callers may raise it via ?limit= but never beyond 10000. */
+ *  subscribers. Callers may raise it via ?limit= but never beyond 50000. */
 function mapLimit(req: any): number {
-  return Math.min(10000, Math.max(1, Number(req.query.limit) || 5000));
+  return Math.min(50000, Math.max(1, Number(req.query.limit) || 5000));
 }
+
+/** Optional viewport filter: minLng,minLat,maxLng,maxLat. */
+function parseBbox(req: any): [number, number, number, number] | null {
+  const raw = String(req.query.bbox || '');
+  if (!raw) return null;
+  const p = raw.split(',').map(Number);
+  if (p.length !== 4 || p.some(n => !Number.isFinite(n))) return null;
+  const [minLng, minLat, maxLng, maxLat] = p;
+  if (minLng < -180 || maxLng > 180 || minLat < -90 || maxLat > 90 || minLng >= maxLng || minLat >= maxLat) return null;
+  return [minLng, minLat, maxLng, maxLat];
+}
+
+const GEOCODE_URL = process.env.GIS_GEOCODE_URL || 'https://nominatim.openstreetmap.org/search';
+const geocodeCache = new Map<string, { at: number; data: any[] }>();
+let lastGeocodeAt = 0;
 
 const SUB_COLUMNS = `s.id, s.client_code, s.full_name, s.status, s.connection_type, s.username,
   s.latitude, s.longitude, s.address, s.distribution_box_id as box_id,
@@ -56,7 +71,16 @@ router.get('/overview', asyncHandler(async (req, res) => {
   const scope = await subscriberScope(req);
   const scoped = scopeFor(scope);
   const limit = mapLimit(req);
-  const limitParam = `$${scoped.params.length + 1}`;
+  const bbox = parseBbox(req);
+  const subParams: any[] = [...scoped.params];
+  let bboxSql = '';
+  if (bbox) {
+    const b0 = subParams.length + 1;
+    subParams.push(bbox[0], bbox[2], bbox[1], bbox[3]);
+    bboxSql = ` AND s.longitude BETWEEN $${b0} AND $${b0 + 1} AND s.latitude BETWEEN $${b0 + 2} AND $${b0 + 3}`;
+  }
+  const scopedAndBbox = `${scoped.sql}${bboxSql}`;
+  const limitParam = `$${subParams.length + 1}`;
 
   const boxes = await pool.query(`
     SELECT d.id, d.name, d.code, d.box_type, d.capacity_ports, d.latitude, d.longitude, d.address,
@@ -69,8 +93,8 @@ router.get('/overview', asyncHandler(async (req, res) => {
   const subs = await pool.query(`
     SELECT ${SUB_COLUMNS}
     FROM subscribers s ${SUB_JOINS}
-    WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL AND ${scoped.sql}
-    ORDER BY s.id LIMIT ${limitParam}`, [...scoped.params, limit]);
+    WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL AND ${scopedAndBbox}
+    ORDER BY s.id LIMIT ${limitParam}`, [...subParams, limit]);
   const routes = await pool.query(`
     SELECT f.id, f.name, f.route_type, f.notes, fb.name as from_box_name, tb.name as to_box_name,
            ST_AsGeoJSON(f.path::geometry) as path_geojson,
@@ -82,10 +106,10 @@ router.get('/overview', asyncHandler(async (req, res) => {
   const totals = await pool.query(`
     SELECT count(*)::int AS total,
            count(*) FILTER (WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL)::int AS geocoded
-    FROM subscribers s WHERE ${scoped.sql}`, scoped.params);
+    FROM subscribers s WHERE ${scopedAndBbox}`, subParams);
   const byStatus = await pool.query(`
-    SELECT s.status, count(*)::int AS n FROM subscribers s WHERE ${scoped.sql}
-    GROUP BY s.status ORDER BY n DESC`, scoped.params);
+    SELECT s.status, count(*)::int AS n FROM subscribers s WHERE ${scopedAndBbox}
+    GROUP BY s.status ORDER BY n DESC`, subParams);
   const boxTotals = await pool.query('SELECT count(*)::int AS total FROM distribution_boxes');
 
   const toFeatureCollection = (features: any[]) => ({ type: 'FeatureCollection', features });
@@ -128,6 +152,7 @@ router.get('/overview', asyncHandler(async (req, res) => {
     subscribers: toFeatureCollection(subFeatures),
     fiberRoutes: toFeatureCollection(routeFeatures),
     summary,
+    viewport: bbox ? { minLng: bbox[0], minLat: bbox[1], maxLng: bbox[2], maxLat: bbox[3] } : null,
   });
 }));
 
@@ -173,6 +198,51 @@ router.get('/trace/subscriber/:id', asyncHandler(async (req, res) => {
     routes = r.rows;
   }
   res.json({ subscriber: sanitizeSubscriber(sub), routes });
+}));
+
+/** Currently online subscribers that have coordinates — powers the live
+ *  session layer on the map. */
+router.get('/live-sessions', asyncHandler(async (req, res) => {
+  const scope = await subscriberScope(req);
+  const scoped = scopeFor(scope);
+  const r = await pool.query(`
+    SELECT DISTINCT ON (s.id) s.id, s.client_code, s.full_name, s.status, s.latitude, s.longitude,
+           ss.status as session_status, ss.rx_bps, ss.tx_bps, ss.ip_address, ss.updated_at
+    FROM subscriber_sessions ss
+    JOIN subscribers s ON s.id=ss.subscriber_id
+    WHERE ${scoped.sql} AND s.latitude IS NOT NULL AND s.longitude IS NOT NULL
+      AND upper(ss.status)='ONLINE'
+    ORDER BY s.id, ss.updated_at DESC LIMIT 500`, scoped.params);
+  res.json({ data: r.rows });
+}));
+
+/** Address -> coordinates via Nominatim (or GIS_GEOCODE_URL). Server-side so
+ *  the browser doesn't depend on a third party directly; cached for 24h and
+ *  throttled to respect the provider's usage policy. */
+router.get('/geocode', asyncHandler(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 3) return res.status(400).json({ message: 'q must be at least 3 characters' });
+  const cached = geocodeCache.get(q);
+  if (cached && Date.now() - cached.at < 24 * 3600 * 1000) return res.json({ data: cached.data, cached: true });
+  const wait = Math.max(0, 1100 - (Date.now() - lastGeocodeAt));
+  if (wait) await new Promise(r => setTimeout(r, wait));
+  lastGeocodeAt = Date.now();
+  try {
+    const url = `${GEOCODE_URL}?format=jsonv2&limit=5&q=${encodeURIComponent(q)}`;
+    const resp = await fetch(url, {
+      headers: { 'User-Agent': 'IzanDesk-GIS/1.0 (administrative geocoding)' },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!resp.ok) throw new Error(`provider returned ${resp.status}`);
+    const rows: any[] = await resp.json() as any[];
+    const data = rows.map(r => ({ label: r.display_name, lat: Number(r.lat), lng: Number(r.lon), type: r.type }))
+      .filter(x => Number.isFinite(x.lat) && Number.isFinite(x.lng));
+    if (geocodeCache.size > 200) geocodeCache.delete(geocodeCache.keys().next().value as string);
+    geocodeCache.set(q, { at: Date.now(), data });
+    res.json({ data });
+  } catch (e: any) {
+    res.status(502).json({ message: `Geocoding unavailable: ${e.message}` });
+  }
 }));
 
 export default router;

@@ -564,6 +564,14 @@ h1.text-2xl.font-black {
 @keyframes subtle-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .8; transform: scale(.98); } }
 .pulse-active { animation: subtle-pulse 3s infinite ease-in-out; }
 
+/* GIS live-session markers */
+@keyframes gis-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(34,211,238,.7); }
+  70% { box-shadow: 0 0 0 12px rgba(34,211,238,0); }
+  100% { box-shadow: 0 0 0 0 rgba(34,211,238,0); }
+}
+.gis-live-marker { background: transparent !important; border: 0 !important; }
+
 /* Print: show only the report content (SRZone-style Print buttons). */
 @media print {
   .sidebar, .topbar, .mobile-bottom-nav, .page-tabs, button,

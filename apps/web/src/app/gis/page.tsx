@@ -1,17 +1,18 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import {
   MapPin, Route, Plus, RefreshCw, X, Box, LocateFixed, Search, Maximize2,
-  Download, Pencil, Trash2, Layers, Building2, Users, Network, Info, CheckCircle2,
+  Download, Pencil, Trash2, Layers, Building2, Users, Network, Info, CheckCircle2, Upload, Flame, Radio,
 } from 'lucide-react';
 
 const GisMap = dynamic(() => import('./gis-map'), { ssr: false, loading: () => <div className="h-[650px] card flex items-center justify-center text-muted-foreground">Loading map...</div> });
 
-type Mode = 'none' | 'add-box' | 'edit-box' | 'delete-box' | 'add-route' | 'edit-route' | 'delete-route' | 'trace' | 'manage' | 'details';
+type Mode = 'none' | 'add-box' | 'edit-box' | 'delete-box' | 'add-route' | 'edit-route' | 'delete-route' | 'trace' | 'manage' | 'details' | 'import';
+type MapStyle = 'streets' | 'satellite';
 
 export default function GisPage() {
   const { token, user } = useAuth();
@@ -29,7 +30,7 @@ export default function GisPage() {
   const [form, setForm] = useState<any>({});
   const [picked, setPicked] = useState<{ lat: number; lng: number } | null>(null);
   const [draftPoints, setDraftPoints] = useState<[number, number][]>([]);
-  const [layers, setLayers] = useState<Record<string, boolean>>({ boxes: true, routes: true, status_active: true, status_suspended: true, status_other: true });
+  const [layers, setLayers] = useState<Record<string, boolean>>({ boxes: true, routes: true, status_active: true, status_suspended: true, status_other: true, heat: false, live: false });
   const [query, setQuery] = useState('');
   const [focus, setFocus] = useState<{ lat: number; lng: number; zoom?: number; key: number } | null>(null);
   const [fitKey, setFitKey] = useState(0);
@@ -40,23 +41,37 @@ export default function GisPage() {
   const [zoneArea, setZoneArea] = useState('');
   const [renaming, setRenaming] = useState<{ type: 'area' | 'zone'; id: string; name: string } | null>(null);
   const [undoMove, setUndoMove] = useState<{ id: string; name: string; lat: number; lng: number } | null>(null);
+  const [mapStyle, setMapStyle] = useState<MapStyle>('streets');
+  const [showLive, setShowLive] = useState(false);
+  const [liveSessions, setLiveSessions] = useState<any[]>([]);
+  const [bbox, setBbox] = useState<[number, number, number, number] | null>(null);
+  const bboxTimer = useRef<any>(null);
+  const [importText, setImportText] = useState('');
+  const [importResult, setImportResult] = useState<any>(null);
+  const [geoQuery, setGeoQuery] = useState('');
+  const [geoResults, setGeoResults] = useState<any[]>([]);
+  const [geoBusy, setGeoBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!token || user?.role === 'RESELLER') return;
     setLoading(true); setError(null);
     try {
-      const [g, a, z, b, r, s] = await Promise.all([
-        apiFetch<any>(`/api/gis/overview?limit=${mapLimit}`, {}, token),
+      const bboxQuery = bbox ? `&bbox=${bbox.join(',')}` : '';
+      const tasks: Promise<any>[] = [
+        apiFetch<any>(`/api/gis/overview?limit=${mapLimit}${bboxQuery}`, {}, token),
         apiFetch<{ data: any[] }>('/api/topology/areas', {}, token),
         apiFetch<{ data: any[] }>('/api/topology/zones', {}, token),
         apiFetch<{ data: any[] }>('/api/topology/boxes', {}, token),
         apiFetch<{ data: any[] }>('/api/topology/fiber-routes', {}, token),
         apiFetch<{ data: any[] }>('/api/subscribers?limit=200', {}, token),
-      ]);
+      ];
+      if (showLive) tasks.push(apiFetch<{ data: any[] }>('/api/gis/live-sessions', {}, token));
+      const [g, a, z, b, r, s, live] = await Promise.all(tasks);
       setData(g); setAreas(a.data || []); setZones(z.data || []);
       setBoxesList(b.data || []); setRoutesList(r.data || []); setSubscribers(s.data || []);
+      if (showLive) setLiveSessions(live?.data || []);
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [token, user, mapLimit]);
+  }, [token, user, mapLimit, bbox, showLive]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -167,6 +182,42 @@ export default function GisPage() {
   const locate = () => {
     if (!navigator.geolocation) return fail(new Error('Geolocation is not supported by this browser'));
     setLocateKey(k => k + 1);
+  };
+  const handleBoundsChange = useCallback((next: [number, number, number, number]) => {
+    if (bbox && next.every((v, i) => Math.abs(v - bbox[i]) < 0.01)) return;
+    if (bboxTimer.current) clearTimeout(bboxTimer.current);
+    bboxTimer.current = setTimeout(() => setBbox(next), 400);
+  }, [bbox]);
+
+  const openImport = () => { setImportText(''); setImportResult(null); setMode('import'); setNotice(null); };
+  const runImport = async () => {
+    try {
+      let parsed: any;
+      try { parsed = JSON.parse(importText); } catch { throw new Error('Invalid JSON'); }
+      if (!Array.isArray(parsed?.features)) throw new Error('Expected a GeoJSON FeatureCollection with a features array');
+      const res = await apiFetch<any>('/api/topology/import', { method: 'POST', body: JSON.stringify({ features: parsed.features }) }, token);
+      setImportResult(res);
+      flash(`Imported ${res.created.boxes} boxes and ${res.created.routes} routes`);
+      await load();
+    } catch (e: any) { fail(e); }
+  };
+  const onImportFile = async (file?: File) => {
+    if (!file) return;
+    try { setImportText(await file.text()); setImportResult(null); } catch (e: any) { fail(e); }
+  };
+
+  const runGeocode = async () => {
+    if (geoQuery.trim().length < 3) return fail(new Error('Enter at least 3 characters to geocode'));
+    setGeoBusy(true); setError(null);
+    try {
+      const r = await apiFetch<{ data: any[] }>(`/api/gis/geocode?q=${encodeURIComponent(geoQuery)}`, {}, token);
+      setGeoResults(r.data || []);
+      if (!r.data?.length) flash('No geocoding matches');
+    } catch (e: any) { fail(e); } finally { setGeoBusy(false); }
+  };
+  const pickGeo = (g: any) => {
+    setForm((f: any) => ({ ...f, latitude: String(g.lat), longitude: String(g.lng), address: f.address || g.label }));
+    setGeoResults([]); flyTo(g.lat, g.lng, 17); flash('Coordinates filled from geocoding result');
   };
 
   const traceToSubscriber = async () => {
@@ -279,6 +330,7 @@ export default function GisPage() {
           <button onClick={openNewRoute} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><Route className="w-4 h-4" />Draw Route</button>
           <button onClick={() => { setForm({ name: '', from_box_id: '', subscriber_id: '' }); setDraftPoints([]); setMode('trace'); }} className="px-3 py-2 rounded-xl border border-cyan-500/40 text-cyan-400 text-sm font-semibold inline-flex items-center gap-2"><LocateFixed className="w-4 h-4" />Trace to Subscriber</button>
           <button onClick={() => { setMode('manage'); setNotice(null); }} className="btn btn-outline inline-flex items-center gap-2"><Building2 className="w-4 h-4" />Areas & Zones</button>
+          <button onClick={openImport} className="btn btn-outline inline-flex items-center gap-2"><Upload className="w-4 h-4" />Import</button>
         </div>
       </div>
 
@@ -290,6 +342,13 @@ export default function GisPage() {
         <Kpi icon={<Route className="w-4 h-4" />} label="Fiber routes" value={summary.routes_total ?? 0} hint="drawn / traced" />
         <Kpi icon={<Info className="w-4 h-4" />} label="Mapped fiber" value={`${((summary.route_length_m ?? 0) / 1000).toFixed(2)} km`} hint="total length" />
       </div>
+
+      {bbox && (
+        <div className="flex items-center justify-between gap-3 px-1 text-xs text-muted-foreground">
+          <span>Showing pins in the current view ({subCount}). Pan or zoom to load another area.</span>
+          <button onClick={() => setBbox(null)} className="btn btn-outline py-1 shrink-0">Clear view / load all</button>
+        </div>
+      )}
 
       {notice && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm flex items-center gap-2"><CheckCircle2 className="w-4 h-4" />{notice}</div>}
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
@@ -305,9 +364,17 @@ export default function GisPage() {
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
-        <div className="xl:col-span-2 h-[650px] card overflow-hidden">
+        <div className="xl:col-span-2 h-[650px] card overflow-hidden relative">
+          <div className="absolute top-3 right-3 z-[1100] flex rounded-xl overflow-hidden border border-border bg-card/95 shadow">
+            <button onClick={() => setMapStyle('streets')} className={`px-3 py-1.5 text-xs font-semibold ${mapStyle === 'streets' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Streets</button>
+            <button onClick={() => setMapStyle('satellite')} className={`px-3 py-1.5 text-xs font-semibold ${mapStyle === 'satellite' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Satellite</button>
+          </div>
           <GisMap
             data={data}
+            mapStyle={mapStyle}
+            heatmap={layers.heat}
+            liveSessions={liveSessions}
+            onBoundsChange={handleBoundsChange}
             onPick={['add-box', 'edit-box', 'add-route', 'edit-route', 'trace'].includes(mode) ? onPick : undefined}
             draftLine={draftPoints}
             layers={layers}
@@ -354,6 +421,8 @@ export default function GisPage() {
                 <Chk label="Active subs" checked={layers.status_active} onChange={v => setLayers(l => ({ ...l, status_active: v }))} color="bg-emerald-500" />
                 <Chk label="Suspended" checked={layers.status_suspended} onChange={v => setLayers(l => ({ ...l, status_suspended: v }))} color="bg-red-500" />
                 <Chk label="Other subs" checked={layers.status_other} onChange={v => setLayers(l => ({ ...l, status_other: v }))} color="bg-amber-500" />
+                <Chk label="Heatmap" checked={layers.heat} onChange={v => setLayers(l => ({ ...l, heat: v }))} color="bg-orange-500" />
+                <Chk label="Live sessions" checked={layers.live} onChange={v => { setLayers(l => ({ ...l, live: v })); setShowLive(v); }} color="bg-cyan-400" />
               </div>
             )}
             <div className="flex items-center justify-between gap-2 pt-3 mt-3 border-t border-border text-xs">
@@ -378,6 +447,22 @@ export default function GisPage() {
                 <Inp label="Capacity Ports" value={form.capacity_ports ?? 8} onChange={v => setForm({ ...form, capacity_ports: Number(v) })} type="number" />
                 <div className="grid grid-cols-2 gap-2"><Inp label="Latitude" value={form.latitude || ''} onChange={v => setForm({ ...form, latitude: v })} /><Inp label="Longitude" value={form.longitude || ''} onChange={v => setForm({ ...form, longitude: v })} /></div>
                 <Inp label="Address" value={form.address || ''} onChange={v => setForm({ ...form, address: v })} />
+                <div className="pt-1">
+                  <div className="text-xs font-semibold text-muted-foreground mb-1">Find coordinates from address</div>
+                  <div className="flex gap-2">
+                    <input value={geoQuery} onChange={e => setGeoQuery(e.target.value)} placeholder="Area, street, city…" className="flex-1 min-w-0 btn btn-outline text-foreground" />
+                    <button onClick={runGeocode} disabled={geoBusy} className="btn btn-outline shrink-0">{geoBusy ? '…' : 'Find'}</button>
+                  </div>
+                  {geoResults.length > 0 && (
+                    <div className="mt-2 max-h-32 overflow-auto space-y-1">
+                      {geoResults.map((g, i) => (
+                        <button key={i} onClick={() => pickGeo(g)} className="w-full text-left p-1.5 rounded-lg hover:bg-muted text-xs">
+                          <span className="font-mono text-muted-foreground">{g.lat.toFixed(5)}, {g.lng.toFixed(5)}</span> — {g.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <Inp label="Notes" value={form.notes || ''} onChange={v => setForm({ ...form, notes: v })} />
                 <button onClick={saveBox} className="w-full mt-2 btn btn-primary">Save Distribution Box</button>
               </div>
@@ -483,6 +568,23 @@ export default function GisPage() {
                     onChange={v => setRenaming(r => r && { ...r, name: v })} onSave={saveRename} onCancel={() => setRenaming(null)}
                     onDelete={() => removeZone(z.id)} />)}
                 </div>
+              </div>
+            </Panel>
+          )}
+
+          {mode === 'import' && (
+            <Panel title="Import Topology (GeoJSON)" onClose={endMode}>
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground">Upload the GeoJSON exported from /gis, or paste a FeatureCollection below. Point features become boxes; LineString features become routes. Use <code className="font-mono">code</code>, <code className="font-mono">zone_id</code>, <code className="font-mono">from_code</code> and <code className="font-mono">to_code</code> properties to link records.</div>
+                <input type="file" accept=".geojson,.json,application/json" onChange={e => onImportFile(e.target.files?.[0])} className="w-full text-xs text-muted-foreground" />
+                <textarea value={importText} onChange={e => setImportText(e.target.value)} rows={8} placeholder='{"type":"FeatureCollection","features":[]}' className="w-full btn btn-outline text-foreground font-mono text-xs" />
+                <button onClick={runImport} disabled={!importText.trim()} className="w-full btn btn-primary disabled:opacity-50">Import features</button>
+                {importResult && (
+                  <div className="p-2 rounded-lg bg-muted/50 text-xs space-y-1">
+                    <div>Created: <b>{importResult.created.boxes}</b> boxes, <b>{importResult.created.routes}</b> routes; skipped: {importResult.skipped}</div>
+                    {importResult.errors?.length > 0 && <div className="text-red-300">{importResult.errors.length} row(s) failed: {importResult.errors.slice(0, 3).map((e: any) => `#${e.index + 1} ${e.message}`).join('; ')}</div>}
+                  </div>
+                )}
               </div>
             </Panel>
           )}

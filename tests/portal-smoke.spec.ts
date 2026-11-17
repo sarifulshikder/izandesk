@@ -243,6 +243,15 @@ test.describe('GIS authorization', () => {
       expect(adminTrace.ok(), `admin trace for ${traceId}`).toBeTruthy();
     }
 
+    // Viewport filtering, live sessions and geocoding are all admin-guarded too.
+    for (const path of ['/api/gis/live-sessions', '/api/gis/geocode?q=Mirpur']) {
+      expect((await request.get(path, { headers: auth(resellerToken) })).status()).toBe(403);
+    }
+    const outside = await request.get('/api/gis/overview?bbox=90,23,91,24', { headers: auth(adminToken) });
+    const inside = await request.get('/api/gis/overview?bbox=89,22,90,23', { headers: auth(adminToken) });
+    expect((await outside.json()).subscribers.features.length).toBe(0);
+    expect((await inside.json()).subscribers.features.length).toBeGreaterThanOrEqual(1);
+
     for (const path of ['/api/gis/overview', '/api/gis/trace/subscriber/00000000-0000-0000-0000-000000000000', '/api/gis/boxes/00000000-0000-0000-0000-000000000000/details']) {
       const r = await request.get(path, { headers: auth(resellerToken) });
       expect(r.status(), `reseller GET ${path}`).toBe(403);
@@ -295,6 +304,16 @@ test.describe('GIS authorization', () => {
     await expect(page.getByRole('button', { name: 'Export GeoJSON' })).toBeVisible();
     await expect(page.getByText('Map layers')).toBeVisible();
     await expect(page.getByLabel('Boxes')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Streets' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Satellite' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Satellite' }).click();
+    await expect(page.getByRole('button', { name: 'Satellite' })).toHaveClass(/bg-primary/);
+    await page.getByRole('button', { name: 'Streets' }).click();
+    await page.getByLabel('Heatmap').check();
+    await expect(page.locator('canvas.leaflet-heatmap-layer')).toHaveCount(1);
+    await page.getByLabel('Live sessions').check();
+    await expect(page.getByLabel('Live sessions')).toBeChecked();
 
     await page.getByRole('button', { name: 'Areas & Zones' }).click();
     await expect(page.getByPlaceholder('New area name')).toBeVisible();
@@ -403,6 +422,39 @@ test.describe('GIS mutating flows (opt-in)', () => {
       areaId = '';
     } finally {
       if (areaId) await request.delete(`/api/topology/areas/${areaId}`, { headers });
+    }
+  });
+
+  test('admin can bulk-import boxes and routes from GeoJSON', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const stamp = Date.now().toString().slice(-6);
+    const code = `E2EIMP-${stamp}`, routeName = `E2E imported route ${stamp}`;
+    let boxId = '', routeId = '';
+    try {
+      const res = await request.post('/api/topology/import', {
+        headers,
+        data: { features: [
+          { type: 'Feature', geometry: { type: 'Point', coordinates: [90.41, 23.77] }, properties: { name: `E2E imported box ${stamp}`, code, capacity_ports: 8 } },
+          { type: 'Feature', geometry: { type: 'LineString', coordinates: [[90.41, 23.77], [90.42, 23.78]] }, properties: { name: routeName, from_code: code } },
+          { type: 'Feature', geometry: { type: 'Polygon', coordinates: [] }, properties: {} },
+        ] },
+      });
+      expect(res.ok()).toBeTruthy();
+      const body = await res.json();
+      expect(body.created.boxes).toBe(1);
+      expect(body.created.routes).toBe(1);
+      expect(body.skipped).toBe(1);
+
+      const boxes = (await (await request.get('/api/topology/boxes', { headers })).json()).data || [];
+      boxId = boxes.find((b: any) => b.code === code)?.id || '';
+      const routes = (await (await request.get('/api/topology/fiber-routes', { headers })).json()).data || [];
+      routeId = routes.find((r: any) => r.name === routeName)?.id || '';
+      expect(boxId, 'imported box should exist').toBeTruthy();
+      expect(routeId, 'imported route should exist').toBeTruthy();
+    } finally {
+      if (routeId) await request.delete(`/api/topology/fiber-routes/${routeId}`, { headers });
+      if (boxId) await request.delete(`/api/topology/boxes/${boxId}`, { headers });
     }
   });
 });

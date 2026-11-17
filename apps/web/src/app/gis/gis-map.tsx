@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useEffect, useMemo } from 'react';
-import { DivIcon, latLngBounds } from 'leaflet';
+import { DivIcon, latLngBounds, LatLngBounds } from 'leaflet';
+import { HeatLayer as LeafletHeatLayer } from 'leaflet.heat';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, CircleMarker, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -9,6 +10,7 @@ import 'leaflet/dist/leaflet.css';
 // Point NEXT_PUBLIC_GIS_TILE_URL at an internal tile server for offline/air-gapped
 // deployments, and NEXT_PUBLIC_GIS_CENTER at "lat,lng" for a different region.
 const TILE_URL = process.env.NEXT_PUBLIC_GIS_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const SATELLITE_URL = process.env.NEXT_PUBLIC_GIS_SATELLITE_TILE_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 const DEFAULT_CENTER: [number, number] = [23.8103, 90.4125];
 const parseCenter = (): [number, number] => {
   const raw = process.env.NEXT_PUBLIC_GIS_CENTER;
@@ -22,6 +24,13 @@ const boxIcon = (selected: boolean, id: string) => new DivIcon({
   iconSize: [selected ? 24 : 18, selected ? 24 : 18],
   iconAnchor: [selected ? 12 : 9, selected ? 12 : 9],
 });
+const liveIcon = new DivIcon({
+  className: 'gis-live-marker',
+  html: '<div style="width:14px;height:14px;border-radius:50%;background:#22d3ee;border:2px solid white;box-shadow:0 0 0 0 rgba(34,211,238,.7);animation:gis-pulse 1.8s infinite"></div>',
+  iconSize: [14, 14], iconAnchor: [7, 7],
+});
+
+export type GisMapStyle = 'streets' | 'satellite';
 
 export interface GisMapProps {
   data: any;
@@ -32,6 +41,10 @@ export interface GisMapProps {
   fitKey?: number;
   locateKey?: number;
   selectedBoxId?: string | null;
+  mapStyle?: GisMapStyle;
+  heatmap?: boolean;
+  liveSessions?: any[];
+  onBoundsChange?: (bbox: [number, number, number, number]) => void;
   onBoxMove?: (id: string, lat: number, lng: number) => void;
   onBoxAction?: (id: string, action: 'details' | 'edit' | 'delete') => void;
   onSubscriberAction?: (id: string, action: 'trace') => void;
@@ -41,6 +54,23 @@ export interface GisMapProps {
 
 function ClickCapture({ onPick }: { onPick: (lat: number, lng: number) => void }) {
   useMapEvents({ click(e) { onPick(e.latlng.lat, e.latlng.lng); } });
+  return null;
+}
+
+function BoundsReporter({ onChange }: { onChange?: (bbox: [number, number, number, number]) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!onChange) return;
+    const report = () => {
+      const b: LatLngBounds = map.getBounds();
+      onChange([
+        Number(b.getWest().toFixed(4)), Number(b.getSouth().toFixed(4)),
+        Number(b.getEast().toFixed(4)), Number(b.getNorth().toFixed(4)),
+      ]);
+    };
+    map.on('moveend zoomend', report);
+    return () => { map.off('moveend zoomend', report); };
+  }, [map, onChange]);
   return null;
 }
 
@@ -67,9 +97,23 @@ function MapCommands({ focus, fitKey, locateKey, points, onLocateError }: {
   return null;
 }
 
+function HeatLayer({ points, visible }: { points: [number, number, number][]; visible: boolean }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!visible || !points.length) return;
+    const layer = new (LeafletHeatLayer as any)(points, {
+      radius: 24, blur: 20, maxZoom: 17, minOpacity: 0.25,
+      gradient: { 0.2: '#22c55e', 0.5: '#f59e0b', 0.9: '#ef4444' },
+    }).addTo(map);
+    return () => { try { map.removeLayer(layer); } catch {} };
+  }, [map, visible, points]);
+  return null;
+}
+
 export default function GisMap({
-  data, onPick, draftLine, layers, focus, fitKey, locateKey,
-  selectedBoxId, onBoxMove, onBoxAction, onSubscriberAction, onRouteAction, onLocateError,
+  data, onPick, draftLine, layers, focus, fitKey, locateKey, selectedBoxId,
+  mapStyle = 'streets', heatmap, liveSessions, onBoundsChange,
+  onBoxMove, onBoxAction, onSubscriberAction, onRouteAction, onLocateError,
 }: GisMapProps) {
   const center = useMemo(parseCenter, []);
   const shown = (key: string) => layers?.[key] !== false;
@@ -79,6 +123,8 @@ export default function GisMap({
   const boxes: any[] = shown('boxes') ? (data?.boxes?.features || []) : [];
   const subs: any[] = (data?.subscribers?.features || []).filter((f: any) => shown(statusKey(f.properties.status)));
   const routes: any[] = shown('routes') ? (data?.fiberRoutes?.features || []) : [];
+  const heatPoints = useMemo<[number, number, number][]>(() =>
+    subs.map((f: any) => [f.geometry.coordinates[1], f.geometry.coordinates[0], 0.8]), [subs]);
 
   const fitPoints = useMemo<[number, number][]>(() => {
     const pts: [number, number][] = [];
@@ -90,9 +136,27 @@ export default function GisMap({
 
   return (
     <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }} className="rounded-2xl overflow-hidden">
-      <TileLayer attribution='&copy; OpenStreetMap contributors' url={TILE_URL} />
+      <TileLayer
+        key={mapStyle}
+        url={mapStyle === 'satellite' ? SATELLITE_URL : TILE_URL}
+        attribution={mapStyle === 'satellite' ? 'Tiles &copy; Esri' : '&copy; OpenStreetMap contributors'}
+      />
       <MapCommands focus={focus} fitKey={fitKey} locateKey={locateKey} points={fitPoints} onLocateError={onLocateError} />
+      <BoundsReporter onChange={onBoundsChange} />
       {onPick && <ClickCapture onPick={onPick} />}
+      {heatmap && <HeatLayer points={heatPoints} visible={!!heatmap} />}
+
+      {shown('live') && (liveSessions || []).map((s: any) => (
+        <Marker key={`live-${s.id}`} position={[Number(s.latitude), Number(s.longitude)]} icon={liveIcon}>
+          <Popup>
+            <div style={{ minWidth: 180 }}>
+              <b>{s.full_name}</b><br />{s.client_code}<br />
+              Live session • {s.session_status}<br />
+              {s.rx_bps ? `↓ ${(Number(s.rx_bps) / 1e6).toFixed(2)} Mbps • ↑ ${(Number(s.tx_bps || 0) / 1e6).toFixed(2)} Mbps` : ''}
+            </div>
+          </Popup>
+        </Marker>
+      ))}
 
       {boxes.map((f: any) => {
         const [lng, lat] = f.geometry.coordinates;

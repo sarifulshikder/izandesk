@@ -40,10 +40,12 @@ not run in CI.
   state and no horizontal overflow at phone widths.
 - A reseller gets `404` for KYC, live status, customer detail and complaint
   creation against a foreign subscriber.
-- GIS: resellers get `403` from every GIS/topology-mutation endpoint, direct URL
-  navigation shows the access-restricted page, and the admin workbench renders
-  its KPIs, layers and management panels without API errors or phone-width
-  horizontal overflow.
+- GIS: resellers get `403` from every GIS/topology-mutation endpoint (including
+  geocoding and live sessions), viewport `bbox` filtering returns only pins in
+  view, direct URL navigation shows the access-restricted page, and the admin
+  workbench renders its KPIs, layers, Satellite/Streets switch, heatmap and live
+  toggles without API errors or phone-width horizontal overflow.
 - (Opt-in) A reseller can create and delete a subscriber through the wizard.
-- (Opt-in) An admin can create, edit, drag, undo a drag and delete a GIS box, and
-  create, rename and delete a GIS area. All test data is removed afterwards.
+- (Opt-in) An admin can create, edit, drag, undo a drag and delete a GIS box,
+  create, rename and delete a GIS area, and bulk-import boxes/routes from a
+  GeoJSON FeatureCollection. All test data is removed afterwards.

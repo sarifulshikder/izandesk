@@ -182,4 +182,60 @@ router.delete('/fiber-routes/:id', requireTopologyRole, asyncHandler(async (req,
   res.json({ ok: true });
 }));
 
+/** Bulk import from a GeoJSON FeatureCollection (the format exported by /gis).
+ *  Point features create distribution boxes, LineString features create fiber
+ *  routes. Each feature is validated independently so one bad row never aborts
+ *  the rest; the response reports created/skipped counts and per-item errors. */
+router.post('/import', requireTopologyRole, asyncHandler(async (req, res) => {
+  const features = Array.isArray(req.body?.features) ? req.body.features : [];
+  if (!features.length) return res.status(400).json({ message: 'No features supplied' });
+  const result: any = { created: { boxes: 0, routes: 0 }, skipped: 0, errors: [] as any[] };
+
+  const zoneRows = (await pool.query('SELECT z.id, z.name, a.name as area_name FROM zones z JOIN areas a ON a.id=z.area_id')).rows;
+  const zoneByKey = new Map<string, string>();
+  for (const z of zoneRows) {
+    zoneByKey.set(`${z.area_name}/${z.name}`.toLowerCase(), z.id);
+    zoneByKey.set(String(z.name).toLowerCase(), z.id);
+  }
+  const boxByCode = new Map<string, string>();
+  for (const b of (await pool.query('SELECT id, code FROM distribution_boxes WHERE code IS NOT NULL')).rows) {
+    boxByCode.set(String(b.code).toLowerCase(), b.id);
+  }
+
+  for (let i = 0; i < features.length; i++) {
+    const f: any = features[i];
+    const p: any = f?.properties || {};
+    try {
+      if (f?.geometry?.type === 'Point' && Array.isArray(f.geometry.coordinates)) {
+        const lng = Number(f.geometry.coordinates[0]), lat = Number(f.geometry.coordinates[1]);
+        checkCoords(lat, lng);
+        if (!p.name) throw new Error('box name is required');
+        const zoneId = p.zone_id || (p.zone_name ? zoneByKey.get(String(p.zone_name).toLowerCase()) || null : null);
+        const code = p.code || null;
+        const r = await pool.query(`
+          INSERT INTO distribution_boxes(zone_id,name,code,box_type,capacity_ports,latitude,longitude,location,address,notes)
+          VALUES($1,$2,$3,$4,$5,$6,$7, ST_SetSRID(ST_MakePoint($7,$6),4326)::geography,$8,$9) RETURNING id`,
+          [zoneId, p.name, code, p.box_type || 'TJ', Number(p.capacity_ports) || 8, lat, lng, p.address || null, p.notes || null])
+          .catch(e => conflict(e, `box ${p.name}${code ? ` (${code})` : ''}`));
+        if (code) boxByCode.set(String(code).toLowerCase(), r.rows[0].id);
+        result.created.boxes++;
+      } else if (f?.geometry?.type === 'LineString' && Array.isArray(f.geometry.coordinates)) {
+        const pathSql = buildPathSql({ path: f.geometry.coordinates });
+        if (!p.name) throw new Error('route name is required');
+        const fromId = p.from_box_id || (p.from_code ? boxByCode.get(String(p.from_code).toLowerCase()) : null) || null;
+        const toId = p.to_box_id || (p.to_code ? boxByCode.get(String(p.to_code).toLowerCase()) : null) || null;
+        await pool.query(`
+          INSERT INTO fiber_routes(name,route_type,from_box_id,to_box_id,path,notes)
+          VALUES($1,$2,$3,$4, ST_SetSRID(ST_GeomFromGeoJSON($5),4326)::geography,$6)`,
+          [p.name, p.route_type || 'FIBER', fromId, toId, pathSql, p.notes || null])
+          .catch(e => conflict(e, `route ${p.name}`));
+        result.created.routes++;
+      } else result.skipped++;
+    } catch (e: any) {
+      result.errors.push({ index: i, name: p.name || null, message: e.message });
+    }
+  }
+  res.json(result);
+}));
+
 export default router;
