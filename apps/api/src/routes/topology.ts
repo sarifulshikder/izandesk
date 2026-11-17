@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler, hasGisAccess, ValidationError } from './helpers';
+import { asyncHandler, hasGisAccess, ValidationError, ConflictError } from './helpers';
 
 const router: Router = Router();
 
@@ -40,6 +40,12 @@ function buildPathSql(b: any): string | null {
   return null;
 }
 
+/** Turn Postgres unique violations into a friendly 409 instead of a 500. */
+function conflict(e: any, message: string): never {
+  if (String(e?.code) === '23505') throw new ConflictError(message);
+  throw e;
+}
+
 // Areas
 router.get('/areas', asyncHandler(async (_req, res) => {
   const r = await pool.query('SELECT * FROM areas ORDER BY name');
@@ -48,11 +54,11 @@ router.get('/areas', asyncHandler(async (_req, res) => {
 router.post('/areas', requireTopologyRole, asyncHandler(async (req, res) => {
   const { name } = req.body || {};
   if (!name) return res.status(400).json({ message: 'name is required' });
-  const r = await pool.query('INSERT INTO areas(name) VALUES($1) RETURNING *', [name]);
+  const r = await pool.query('INSERT INTO areas(name) VALUES($1) RETURNING *', [name]).catch(e => conflict(e, `Area "${name}" already exists`));
   res.status(201).json(r.rows[0]);
 }));
 router.put('/areas/:id', requireTopologyRole, asyncHandler(async (req, res) => {
-  const r = await pool.query('UPDATE areas SET name=$1 WHERE id=$2 RETURNING *', [req.body?.name, req.params.id]);
+  const r = await pool.query('UPDATE areas SET name=$1 WHERE id=$2 RETURNING *', [req.body?.name, req.params.id]).catch(e => conflict(e, `Area "${req.body?.name}" already exists`));
   res.json(r.rows[0]);
 }));
 router.delete('/areas/:id', requireTopologyRole, asyncHandler(async (req, res) => {
@@ -71,12 +77,12 @@ router.get('/zones', asyncHandler(async (req, res) => {
 router.post('/zones', requireTopologyRole, asyncHandler(async (req, res) => {
   const { area_id, name } = req.body || {};
   if (!area_id || !name) return res.status(400).json({ message: 'area_id and name are required' });
-  const r = await pool.query('INSERT INTO zones(area_id,name) VALUES($1,$2) RETURNING *', [area_id, name]);
+  const r = await pool.query('INSERT INTO zones(area_id,name) VALUES($1,$2) RETURNING *', [area_id, name]).catch(e => conflict(e, `Zone "${name}" already exists in this area`));
   res.status(201).json(r.rows[0]);
 }));
 router.put('/zones/:id', requireTopologyRole, asyncHandler(async (req, res) => {
   const { area_id, name } = req.body || {};
-  const r = await pool.query('UPDATE zones SET area_id=COALESCE($1,area_id), name=COALESCE($2,name) WHERE id=$3 RETURNING *', [area_id || null, name || null, req.params.id]);
+  const r = await pool.query('UPDATE zones SET area_id=COALESCE($1,area_id), name=COALESCE($2,name) WHERE id=$3 RETURNING *', [area_id || null, name || null, req.params.id]).catch(e => conflict(e, `Zone "${name}" already exists in this area`));
   res.json(r.rows[0]);
 }));
 router.delete('/zones/:id', requireTopologyRole, asyncHandler(async (req, res) => {
@@ -109,7 +115,7 @@ router.post('/boxes', requireTopologyRole, asyncHandler(async (req, res) => {
     INSERT INTO distribution_boxes(zone_id,name,code,box_type,capacity_ports,latitude,longitude,location,address,notes)
     VALUES($1,$2,$3,$4,$5,$6,$7, CASE WHEN $6::float IS NOT NULL AND $7::float IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7,$6),4326)::geography ELSE NULL END,$8,$9)
     RETURNING *`,
-    [b.zone_id || null, b.name, b.code || null, b.box_type || 'TJ', b.capacity_ports || 8, lat, lng, b.address || null, b.notes || null]);
+    [b.zone_id || null, b.name, b.code || null, b.box_type || 'TJ', b.capacity_ports || 8, lat, lng, b.address || null, b.notes || null]).catch(e => conflict(e, b.code ? `Box code "${b.code}" already exists` : 'Could not create box'));
   res.status(201).json(r.rows[0]);
 }));
 router.put('/boxes/:id', requireTopologyRole, asyncHandler(async (req, res) => {
@@ -125,7 +131,7 @@ router.put('/boxes/:id', requireTopologyRole, asyncHandler(async (req, res) => {
       location=CASE WHEN $6::float IS NOT NULL AND $7::float IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7,$6),4326)::geography ELSE NULL END,
       address=$8,notes=$9
     WHERE id=$10 RETURNING *`,
-    [b.zone_id ?? cur.zone_id, b.name ?? cur.name, b.code ?? cur.code, b.box_type ?? cur.box_type, b.capacity_ports ?? cur.capacity_ports, lat, lng, b.address ?? cur.address, b.notes ?? cur.notes, req.params.id]);
+    [b.zone_id ?? cur.zone_id, b.name ?? cur.name, b.code ?? cur.code, b.box_type ?? cur.box_type, b.capacity_ports ?? cur.capacity_ports, lat, lng, b.address ?? cur.address, b.notes ?? cur.notes, req.params.id]).catch(e => conflict(e, b.code ? `Box code "${b.code}" already exists` : 'Could not update box'));
   res.json(r.rows[0]);
 }));
 router.delete('/boxes/:id', requireTopologyRole, asyncHandler(async (req, res) => {

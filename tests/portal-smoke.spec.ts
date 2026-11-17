@@ -263,6 +263,17 @@ test.describe('GIS authorization', () => {
     // The reseller subscriber wizard still needs read-only topology lookups.
     const reference = await request.get('/api/topology/areas', { headers: auth(resellerToken) });
     expect(reference.ok()).toBeTruthy();
+
+    // Duplicate topology names must be a friendly 409, never a raw 500.
+    const tempArea = await request.post('/api/topology/areas', { headers: auth(adminToken), data: { name: 'E2E dup check' } });
+    expect(tempArea.ok()).toBeTruthy();
+    const tempId = (await tempArea.json()).id;
+    try {
+      const dup = await request.post('/api/topology/areas', { headers: auth(adminToken), data: { name: 'E2E dup check' } });
+      expect(dup.status()).toBe(409);
+    } finally {
+      await request.delete(`/api/topology/areas/${tempId}`, { headers: auth(adminToken) });
+    }
   });
 
   test('reseller navigating directly to /gis sees an access-restricted page', async ({ page }) => {

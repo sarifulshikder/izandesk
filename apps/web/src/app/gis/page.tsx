@@ -16,6 +16,7 @@ type Mode = 'none' | 'add-box' | 'edit-box' | 'delete-box' | 'add-route' | 'edit
 export default function GisPage() {
   const { token, user } = useAuth();
   const [data, setData] = useState<any>(null);
+  const [mapLimit, setMapLimit] = useState(5000);
   const [areas, setAreas] = useState<any[]>([]);
   const [zones, setZones] = useState<any[]>([]);
   const [boxesList, setBoxesList] = useState<any[]>([]);
@@ -43,7 +44,7 @@ export default function GisPage() {
     setLoading(true); setError(null);
     try {
       const [g, a, z, b, r, s] = await Promise.all([
-        apiFetch<any>('/api/gis/overview', {}, token),
+        apiFetch<any>(`/api/gis/overview?limit=${mapLimit}`, {}, token),
         apiFetch<{ data: any[] }>('/api/topology/areas', {}, token),
         apiFetch<{ data: any[] }>('/api/topology/zones', {}, token),
         apiFetch<{ data: any[] }>('/api/topology/boxes', {}, token),
@@ -53,7 +54,7 @@ export default function GisPage() {
       setData(g); setAreas(a.data || []); setZones(z.data || []);
       setBoxesList(b.data || []); setRoutesList(r.data || []); setSubscribers(s.data || []);
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [token, user]);
+  }, [token, user, mapLimit]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -145,20 +146,31 @@ export default function GisPage() {
     try { await apiFetch(`/api/topology/fiber-routes/${id}`, { method: 'DELETE' }, token); flash('Fiber route deleted'); endMode(); await load(); }
     catch (e: any) { fail(e); }
   };
+  const handleRouteAction = (id: string, action: 'edit' | 'delete') => {
+    const r = routesList.find(x => x.id === id);
+    if (action === 'edit') { if (r) openEditRoute(r); }
+    else { setForm({ id, name: r?.name || '' }); setMode('delete-route'); }
+  };
+  const locate = () => {
+    if (!navigator.geolocation) return fail(new Error('Geolocation is not supported by this browser'));
+    setLocateKey(k => k + 1);
+  };
+
   const traceToSubscriber = async () => {
-    if (!form.from_box_id || !form.subscriber_id) return fail(new Error('Select a source box and a subscriber'));
+    if (!form.subscriber_id) return fail(new Error('Select a subscriber'));
     const sub = subscribers.find(s => s.id === form.subscriber_id);
-    const box = boxesList.find(b => b.id === form.from_box_id);
-    if (!sub || !box) return fail(new Error('Box or subscriber not found'));
+    const box = form.from_box_id ? boxesList.find(b => b.id === form.from_box_id) : null;
+    if (!sub) return fail(new Error('Subscriber not found'));
+    if (form.from_box_id && !box) return fail(new Error('Source box not found'));
     const points: [number, number][] = [];
-    if (box.latitude && box.longitude) points.push([Number(box.longitude), Number(box.latitude)]);
+    if (box?.latitude && box?.longitude) points.push([Number(box.longitude), Number(box.latitude)]);
     points.push(...draftPoints.map(([lat, lng]) => [lng, lat] as [number, number]));
     if (sub.longitude && sub.latitude) points.push([Number(sub.longitude), Number(sub.latitude)]);
-    if (points.length < 2) return fail(new Error('Box and subscriber need coordinates (or add path points)'));
+    if (points.length < 2) return fail(new Error('Need at least 2 points — select a geocoded box or add path points by clicking the map'));
     try {
       await apiFetch('/api/topology/fiber-routes', { method: 'POST', body: JSON.stringify({
-        name: form.name || `Trace ${box.code || box.name} → ${sub.client_code}`,
-        route_type: 'DROP_FIBER', from_box_id: box.id, to_box_id: null, path: points,
+        name: form.name || `Trace ${box ? (box.code || box.name) : 'Field'} → ${sub.client_code}`,
+        route_type: 'DROP_FIBER', from_box_id: box?.id || null, to_box_id: null, path: points,
         notes: `Traced to subscriber ${sub.client_code}`,
       }) }, token);
       flash('Subscriber fiber trace saved'); endMode(); await load();
@@ -199,7 +211,9 @@ export default function GisPage() {
     ] };
     const url = URL.createObjectURL(new Blob([JSON.stringify(fc, null, 2)], { type: 'application/geo+json' }));
     const a = document.createElement('a'); a.href = url; a.download = 'izandesk-topology.geojson'; a.click();
-    URL.revokeObjectURL(url); flash(`Exported ${fc.features.length} features`);
+    // Defer revocation so the browser has time to start the download.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    flash(`Exported ${fc.features.length} features`);
   };
 
   const searchResults = useMemo(() => {
@@ -236,7 +250,7 @@ export default function GisPage() {
         <div className="flex flex-wrap gap-2">
           <button onClick={() => { load(); setFitKey(k => k + 1); }} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
           <button onClick={() => setFitKey(k => k + 1)} className="btn btn-outline inline-flex items-center gap-2"><Maximize2 className="w-4 h-4" />Zoom to fit</button>
-          <button onClick={() => setLocateKey(k => k + 1)} className="btn btn-outline inline-flex items-center gap-2"><LocateFixed className="w-4 h-4" />Locate me</button>
+          <button onClick={locate} className="btn btn-outline inline-flex items-center gap-2"><LocateFixed className="w-4 h-4" />Locate me</button>
           <button onClick={exportGeoJson} className="btn btn-outline inline-flex items-center gap-2"><Download className="w-4 h-4" />Export GeoJSON</button>
           <button onClick={openNewBox} className="btn btn-primary inline-flex items-center gap-2"><Plus className="w-4 h-4" />Add Box</button>
           <button onClick={openNewRoute} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><Route className="w-4 h-4" />Draw Route</button>
@@ -248,7 +262,7 @@ export default function GisPage() {
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <Kpi icon={<Users className="w-4 h-4" />} label="Subscribers" value={summary.subscribers_total ?? '—'} hint={`${summary.subscribers_geocoded ?? 0} mapped`} />
         <Kpi icon={<MapPin className="w-4 h-4" />} label="Geo coverage" value={`${summary.geocoded_coverage_pct ?? 0}%`} hint="pins / subscribers" />
-        <Kpi icon={<Box className="w-4 h-4" />} label="Boxes" value={summary.boxes_total ?? 0} hint={`${summary.boxes_in_use ?? 0} in use`} />
+        <Kpi icon={<Box className="w-4 h-4" />} label="Boxes" value={summary.boxes_total ?? 0} hint={`${summary.boxes_mapped ?? 0} mapped • ${summary.boxes_in_use ?? 0} in use`} />
         <Kpi icon={<Network className="w-4 h-4" />} label="Port capacity" value={summary.capacity_ports ?? 0} hint="total ports" />
         <Kpi icon={<Route className="w-4 h-4" />} label="Fiber routes" value={summary.routes_total ?? 0} hint="drawn / traced" />
         <Kpi icon={<Info className="w-4 h-4" />} label="Mapped fiber" value={`${((summary.route_length_m ?? 0) / 1000).toFixed(2)} km`} hint="total length" />
@@ -256,6 +270,10 @@ export default function GisPage() {
 
       {notice && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm flex items-center gap-2"><CheckCircle2 className="w-4 h-4" />{notice}</div>}
       {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+      {summary.truncated && <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-300 text-sm">Map pin limit reached — showing the first {subCount} geocoded subscribers. Raise “Max pins” to load more.</div>}
+      {picked && ['add-box', 'edit-box', 'add-route', 'edit-route', 'trace'].includes(mode) && (
+        <div className="text-xs text-muted-foreground">Last map pick: {picked.lat.toFixed(5)}, {picked.lng.toFixed(5)}</div>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="xl:col-span-2 h-[650px] card overflow-hidden">
@@ -271,6 +289,8 @@ export default function GisPage() {
             onBoxMove={handleBoxMove}
             onBoxAction={handleBoxAction}
             onSubscriberAction={traceFromPin}
+            onRouteAction={handleRouteAction}
+            onLocateError={() => fail(new Error('Location unavailable — check browser permission'))}
           />
         </div>
 
@@ -307,8 +327,14 @@ export default function GisPage() {
                 <Chk label="Other subs" checked={layers.status_other} onChange={v => setLayers(l => ({ ...l, status_other: v }))} color="bg-amber-500" />
               </div>
             )}
-            <div className="text-[11px] text-muted-foreground pt-3 mt-3 border-t border-border">
-              Drag a blue box marker to relocate it. Click a box for details, edit or delete.
+            <div className="flex items-center justify-between gap-2 pt-3 mt-3 border-t border-border text-xs">
+              <span className="text-muted-foreground">Max pins</span>
+              <select value={mapLimit} onChange={e => setMapLimit(Number(e.target.value))} className="btn btn-outline text-foreground py-1">
+                <option value={1000}>1,000</option><option value={5000}>5,000</option><option value={10000}>10,000</option>
+              </select>
+            </div>
+            <div className="text-[11px] text-muted-foreground pt-3">
+              Drag a blue box marker to relocate it. Click a box or route for details, edit or delete.
             </div>
           </div>
 

@@ -35,6 +35,8 @@ export interface GisMapProps {
   onBoxMove?: (id: string, lat: number, lng: number) => void;
   onBoxAction?: (id: string, action: 'details' | 'edit' | 'delete') => void;
   onSubscriberAction?: (id: string, action: 'trace') => void;
+  onRouteAction?: (id: string, action: 'edit' | 'delete') => void;
+  onLocateError?: () => void;
 }
 
 function ClickCapture({ onPick }: { onPick: (lat: number, lng: number) => void }) {
@@ -42,8 +44,9 @@ function ClickCapture({ onPick }: { onPick: (lat: number, lng: number) => void }
   return null;
 }
 
-function MapCommands({ focus, fitKey, locateKey, points }: {
+function MapCommands({ focus, fitKey, locateKey, points, onLocateError }: {
   focus: GisMapProps['focus']; fitKey?: number; locateKey?: number; points: [number, number][];
+  onLocateError?: () => void;
 }) {
   const map = useMap();
   useEffect(() => {
@@ -57,7 +60,7 @@ function MapCommands({ focus, fitKey, locateKey, points }: {
     if (!locateKey || !navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       (p) => map.flyTo([p.coords.latitude, p.coords.longitude], 15, { duration: 0.7 }),
-      () => {},
+      () => onLocateError?.(),
       { enableHighAccuracy: false, timeout: 8000 },
     );
   }, [locateKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -66,7 +69,7 @@ function MapCommands({ focus, fitKey, locateKey, points }: {
 
 export default function GisMap({
   data, onPick, draftLine, layers, focus, fitKey, locateKey,
-  selectedBoxId, onBoxMove, onBoxAction, onSubscriberAction,
+  selectedBoxId, onBoxMove, onBoxAction, onSubscriberAction, onRouteAction, onLocateError,
 }: GisMapProps) {
   const center = useMemo(parseCenter, []);
   const shown = (key: string) => layers?.[key] !== false;
@@ -88,7 +91,7 @@ export default function GisMap({
   return (
     <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }} className="rounded-2xl overflow-hidden">
       <TileLayer attribution='&copy; OpenStreetMap contributors' url={TILE_URL} />
-      <MapCommands focus={focus} fitKey={fitKey} locateKey={locateKey} points={fitPoints} />
+      <MapCommands focus={focus} fitKey={fitKey} locateKey={locateKey} points={fitPoints} onLocateError={onLocateError} />
       {onPick && <ClickCapture onPick={onPick} />}
 
       {boxes.map((f: any) => {
@@ -159,6 +162,12 @@ export default function GisMap({
                 {p.from_box_name || '?'} → {p.to_box_name || '?'}<br />
                 {p.route_type}{p.length_m ? ` • ${(Number(p.length_m) / 1000).toFixed(2)} km` : ''}
                 {p.notes ? <><br />{p.notes}</> : null}
+                {onRouteAction && (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                    <button onClick={() => onRouteAction(p.id, 'edit')} style={btnStyle('#7c3aed')}>Edit</button>
+                    <button onClick={() => onRouteAction(p.id, 'delete')} style={btnStyle('#dc2626')}>Delete</button>
+                  </div>
+                )}
               </div>
             </Popup>
           </Polyline>

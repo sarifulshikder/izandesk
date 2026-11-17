@@ -55,6 +55,7 @@ const SUB_JOINS = `LEFT JOIN zones z ON z.id=s.zone_id
 router.get('/overview', asyncHandler(async (req, res) => {
   const scope = await subscriberScope(req);
   const scoped = scopeFor(scope);
+  const limit = mapLimit(req);
   const limitParam = `$${scoped.params.length + 1}`;
 
   const boxes = await pool.query(`
@@ -69,7 +70,7 @@ router.get('/overview', asyncHandler(async (req, res) => {
     SELECT ${SUB_COLUMNS}
     FROM subscribers s ${SUB_JOINS}
     WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL AND ${scoped.sql}
-    ORDER BY s.id LIMIT ${limitParam}`, [...scoped.params, mapLimit(req)]);
+    ORDER BY s.id LIMIT ${limitParam}`, [...scoped.params, limit]);
   const routes = await pool.query(`
     SELECT f.id, f.name, f.route_type, f.notes, fb.name as from_box_name, tb.name as to_box_name,
            ST_AsGeoJSON(f.path::geometry) as path_geojson,
@@ -85,6 +86,7 @@ router.get('/overview', asyncHandler(async (req, res) => {
   const byStatus = await pool.query(`
     SELECT s.status, count(*)::int AS n FROM subscribers s WHERE ${scoped.sql}
     GROUP BY s.status ORDER BY n DESC`, scoped.params);
+  const boxTotals = await pool.query('SELECT count(*)::int AS total FROM distribution_boxes');
 
   const toFeatureCollection = (features: any[]) => ({ type: 'FeatureCollection', features });
   const boxFeatures = boxes.rows.map((b: any) => ({
@@ -111,11 +113,14 @@ router.get('/overview', asyncHandler(async (req, res) => {
     subscribers_geocoded: geocodedSubs,
     geocoded_coverage_pct: totalSubs ? Math.round((geocodedSubs / totalSubs) * 100) : 0,
     by_status: Object.fromEntries(byStatus.rows.map((r: any) => [r.status || 'UNKNOWN', r.n])),
-    boxes_total: boxes.rows.length,
+    boxes_total: boxTotals.rows[0]?.total || 0,
+    boxes_mapped: boxes.rows.length,
     boxes_in_use: boxes.rows.filter((b: any) => Number(b.subscriber_count) > 0).length,
     capacity_ports: boxes.rows.reduce((a: number, b: any) => a + Number(b.capacity_ports || 0), 0),
     routes_total: routeFeatures.length,
     route_length_m: Math.round(routeFeatures.reduce((a: number, f: any) => a + Number(f.properties.length_m || 0), 0)),
+    // True when the ?limit= cap hid geocoded subscribers from the map.
+    truncated: geocodedSubs > limit,
   };
 
   res.json({
@@ -137,7 +142,7 @@ router.get('/boxes/:id/details', asyncHandler(async (req, res) => {
     FROM distribution_boxes d
     LEFT JOIN zones z ON z.id=d.zone_id
     LEFT JOIN areas a ON a.id=z.area_id
-    WHERE d.id=${boxIdParam}`, scoped.params.concat(req.params.id));
+    WHERE d.id=$1`, [req.params.id]);
   if (!box.rows[0]) return res.status(404).json({ message: 'Box not found' });
   const subs = await pool.query(`
     SELECT ${SUB_COLUMNS} FROM subscribers s ${SUB_JOINS}
