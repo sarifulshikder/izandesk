@@ -11,9 +11,11 @@ import 'leaflet/dist/leaflet.css';
 // deployments, and NEXT_PUBLIC_GIS_CENTER at "lat,lng" for a different region.
 const TILE_URL = process.env.NEXT_PUBLIC_GIS_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const SATELLITE_URL = process.env.NEXT_PUBLIC_GIS_SATELLITE_TILE_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-// Reference overlays put place/road/river names back on top of the imagery.
-const SATELLITE_ROADS_URL = process.env.NEXT_PUBLIC_GIS_SATELLITE_ROADS_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}';
-const SATELLITE_LABELS_URL = process.env.NEXT_PUBLIC_GIS_SATELLITE_LABELS_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}';
+// Label-only overlay: Esri's reference labels use the same clean sans-serif
+// typography as the streets basemap. CSS inverts them to white over imagery.
+const SATELLITE_LABELS_URL = process.env.NEXT_PUBLIC_GIS_SATELLITE_LABELS_URL || 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}';
+// Optional extra overlay (e.g. Esri World_Transportation) — off by default.
+const SATELLITE_ROADS_URL = process.env.NEXT_PUBLIC_GIS_SATELLITE_ROADS_URL || '';
 const DEFAULT_CENTER: [number, number] = [23.8103, 90.4125];
 const parseCenter = (): [number, number] => {
   const raw = process.env.NEXT_PUBLIC_GIS_CENTER;
@@ -145,13 +147,13 @@ export default function GisMap({
         key={mapStyle}
         url={mapStyle === 'satellite' ? SATELLITE_URL : TILE_URL}
         attribution={mapStyle === 'satellite'
-          ? 'Tiles &copy; Esri, Maxar, Earthstar Geographics &mdash; labels &copy; Esri'
+          ? 'Imagery &copy; Esri, Maxar, Earthstar Geographics &mdash; labels &copy; Esri, HERE, Garmin, OpenStreetMap contributors'
           : '&copy; OpenStreetMap contributors'}
       />
       {mapStyle === 'satellite' && satelliteLabels && (
         // Custom pane sits above the imagery tile pane (200) but below markers.
         <Pane name="gis-labels" style={{ zIndex: 350 }}>
-          <TileLayer key={`roads-${mapStyle}`} pane="gis-labels" url={SATELLITE_ROADS_URL} opacity={0.85} />
+          {SATELLITE_ROADS_URL && <TileLayer key={`roads-${mapStyle}`} pane="gis-labels" url={SATELLITE_ROADS_URL} opacity={0.7} />}
           <TileLayer key={`labels-${mapStyle}`} pane="gis-labels" url={SATELLITE_LABELS_URL} />
         </Pane>
       )}
