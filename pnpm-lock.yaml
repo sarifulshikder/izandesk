@@ -102,18 +102,12 @@ importers:
       '@izandesk/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
-      '@maplibre/maplibre-gl-leaflet':
-        specifier: ^0.1.4
-        version: 0.1.4(@types/leaflet@1.9.22)(leaflet@1.9.4)(maplibre-gl@5.24.1)
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
       leaflet:
         specifier: ^1.9.4
         version: 1.9.4
-      leaflet.heat:
-        specifier: ^1.0.1
-        version: 1.0.1(leaflet@1.9.4)
       lucide-react:
         specifier: ^1.73.0
         version: 1.73.0(@types/react@19.3.0)(react@19.3.1)
@@ -142,9 +136,6 @@ importers:
       '@types/leaflet':
         specifier: ^1.9.22
         version: 1.9.22
-      '@types/leaflet.heat':
-        specifier: ^0.2.5
-        version: 0.2.5
       '@types/node':
         specifier: ^24.19.2
         version: 24.19.2
@@ -385,13 +376,6 @@ packages:
 
   '@maplibre/geojson-vt@6.3.1':
     resolution: {integrity: sha512-743sKqGQPU35Vgdjw0GFk58mUdKlxI3c36vvUvrU9qBx7EdWGSXagLU5yNlOTP12WADo+foDyP5vtlDJjzlvHw==}
-
-  '@maplibre/maplibre-gl-leaflet@0.1.4':
-    resolution: {integrity: sha512-k57wcndZIvq3m08g2je4pjUPGr43ffNW3j+gXbymt8Vi2l1lUERUi1UmdTZcTPN8LuDDYOMWRNBaSLwpAu02ew==}
-    peerDependencies:
-      '@types/leaflet': ^1.9.0
-      leaflet: ^1.9.3
-      maplibre-gl: ^2.4.0 || ^3.3.1 || ^4.3.2 || ^5.0.0 || ^6.0.0
 
   '@maplibre/maplibre-gl-style-spec@24.10.0':
     resolution: {integrity: sha512-lichxSiagMEBBrqHF0trtMQH9RKh+9jUlIJl0qW0QHvt2H/tbvUWdE+ZzI2Jd0/pT7j/iavLonlPu7EQ/ixTOw==}
@@ -637,9 +621,6 @@ packages:
 
   '@types/jsonwebtoken@9.0.10':
     resolution: {integrity: sha512-asx5hIG9Qmf/1oStypjanR7iKTv0gXQ1Ov/jfrX6kS/EO0OFni8orbmGCn0672NHR3kXHwpAwR+B368ZGN/2rA==}
-
-  '@types/leaflet.heat@0.2.5':
-    resolution: {integrity: sha512-wmDePJPn2vhW9BScsWTV4pSfWayhdDwXuWIQzUuaJkvk5DCHsYsIegTD7tybo38E/0mxpuWODKV/LhsxPESWJg==}
 
   '@types/leaflet@1.9.22':
     resolution: {integrity: sha512-h3lhECYEKDasG7LFHu+GiHqAvsgLuQvlJvVZzJDGONo3sEL+wUOqSFLnwkZlK0qVxnxbuGFW8iBlJNYs5wgndA==}
@@ -991,11 +972,6 @@ packages:
 
   kdbush@4.1.0:
     resolution: {integrity: sha512-e9vurzrXJQrFX6ckpHP3bvj5l+9CnYzkxDNnNQ1h2QTqdWsUAJgXiKdGNcOa1EY85dU8KbQ+z/FdQdB7P+9yfQ==}
-
-  leaflet.heat@1.0.1:
-    resolution: {integrity: sha512-F2o1QQbhEvsQJt7EooHPsydxSc746t79yQcDI8gB/K7wPirMowHpirSai6k9EDNZzUH7eKxucFDizoRSbV2Lzw==}
-    peerDependencies:
-      leaflet: ^1.9.0 || ^2.0.0-beta.1
 
   leaflet@1.9.4:
     resolution: {integrity: sha512-nxS1ynzJOmOlHp+iL3FyWqK89GtNL8U8rvlMOsQdTTssxZwCXh8N2NB3GDQOL+YR3XnWyZAxwQixURb+FA74PA==}
@@ -1434,9 +1410,6 @@ packages:
     resolution: {integrity: sha512-6x6dK6zJdpTzF4sQeNYxwtvBzf6Eg4GtlesS94HOvTudUeyK2WXAaIfmDgsyslYrRBeFIlsi54AYsFGUuhmvrQ==}
     engines: {node: '>= 0.4'}
 
-  simpleheat@1.0.0:
-    resolution: {integrity: sha512-hCGl1lj+IR+CymAouYf5ZQ7NguSQq+w1PWu1WvHgZWkdzmyS/xbN1T2TpwlSC8nEDDK2JRVPcdgV0a6652aP2Q==}
-
   source-map-js@1.2.2:
     resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
@@ -1722,12 +1695,6 @@ snapshots:
     dependencies:
       kdbush: 4.1.0
 
-  '@maplibre/maplibre-gl-leaflet@0.1.4(@types/leaflet@1.9.22)(leaflet@1.9.4)(maplibre-gl@5.24.1)':
-    dependencies:
-      '@types/leaflet': 1.9.22
-      leaflet: 1.9.4
-      maplibre-gl: 5.24.1
-
   '@maplibre/maplibre-gl-style-spec@24.10.0':
     dependencies:
       '@mapbox/jsonlint-lines-primitives': 2.0.3
@@ -1920,10 +1887,6 @@ snapshots:
     dependencies:
       '@types/ms': 2.1.0
       '@types/node': 24.19.2
-
-  '@types/leaflet.heat@0.2.5':
-    dependencies:
-      '@types/leaflet': 1.9.22
 
   '@types/leaflet@1.9.22':
     dependencies:
@@ -2295,11 +2258,6 @@ snapshots:
       safe-buffer: 5.2.1
 
   kdbush@4.1.0: {}
-
-  leaflet.heat@1.0.1(leaflet@1.9.4):
-    dependencies:
-      leaflet: 1.9.4
-      simpleheat: 1.0.0
 
   leaflet@1.9.4: {}
 
@@ -2758,8 +2716,6 @@ snapshots:
       side-channel-list: 1.0.1
       side-channel-map: 1.0.1
       side-channel-weakmap: 1.0.2
-
-  simpleheat@1.0.0: {}
 
   source-map-js@1.2.2: {}
 

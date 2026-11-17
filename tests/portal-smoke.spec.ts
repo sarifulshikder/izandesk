@@ -325,13 +325,31 @@ test.describe('GIS authorization', () => {
     await gotoStable(page, '/gis');
     await expect(page.getByRole('button', { name: 'Streets' }), 'basemap choice should persist').toHaveClass(/bg-primary/);
     await page.getByRole('button', { name: 'Satellite' }).click();
-    // Satellite is a hybrid view: OSM vector labels render over the imagery.
+    // One MapLibre map drives both basemaps; satellite reuses the streets vector labels.
     await expect(page.locator('canvas.maplibregl-canvas').first()).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('[data-map-ready="1"]')).toBeVisible({ timeout: 20000 });
+    const viewState = () => page.evaluate(() => {
+      const m = (window as any).__gisMap;
+      const meta = m?.getStyle()?.metadata;
+      if (!meta) return null;
+      return {
+        satellite: m.getLayoutProperty(meta.satelliteLayer, 'visibility'),
+        labels: m.getLayoutProperty(meta.labelLayers[0], 'visibility'),
+        labelCount: meta.labelLayers.length,
+      };
+    });
+    const satelliteView = await viewState();
+    expect(satelliteView?.satellite).toBe('visible');
+    expect(satelliteView?.labels).toBe('visible');
+    expect(satelliteView?.labelCount).toBeGreaterThan(10);
     await page.getByRole('button', { name: 'Labels on' }).click();
-    await expect(page.locator('canvas.maplibregl-canvas')).toHaveCount(0);
+    await expect.poll(async () => (await viewState())?.labels).toBe('none');
     await page.getByRole('button', { name: 'Labels off' }).click();
+    await expect.poll(async () => (await viewState())?.labels).toBe('visible');
     await page.getByLabel('Heatmap').check();
-    await expect(page.locator('canvas.leaflet-heatmap-layer')).toHaveCount(1);
+    await expect(page.locator('[data-heatmap="on"]')).toBeVisible();
+    await expect.poll(async () => page.evaluate(() =>
+      (window as any).__gisMap.getLayoutProperty('gis-heat', 'visibility'))).toBe('visible');
     await page.getByLabel('Live sessions').check();
     await expect(page.getByLabel('Live sessions')).toBeChecked();
 
