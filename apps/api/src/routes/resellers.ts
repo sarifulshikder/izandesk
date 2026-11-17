@@ -294,8 +294,8 @@ router.get('/:id/dashboard', asyncHandler(async (req, res) => {
       COUNT(*) FILTER (WHERE COALESCE(price_override,0) > 0)::int AS custom_price_users,
       COUNT(*) FILTER (WHERE bandwidth_mbps IS NOT NULL)::int AS custom_bandwidth_users,
       COUNT(*) FILTER (WHERE extended_expiry = true)::int AS extended_users,
-      0::int AS complaints,
-      0::int AS parental_control_users
+      COUNT(*) FILTER (WHERE parental_control_enabled = true)::int AS parental_control_users,
+      (SELECT COUNT(*)::int FROM tickets WHERE reseller_id=$1 AND upper(status) NOT IN ('RESOLVED','CLOSED')) AS complaints
     FROM subscribers WHERE reseller_id=$1`, [id]).catch(()=>({ rows: [{}] } as any)),
     pool.query(`SELECT
       COALESCE(SUM(amount) FILTER (WHERE direction='CREDIT'),0)::numeric(12,2) AS total_credited,
@@ -1351,6 +1351,115 @@ router.get('/:id/export/xlsx', asyncHandler(async (req, res) => {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="reseller-subscribers-${req.params.id}.xlsx"`);
   res.send(buf);
+}));
+
+/* ========================================================================== */
+/* Complaints (reseller-scoped tickets) & Parental Control                    */
+/* ========================================================================== */
+
+router.get('/:id/complaints', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const status = String(req.query.status || '').trim();
+  const q = String(req.query.q || '').trim();
+  const params: any[] = [req.params.id];
+  let where = `t.reseller_id=$1`;
+  if (status) { params.push(status.toUpperCase()); where += ` AND upper(t.status)=$${params.length}`; }
+  if (q) { params.push(`%${q}%`); where += ` AND (t.ticket_no ILIKE $${params.length} OR t.subject ILIKE $${params.length} OR t.description ILIKE $${params.length} OR s.full_name ILIKE $${params.length} OR s.client_code ILIKE $${params.length})`; }
+  const rows = (await pool.query(`SELECT t.*, s.full_name AS subscriber_name, s.client_code, s.phone AS subscriber_phone
+    FROM tickets t LEFT JOIN subscribers s ON s.id=t.subscriber_id
+    WHERE ${where} ORDER BY t.created_at DESC LIMIT 300`, params)).rows;
+  res.json({ data: rows });
+}));
+
+router.post('/:id/complaints', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  const subject = String(req.body?.subject || '').trim();
+  if (!subject) return res.status(400).json({ message: 'subject is required' });
+  const subscriberId = String(req.body?.subscriber_id || '') || null;
+  let siteAddress = req.body?.site_address || null;
+  let siteLat = req.body?.site_latitude != null ? Number(req.body.site_latitude) : null;
+  let siteLng = req.body?.site_longitude != null ? Number(req.body.site_longitude) : null;
+  if (subscriberId) {
+    const sub = await assertOwnSubscriber(req, res, req.params.id, subscriberId);
+    if (!sub) return; // foreign subscribers rejected with 404
+    siteAddress = siteAddress || sub.address;
+    if (siteLat == null) siteLat = sub.latitude;
+    if (siteLng == null) siteLng = sub.longitude;
+  }
+  const priority = String(req.body?.priority || 'MEDIUM').toUpperCase();
+  const hours = priority === 'CRITICAL' ? 4 : priority === 'HIGH' ? 8 : priority === 'LOW' ? 48 : 24;
+  const slaDueAt = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+  const count = (await pool.query('SELECT COUNT(*)::int AS n FROM tickets')).rows[0]?.n || 0;
+  const ticketNo = `TKT-${String(count + 1).padStart(6, '0')}`;
+  const gps = (siteLat != null && siteLng != null)
+    ? `https://www.google.com/maps/search/?api=1&query=${siteLat},${siteLng}`
+    : (siteAddress ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(siteAddress)}` : null);
+  const r = (await pool.query(`INSERT INTO tickets
+      (ticket_no,subscriber_id,reseller_id,subject,description,category,priority,status,sla_policy,sla_due_at,site_latitude,site_longitude,site_address,gps_nav_url,source,created_by)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'OPEN',$8,$9,$10,$11,$12,$13,'RESELLER_PORTAL',$14) RETURNING *`,
+    [ticketNo, subscriberId, req.params.id, subject, req.body?.description || null,
+     req.body?.category || 'COMPLAINT', priority, `${priority} SLA`, slaDueAt,
+     siteLat, siteLng, siteAddress, gps, getUser(req).email || 'reseller'])).rows[0];
+  res.status(201).json({ ok: true, data: r });
+}));
+
+router.get('/:id/complaints/:tid', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const t = (await pool.query('SELECT * FROM tickets WHERE id=$1 AND reseller_id=$2', [req.params.tid, req.params.id])).rows[0];
+  if (!t) return res.status(404).json({ message: 'Complaint not found' });
+  const comments = (await pool.query('SELECT * FROM ticket_comments WHERE ticket_id=$1 ORDER BY created_at ASC', [req.params.tid])).rows;
+  const sub = t.subscriber_id ? (await pool.query('SELECT full_name, client_code FROM subscribers WHERE id=$1', [t.subscriber_id])).rows[0] : null;
+  res.json({ data: { ...t, comments, subscriber_name: sub?.full_name, client_code: sub?.client_code } });
+}));
+
+router.post('/:id/complaints/:tid/comments', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  const t = (await pool.query('SELECT id FROM tickets WHERE id=$1 AND reseller_id=$2', [req.params.tid, req.params.id])).rows[0];
+  if (!t) return res.status(404).json({ message: 'Complaint not found' });
+  const body = String(req.body?.body || '').trim();
+  if (!body) return res.status(400).json({ message: 'body is required' });
+  const r = (await pool.query(`INSERT INTO ticket_comments(ticket_id,author_name,author_role,body,is_internal)
+    VALUES($1,$2,'RESELLER',$3,false) RETURNING *`,
+    [req.params.tid, getUser(req).name || getUser(req).email || 'Reseller', body])).rows[0];
+  await pool.query('UPDATE tickets SET updated_at=now() WHERE id=$1', [req.params.tid]);
+  res.status(201).json({ ok: true, data: r });
+}));
+
+router.put('/:id/complaints/:tid', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  const t = (await pool.query('SELECT * FROM tickets WHERE id=$1 AND reseller_id=$2', [req.params.tid, req.params.id])).rows[0];
+  if (!t) return res.status(404).json({ message: 'Complaint not found' });
+  const status = String(req.body?.status || t.status).toUpperCase();
+  const resolution = req.body?.resolution_notes ?? t.resolution_notes;
+  const closedAt = ['RESOLVED', 'CLOSED'].includes(status) ? (t.closed_at || new Date().toISOString()) : null;
+  const r = (await pool.query(`UPDATE tickets SET status=$2, resolution_notes=$3, closed_at=$4, updated_at=now()
+    WHERE id=$1 AND reseller_id=$5 RETURNING *`,
+    [req.params.tid, status, resolution, closedAt, req.params.id])).rows[0];
+  res.json({ ok: true, data: r });
+}));
+
+router.get('/:id/parental-control', asyncHandler(async (req, res) => {
+  if (!(await ensureResellerAccess(req, res, req.params.id))) return;
+  const q = String(req.query.q || '').trim();
+  const enabled = String(req.query.enabled || '');
+  const params: any[] = [req.params.id];
+  let where = `reseller_id=$1`;
+  if (q) { params.push(`%${q}%`); where += ` AND (full_name ILIKE $${params.length} OR username ILIKE $${params.length} OR client_code ILIKE $${params.length} OR phone ILIKE $${params.length})`; }
+  if (enabled === '1') where += ` AND parental_control_enabled=true`;
+  if (enabled === '0') where += ` AND parental_control_enabled=false`;
+  const rows = (await pool.query(`SELECT id, client_code, full_name, username, phone, status, package_name,
+      parental_control_enabled FROM subscribers WHERE ${where} ORDER BY full_name ASC LIMIT 500`, params)).rows;
+  const enabledCount = (await pool.query('SELECT COUNT(*)::int AS n FROM subscribers WHERE reseller_id=$1 AND parental_control_enabled=true', [req.params.id])).rows[0]?.n || 0;
+  res.json({ data: rows, enabled_count: enabledCount });
+}));
+
+router.put('/:id/parental-control/:sid', asyncHandler(async (req, res) => {
+  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  const sub = await assertOwnSubscriber(req, res, req.params.id, req.params.sid);
+  if (!sub) return;
+  const enabled = !!req.body?.enabled;
+  await pool.query('UPDATE subscribers SET parental_control_enabled=$2, updated_at=now() WHERE id=$1', [req.params.sid, enabled]);
+  res.json({ ok: true, enabled });
 }));
 
 export default router;

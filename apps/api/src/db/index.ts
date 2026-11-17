@@ -1512,7 +1512,8 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS ipv6_prefix TEXT,
       ADD COLUMN IF NOT EXISTS old_expiry_date DATE,
       ADD COLUMN IF NOT EXISTS excess_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS branch_id UUID;
+      ADD COLUMN IF NOT EXISTS branch_id UUID,
+      ADD COLUMN IF NOT EXISTS parental_control_enabled BOOLEAN NOT NULL DEFAULT false;
 
     ALTER TABLE onus
       ADD COLUMN IF NOT EXISTS vendor TEXT,

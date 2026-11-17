@@ -29,7 +29,7 @@ const EXTRA_SUBSCRIBER_TEXT = [
   'division', 'block_no', 'cable_serial_no', 'cable_length', 'cable_info', 'onu_info',
   'onu_owner', 'connection_established_by', 'ipv6_address', 'ipv6_prefix', 'branch_id',
 ];
-const EXTRA_SUBSCRIBER_BOOL = ['static_ip', 'mac_lock', 'multi_session', 'bill_cycle_enabled'];
+const EXTRA_SUBSCRIBER_BOOL = ['static_ip', 'mac_lock', 'multi_session', 'bill_cycle_enabled', 'parental_control_enabled'];
 const EXTRA_SUBSCRIBER_OTHER = ['old_expiry_date', 'excess_amount'];
 const EXTRA_SUBSCRIBER_FIELDS = [...EXTRA_SUBSCRIBER_TEXT, ...EXTRA_SUBSCRIBER_BOOL, ...EXTRA_SUBSCRIBER_OTHER];
 

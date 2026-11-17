@@ -10,7 +10,7 @@ import {
   Clock3, UserX, UserMinus, CreditCard, Receipt, Wallet, Landmark, BarChart3,
   ScrollText, Briefcase, Radio, Network, Shield, ShieldCheck, Wifi, Package,
   LifeBuoy, MessageSquare, Puzzle, Smartphone, ShoppingCart, Settings, Server,
-  X, ChevronDown, ChevronRight, BellRing, Building2,
+  X, ChevronDown, ChevronRight, BellRing, Building2, AlertCircle, Ban,
 } from 'lucide-react';
 
 interface NavGroup {
@@ -124,6 +124,8 @@ export function Sidebar() {
         { name: 'Branches', href: '/resellers?tab=branches', icon: Building2 },
         { name: 'RADIUS Log', href: '/resellers?tab=radius-log', icon: Radio },
         { name: 'Login Log', href: '/resellers?tab=login-log', icon: ShieldCheck },
+        { name: 'Complaints', href: '/resellers?tab=complaints', icon: AlertCircle },
+        { name: 'Parental Control', href: '/resellers?tab=parental', icon: Ban },
       ],
     },
     {

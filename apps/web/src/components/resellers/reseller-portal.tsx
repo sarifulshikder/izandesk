@@ -45,6 +45,8 @@ const tabs = [
   { key: 'logs', label: 'Logs', icon: ScrollText },
   { key: 'notifications', label: 'Notifications', icon: BellRing },
   { key: 'branches', label: 'Branches', icon: Building2 },
+  { key: 'complaints', label: 'Complaints', icon: AlertCircle },
+  { key: 'parental', label: 'Parental Control', icon: Ban },
   ...parityTabs,
 ] as const;
 type TabKey = typeof tabs[number]['key'];
@@ -66,7 +68,7 @@ function downloadCsv(filename: string, rows: AnyObj[]) {
 }
 const statusBadge = (s: any) => {
   const v = String(s || '').toUpperCase();
-  const cls = v==='ACTIVE'||v==='COMPLETED'||v==='SUCCESS'||v==='PAID'||v==='EXECUTED'||v==='SENT'||v==='DELIVERED'?'border-emerald-500/30 text-emerald-400':v==='EXPIRED'||v==='PENDING'||v==='VERIFYING'||v==='QUEUED'?'border-amber-500/30 text-amber-400':v==='SUSPENDED'||v==='FAILED'||v==='CANCELLED'||v==='ERROR'?'border-red-500/30 text-red-400':v==='ONLINE'?'border-emerald-500/30 text-emerald-400':'border-border text-muted-foreground';
+  const cls = v==='ACTIVE'||v==='COMPLETED'||v==='SUCCESS'||v==='PAID'||v==='EXECUTED'||v==='SENT'||v==='DELIVERED'?'border-emerald-500/30 text-emerald-400':v==='EXPIRED'||v==='PENDING'||v==='VERIFYING'||v==='QUEUED'?'border-amber-500/30 text-amber-400':v==='SUSPENDED'||v==='FAILED'||v==='CANCELLED'||v==='ERROR'?'border-red-500/30 text-red-400':v==='ONLINE'||v==='RESOLVED'||v==='CLOSED'?'border-emerald-500/30 text-emerald-400':v==='OPEN'||v==='IN_PROGRESS'?'border-cyan-500/30 text-cyan-400':'border-border text-muted-foreground';
   return <span className={`px-2 py-0.5 rounded-full border text-[10px] ${cls}`}>{s || '-'}</span>;
 };
 function SimpleTable({ rows, cols, empty }: { rows: AnyObj[]; cols: [string,string][]; empty: string }) {
@@ -125,6 +127,20 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const [notifUnread, setNotifUnread] = useState(0);
   const [branches, setBranches] = useState<AnyObj[]>([]);
   const [branchForm, setBranchForm] = useState<AnyObj>({ name: '', code: '', address: '' });
+
+  // Complaints (scoped tickets)
+  const [complaints, setComplaints] = useState<AnyObj[]>([]);
+  const [complaintFilters, setComplaintFilters] = useState<AnyObj>({ q: '', status: '' });
+  const [complaintOpen, setComplaintOpen] = useState(false);
+  const [complaintForm, setComplaintForm] = useState<AnyObj>({ subscriber_id: '', subject: '', description: '', category: 'COMPLAINT', priority: 'MEDIUM' });
+  const [complaintDetail, setComplaintDetail] = useState<AnyObj | null>(null);
+  const [complaintComment, setComplaintComment] = useState('');
+  const [complaintBusy, setComplaintBusy] = useState(false);
+
+  // Parental control (scoped subscriber flag)
+  const [parental, setParental] = useState<AnyObj[]>([]);
+  const [parentalEnabledCount, setParentalEnabledCount] = useState(0);
+  const [parentalFilters, setParentalFilters] = useState<AnyObj>({ q: '', enabled: '' });
   const [logQ, setLogQ] = useState('');
   const [logKind, setLogKind] = useState<'all' | 'wallet' | 'audit' | 'auth'>('all');
   const [logFilters, setLogFilters] = useState<Record<string, string>>({ from: '', to: '', event: '', manager: '', user: '', agent: '', ip: '' });
@@ -238,9 +254,77 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const loadBranches = useCallback(async () => { if (!token) return; try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/branches`, {}, token); setBranches(r.data || []); } catch {} }, [token, resellerId]);
   const saveBranch = async () => { if (!token || !branchForm.name) return; try { await apiFetch(`/api/resellers/${resellerId}/branches`, { method: 'POST', body: JSON.stringify(branchForm) }, token); setBranchForm({ name: '', code: '', address: '' }); await loadBranches(); } catch (e: any) { setErr(e.message); } };
   const deleteBranch = async (id: string) => { if (!token) return; try { await apiFetch(`/api/resellers/${resellerId}/branches/${id}`, { method: 'DELETE' }, token); await loadBranches(); } catch (e: any) { setErr(e.message); } };
+
+  const loadComplaints = useCallback(async () => {
+    if (!token) return;
+    const qs = new URLSearchParams();
+    if (complaintFilters.q) qs.set('q', complaintFilters.q);
+    if (complaintFilters.status) qs.set('status', complaintFilters.status);
+    const r = await apiFetch<any>(`/api/resellers/${resellerId}/complaints${qs.toString() ? `?${qs}` : ''}`, {}, token);
+    setComplaints(r.data || []);
+  }, [token, resellerId, complaintFilters]);
+
+  const openComplaint = async (id: string) => {
+    if (!token) return;
+    setComplaintBusy(true);
+    try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/complaints/${id}`, {}, token); setComplaintDetail(r.data || null); setComplaintComment(''); }
+    catch (e: any) { setErr(e.message); }
+    finally { setComplaintBusy(false); }
+  };
+
+  const createComplaint = async () => {
+    if (!token || !complaintForm.subject) { setErr('Subject is required'); return; }
+    setComplaintBusy(true); setErr(null);
+    try {
+      await apiFetch(`/api/resellers/${resellerId}/complaints`, { method: 'POST', body: JSON.stringify(complaintForm) }, token);
+      setMsg('Complaint filed. ISP support has been notified.');
+      setComplaintOpen(false);
+      setComplaintForm({ subscriber_id: '', subject: '', description: '', category: 'COMPLAINT', priority: 'MEDIUM' });
+      await Promise.all([loadComplaints(), loadDashboard().catch(()=>{})]);
+    } catch (e: any) { setErr(e.message); }
+    finally { setComplaintBusy(false); }
+  };
+
+  const addComplaintComment = async () => {
+    if (!token || !complaintDetail || !complaintComment.trim()) return;
+    setComplaintBusy(true);
+    try {
+      await apiFetch(`/api/resellers/${resellerId}/complaints/${complaintDetail.id}/comments`, { method: 'POST', body: JSON.stringify({ body: complaintComment }) }, token);
+      setComplaintComment(''); await openComplaint(complaintDetail.id);
+    } catch (e: any) { setErr(e.message); }
+    finally { setComplaintBusy(false); }
+  };
+
+  const updateComplaintStatus = async (status: string) => {
+    if (!token || !complaintDetail) return;
+    setComplaintBusy(true);
+    try {
+      await apiFetch(`/api/resellers/${resellerId}/complaints/${complaintDetail.id}`, { method: 'PUT', body: JSON.stringify({ status }) }, token);
+      await openComplaint(complaintDetail.id);
+      await Promise.all([loadComplaints(), loadDashboard().catch(()=>{})]);
+    } catch (e: any) { setErr(e.message); }
+    finally { setComplaintBusy(false); }
+  };
+
+  const loadParental = useCallback(async () => {
+    if (!token) return;
+    const qs = new URLSearchParams();
+    if (parentalFilters.q) qs.set('q', parentalFilters.q);
+    if (parentalFilters.enabled) qs.set('enabled', parentalFilters.enabled);
+    const r = await apiFetch<any>(`/api/resellers/${resellerId}/parental-control${qs.toString() ? `?${qs}` : ''}`, {}, token);
+    setParental(r.data || []); setParentalEnabledCount(r.enabled_count || 0);
+  }, [token, resellerId, parentalFilters]);
+
+  const toggleParental = async (sid: string, enabled: boolean) => {
+    if (!token) return;
+    try {
+      await apiFetch(`/api/resellers/${resellerId}/parental-control/${sid}`, { method: 'PUT', body: JSON.stringify({ enabled }) }, token);
+      await Promise.all([loadParental(), loadDashboard().catch(()=>{})]);
+    } catch (e: any) { setErr(e.message); }
+  };
   const loadNotifLog = useCallback(async () => { if (!token) return; const r = await apiFetch<any>(`/api/resellers/${resellerId}/notification-log`, {}, token); setNotifLog(r.data || []); setNotifUnread(r.unread || 0); }, [token, resellerId]);
 
-  const loadTab = useCallback(async (t: TabKey) => { if (parityKeys.has(t)) return; setLoading(true); setErr(null); try { if (t === 'dashboard') await loadDashboard(); if (t === 'users') await Promise.all([loadUsers(), dashboard ? Promise.resolve() : loadDashboard().catch(()=>{})]); if (t === 'sessions') await loadSessions(); if (t === 'balance') await Promise.all([loadBalance(), loadTopups()]); if (t === 'sharing') await loadSharing(); if (t === 'payments') await loadPayments(); if (t === 'onus') await Promise.all([loadOnus(), users.length ? Promise.resolve() : loadUsers().catch(()=>{})]); if (t === 'logs') await loadLogs(); if (t === 'notifications') await loadNotifLog(); if (t === 'branches') await loadBranches(); } catch (e: any) { setErr(e.message || 'Failed to load'); } finally { setLoading(false); } }, [loadDashboard, loadUsers, loadSessions, loadBalance, loadSharing, loadPayments, loadOnus, loadLogs, loadNotifLog, loadBranches, dashboard, users.length]);
+  const loadTab = useCallback(async (t: TabKey) => { if (parityKeys.has(t)) return; setLoading(true); setErr(null); try { if (t === 'dashboard') await loadDashboard(); if (t === 'users') await Promise.all([loadUsers(), dashboard ? Promise.resolve() : loadDashboard().catch(()=>{})]); if (t === 'sessions') await loadSessions(); if (t === 'balance') await Promise.all([loadBalance(), loadTopups()]); if (t === 'sharing') await loadSharing(); if (t === 'payments') await loadPayments(); if (t === 'onus') await Promise.all([loadOnus(), users.length ? Promise.resolve() : loadUsers().catch(()=>{})]); if (t === 'logs') await loadLogs(); if (t === 'notifications') await loadNotifLog(); if (t === 'branches') await loadBranches(); if (t === 'complaints') await loadComplaints(); if (t === 'parental') await loadParental(); } catch (e: any) { setErr(e.message || 'Failed to load'); } finally { setLoading(false); } }, [loadDashboard, loadUsers, loadSessions, loadBalance, loadSharing, loadPayments, loadOnus, loadLogs, loadNotifLog, loadBranches, loadComplaints, loadParental, dashboard, users.length]);
   useEffect(() => { loadTab('dashboard'); }, [resellerId]); // eslint-disable-line
   useEffect(() => { if (tab !== 'dashboard') loadTab(tab); }, [tab, payKind]); // eslint-disable-line
   useEffect(() => { if (tab === 'payments') { const t = setTimeout(() => loadPayments().catch(()=>{}), 250); return () => clearTimeout(t); } }, [payQ, payStatus, payGateway, payMethod, payType, payApproval]); // eslint-disable-line
@@ -444,8 +528,8 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
             <Card label="Suspended" value={stats.suspended ?? 0} icon={UserX} tone="red" onClick={()=>{setTab('users');setUserStatus('SUSPENDED');}} />
             <Card label="Pending" value={stats.pending ?? 0} icon={Clock3} tone="slate" onClick={()=>{setTab('users');setUserStatus('PENDING');}} />
             <Card label="Terminated" value={stats.terminated ?? 0} icon={Ban} tone="slate" />
-            <Card label="Complaints" value={stats.complaints ?? 0} icon={AlertCircle} tone="slate" />
-            <Card label="Parental Control" value={stats.parental_control_users ?? 0} icon={Ban} tone="slate" />
+            <Card label="Complaints" value={stats.complaints ?? 0} icon={AlertCircle} tone="amber" onClick={()=>setTab('complaints')} sub="open tickets" />
+            <Card label="Parental Control" value={stats.parental_control_users ?? 0} icon={Ban} tone="purple" onClick={()=>setTab('parental')} sub="protected users" />
             <Card label="Custom Bandwidth" value={stats.custom_bandwidth_users ?? 0} icon={Activity} tone="blue" />
             <Card label="Extended Users" value={stats.extended_users ?? 0} icon={Clock3} tone="amber" />
             <Card label="Wallet Balance" value={money(walletInfo.balance ?? 0)} icon={Wallet} tone="green" onClick={()=>setTab('balance')} />
@@ -637,6 +721,83 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
         <div className="flex flex-wrap items-end gap-2">{([['name','Name'],['code','Code'],['address','Address']] as [string,string][]).map(([k,l])=><label key={k} className="block"><span className="form-label">{l}</span><input className="form-control" value={branchForm[k] || ''} onChange={e=>setBranchForm(f=>({...f,[k]:e.target.value}))} /></label>)}<button onClick={saveBranch} className="btn btn-primary btn-sm">Add Branch</button></div>
         <div className="overflow-auto"><table className="w-full text-xs min-w-[500px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Name</th><th className="text-left py-2 px-2">Code</th><th className="text-left py-2 px-2">Address</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Action</th></tr></thead><tbody>{branches.map(b=><tr key={b.id} className="border-b border-border/50"><td className="py-2 px-2 font-semibold">{b.name}</td><td className="py-2 px-2">{b.code||'-'}</td><td className="py-2 px-2">{b.address||'-'}</td><td className="py-2 px-2">{statusBadge(b.status)}</td><td className="py-2 px-2"><button onClick={()=>deleteBranch(b.id)} className="btn btn-outline btn-sm text-danger">Delete</button></td></tr>)}{!branches.length&&<tr><td colSpan={5} className="py-8 text-center text-muted-foreground">No branches yet. Add one to organise your subscribers.</td></tr>}</tbody></table></div>
       </div>)}
+
+      {tab === 'complaints' && (<div className="card p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-bold flex items-center gap-2"><AlertCircle className="w-4 h-4 text-primary" />Complaints <span className="text-xs text-muted-foreground font-normal">({complaints.length})</span></h2>
+          <div className="flex gap-2"><button onClick={()=>loadComplaints()} className="btn btn-outline btn-sm"><RefreshCw className="w-3.5 h-3.5" />Refresh</button><button onClick={()=>setComplaintOpen(true)} className="btn btn-primary btn-sm"><Plus className="w-3.5 h-3.5" />File Complaint</button></div>
+        </div>
+        <div className="flex flex-wrap items-end gap-2 text-xs">
+          <label className="block"><span className="form-label">Search</span><input className="form-control" placeholder="Ticket #, subject, customer..." value={complaintFilters.q || ''} onChange={e=>setComplaintFilters((f:any)=>({...f,q:e.target.value}))} /></label>
+          <label className="block"><span className="form-label">Status</span><select className="form-control" value={complaintFilters.status || ''} onChange={e=>setComplaintFilters((f:any)=>({...f,status:e.target.value}))}><option value="">All statuses</option>{['OPEN','IN_PROGRESS','RESOLVED','CLOSED'].map(s=><option key={s}>{s}</option>)}</select></label>
+          <button onClick={()=>loadComplaints()} className="btn btn-outline btn-sm">Apply</button>
+        </div>
+        <div className="overflow-auto"><table className="w-full text-xs min-w-[950px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Ticket</th><th className="text-left py-2 px-2">Subject</th><th className="text-left py-2 px-2">Subscriber</th><th className="text-left py-2 px-2">Category</th><th className="text-left py-2 px-2">Priority</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">SLA Due</th><th className="text-left py-2 px-2">Opened</th><th className="text-left py-2 px-2">Action</th></tr></thead><tbody>
+          {complaints.map(c => {
+            const breached = c.sla_due_at && !['RESOLVED','CLOSED'].includes(String(c.status).toUpperCase()) && new Date(c.sla_due_at).getTime() < Date.now();
+            return (<tr key={c.id} className="border-b border-border/50">
+              <td className="py-2 px-2 font-mono">{c.ticket_no}</td>
+              <td className="py-2 px-2 max-w-[260px] truncate" title={c.description || ''}>{c.subject}</td>
+              <td className="py-2 px-2">{c.subscriber_name || '-'}<div className="text-muted-foreground font-mono">{c.client_code || ''}</div></td>
+              <td className="py-2 px-2">{c.category}</td>
+              <td className="py-2 px-2"><span className={`px-2 py-0.5 rounded-full border text-[10px] ${c.priority==='CRITICAL'?'border-red-500/30 text-red-400':c.priority==='HIGH'?'border-amber-500/30 text-amber-400':'border-border text-muted-foreground'}`}>{c.priority}</span></td>
+              <td className="py-2 px-2">{statusBadge(c.status)}</td>
+              <td className={`py-2 px-2 whitespace-nowrap ${breached?'text-red-400 font-semibold':'text-muted-foreground'}`}>{dt(c.sla_due_at)}</td>
+              <td className="py-2 px-2 whitespace-nowrap text-muted-foreground">{dt(c.opened_at || c.created_at)}</td>
+              <td className="py-2 px-2"><button onClick={()=>openComplaint(c.id)} className="btn btn-outline btn-sm"><Eye className="w-3 h-3" />View</button></td>
+            </tr>);
+          })}
+          {!complaints.length && <tr><td colSpan={9} className="py-8 text-center text-muted-foreground">No complaints filed yet. Use “File Complaint” to open one with ISP support.</td></tr>}
+        </tbody></table></div>
+      </div>)}
+
+      {tab === 'parental' && (<div className="card p-4 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-bold flex items-center gap-2"><Ban className="w-4 h-4 text-primary" />Parental Control <span className="text-xs text-muted-foreground font-normal">({parentalEnabledCount} protected)</span></h2>
+          <button onClick={()=>loadParental()} className="btn btn-outline btn-sm"><RefreshCw className="w-3.5 h-3.5" />Refresh</button>
+        </div>
+        <p className="text-xs text-muted-foreground">Enable content filtering for your own subscribers. Protected users are counted on the dashboard.</p>
+        <div className="flex flex-wrap items-end gap-2 text-xs">
+          <label className="block"><span className="form-label">Search</span><input className="form-control" placeholder="Name, username, client code, phone..." value={parentalFilters.q || ''} onChange={e=>setParentalFilters((f:any)=>({...f,q:e.target.value}))} /></label>
+          <label className="block"><span className="form-label">Filter</span><select className="form-control" value={parentalFilters.enabled || ''} onChange={e=>setParentalFilters((f:any)=>({...f,enabled:e.target.value}))}><option value="">All users</option><option value="1">Protected only</option><option value="0">Unprotected only</option></select></label>
+          <button onClick={()=>loadParental()} className="btn btn-outline btn-sm">Apply</button>
+        </div>
+        <div className="overflow-auto"><table className="w-full text-xs min-w-[760px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Customer</th><th className="text-left py-2 px-2">Username</th><th className="text-left py-2 px-2">Phone</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Package</th><th className="text-left py-2 px-2">Parental Control</th></tr></thead><tbody>
+          {parental.map(s => (<tr key={s.id} className="border-b border-border/50">
+            <td className="py-2 px-2 font-semibold">{s.full_name || '-'}<div className="text-muted-foreground font-mono font-normal">{s.client_code || ''}</div></td>
+            <td className="py-2 px-2 font-mono">{s.username || '-'}</td>
+            <td className="py-2 px-2">{s.phone || '-'}</td>
+            <td className="py-2 px-2">{statusBadge(s.status)}</td>
+            <td className="py-2 px-2">{s.package_name || '-'}</td>
+            <td className="py-2 px-2"><button onClick={()=>toggleParental(s.id,!s.parental_control_enabled)} className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-[11px] font-semibold ${s.parental_control_enabled?'border-emerald-500/40 text-emerald-400 bg-emerald-500/10':'border-border text-muted-foreground'}`}><span className={`w-2 h-2 rounded-full ${s.parental_control_enabled?'bg-emerald-400':'bg-muted-foreground/50'}`} />{s.parental_control_enabled?'Enabled':'Disabled'}</button></td>
+          </tr>))}
+          {!parental.length && <tr><td colSpan={6} className="py-8 text-center text-muted-foreground">No subscribers match this filter.</td></tr>}
+        </tbody></table></div>
+      </div>)}
+
+      {complaintOpen && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setComplaintOpen(false)}><div className="w-full max-w-xl card p-4 space-y-3" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><AlertCircle className="w-4 h-4 text-primary" />File a Complaint</h3><button onClick={()=>setComplaintOpen(false)} className="p-1 rounded"><X className="w-4 h-4" /></button></div>
+        <p className="text-xs text-muted-foreground">Your complaint is routed to ISP support and visible to you here. Only your own subscribers can be selected.</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+          <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Subject *</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={complaintForm.subject || ''} onChange={e=>setComplaintForm((f:any)=>({...f,subject:e.target.value}))} /></label>
+          <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Subscriber (optional)</div><select className="w-full p-2 rounded-xl border border-border bg-background" value={complaintForm.subscriber_id || ''} onChange={e=>setComplaintForm((f:any)=>({...f,subscriber_id:e.target.value}))}><option value="">General complaint</option>{users.map(u=><option key={u.id} value={u.id}>{u.full_name} ({u.client_code || u.username})</option>)}</select></label>
+          <label className="block"><div className="text-xs text-muted-foreground mb-1">Category</div><select className="w-full p-2 rounded-xl border border-border bg-background" value={complaintForm.category || 'COMPLAINT'} onChange={e=>setComplaintForm((f:any)=>({...f,category:e.target.value}))}>{['COMPLAINT','SUPPORT','BILLING','NETWORK','OTHER'].map(x=><option key={x}>{x}</option>)}</select></label>
+          <label className="block"><div className="text-xs text-muted-foreground mb-1">Priority</div><select className="w-full p-2 rounded-xl border border-border bg-background" value={complaintForm.priority || 'MEDIUM'} onChange={e=>setComplaintForm((f:any)=>({...f,priority:e.target.value}))}>{['LOW','MEDIUM','HIGH','CRITICAL'].map(x=><option key={x}>{x}</option>)}</select></label>
+          <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Description</div><textarea className="w-full p-2 rounded-xl border border-border bg-background min-h-[90px]" value={complaintForm.description || ''} onChange={e=>setComplaintForm((f:any)=>({...f,description:e.target.value}))} /></label>
+        </div>
+        <div className="flex justify-end gap-2"><button onClick={()=>setComplaintOpen(false)} className="px-3 py-2 rounded-xl border border-border text-sm">Cancel</button><button disabled={complaintBusy} onClick={createComplaint} className="btn btn-primary">{complaintBusy?'Submitting…':'Submit Complaint'}</button></div>
+      </div></div>)}
+
+      {complaintDetail && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setComplaintDetail(null)}><div className="w-full max-w-2xl card p-4 space-y-3 max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><AlertCircle className="w-4 h-4 text-primary" />{complaintDetail.ticket_no} — {complaintDetail.subject}</h3><button onClick={()=>setComplaintDetail(null)} className="p-1 rounded"><X className="w-4 h-4" /></button></div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">{[['Status', statusBadge(complaintDetail.status)], ['Priority', complaintDetail.priority], ['Category', complaintDetail.category], ['Subscriber', complaintDetail.subscriber_name || '-']].map(([k,v]:any)=><div key={k} className="p-2 rounded-xl border border-border bg-muted/20"><div className="text-muted-foreground">{k}</div><div className="font-semibold mt-0.5">{v}</div></div>)}</div>
+        {complaintDetail.description && <div className="text-sm p-3 rounded-xl border border-border bg-muted/20">{complaintDetail.description}</div>}
+        <div className="text-xs text-muted-foreground">Opened {dt(complaintDetail.opened_at || complaintDetail.created_at)} · SLA due {dt(complaintDetail.sla_due_at)}</div>
+        <div className="space-y-2"><div className="font-semibold text-sm">Conversation</div><div className="max-h-56 overflow-auto space-y-2">{(complaintDetail.comments || []).map((c:any)=><div key={c.id} className="p-2.5 rounded-xl border border-border bg-muted/20"><div className="text-[11px] text-muted-foreground">{c.author_role} · {c.author_name} · {dt(c.created_at)}</div><div className="text-sm mt-0.5">{c.body}</div></div>)}{!(complaintDetail.comments || []).length && <div className="text-xs text-muted-foreground py-3 text-center">No comments yet.</div>}</div>
+          <div className="flex gap-2"><input className="flex-1 p-2 rounded-xl border border-border bg-background text-sm" placeholder="Add a comment..." value={complaintComment} onChange={e=>setComplaintComment(e.target.value)} /><button disabled={complaintBusy || !complaintComment.trim()} onClick={addComplaintComment} className="btn btn-outline btn-sm"><Send className="w-3.5 h-3.5" />Send</button></div>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-3"><button disabled={complaintBusy} onClick={()=>updateComplaintStatus('IN_PROGRESS')} className="btn btn-outline btn-sm">In Progress</button><button disabled={complaintBusy} onClick={()=>updateComplaintStatus('RESOLVED')} className="btn btn-primary btn-sm">Mark Resolved</button><button disabled={complaintBusy} onClick={()=>updateComplaintStatus('OPEN')} className="btn btn-outline btn-sm">Reopen</button></div>
+      </div></div>)}
 
       {parityKeys.has(tab) && <ResellerParityPanel tab={tab as ParityTab} resellerId={resellerId} />}
 

@@ -104,6 +104,19 @@ router.post('/', asyncHandler(async (req, res) => {
       if (!b.reseller_id) b.reseller_id = s.rows[0].reseller_id;
     }
   }
+  // Resellers may only file complaints for their own subscribers, and every
+  // ticket they create is forced to their own partner account.
+  if (user(req).role === 'RESELLER') {
+    const rid = await resolveResellerIdForUser(req);
+    if (!rid) return res.status(403).json({ message: 'No reseller account linked to this login' });
+    if (b.subscriber_id) {
+      const owned = await pool.query('SELECT reseller_id FROM subscribers WHERE id=$1', [b.subscriber_id]);
+      if (!owned.rows[0] || String(owned.rows[0].reseller_id || '') !== String(rid)) {
+        return res.status(404).json({ message: 'Subscriber not found' });
+      }
+    }
+    b.reseller_id = rid;
+  }
   const gps = (siteLat != null && siteLng != null) ? `https://www.google.com/maps/search/?api=1&query=${siteLat},${siteLng}` : (siteAddress ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(siteAddress)}` : null);
   const r = await pool.query(`INSERT INTO tickets(ticket_no,subscriber_id,reseller_id,subject,description,category,priority,status,sla_policy,sla_due_at,assigned_technician_id,assigned_technician_name,assigned_technician_phone,dispatch_status,site_latitude,site_longitude,site_address,gps_nav_url,source,created_by)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,

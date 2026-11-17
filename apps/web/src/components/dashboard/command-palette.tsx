@@ -49,6 +49,8 @@ const resellerResults: SearchResult[] = [
   { id: 'rs-portal', category: 'Navigation', title: 'My Portal', subtitle: 'Reseller dashboard, users and reports', href: '/resellers' },
   { id: 'rs-wallet', category: 'Navigation', title: 'Wallet & Transactions', subtitle: 'Reseller wallet ledger and balance', href: '/resellers/wallet' },
   { id: 'rs-renew', category: 'Navigation', title: 'Renew Subscriber', subtitle: 'Renew a subscriber from wallet credit', href: '/resellers/renew' },
+  { id: 'rs-complaints', category: 'Navigation', title: 'Complaints', subtitle: 'File and track reseller complaints', href: '/resellers?tab=complaints' },
+  { id: 'rs-parental', category: 'Navigation', title: 'Parental Control', subtitle: 'Manage content filtering for your subscribers', href: '/resellers?tab=parental' },
   { id: 'rs-tickets', category: 'Navigation', title: 'My Tickets', subtitle: 'Support tickets for this reseller', href: '/tickets' },
 ];
 
