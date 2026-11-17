@@ -385,6 +385,61 @@ test.describe('GIS authorization', () => {
   });
 });
 
+test.describe('subscriber scoping', () => {
+  test('reseller cannot cross tenant boundaries and live payload hides credentials', async ({ request }) => {
+    const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
+    const adminToken = await loginToken(request, admin);
+    const resellerToken = await loginToken(request, reseller);
+
+    const allRes = await request.get('/api/subscribers?limit=200', { headers: auth(adminToken) });
+    const ownRes = await request.get('/api/subscribers?limit=200', { headers: auth(resellerToken) });
+    expect(allRes.ok()).toBeTruthy();
+    expect(ownRes.ok()).toBeTruthy();
+    const all = (await allRes.json()).data || [];
+    const own = (await ownRes.json()).data || [];
+    expect(own.length, 'reseller fixture should own at least one subscriber').toBeGreaterThan(0);
+
+    const ownIds = new Set(own.map((s: any) => s.id));
+    // Prefer an unassigned subscriber: it exercises the null-uuid IDOR fallback.
+    const target = all.find((s: any) => !ownIds.has(s.id) && !s.reseller_id) || all.find((s: any) => !ownIds.has(s.id));
+    expect(target, 'need a subscriber outside this reseller scope').toBeTruthy();
+
+    // H2: by-id read must fail closed even when reseller_id is NULL.
+    const detail = await request.get(`/api/subscribers/${target.id}`, { headers: auth(resellerToken) });
+    expect(detail.status(), 'reseller must not read a foreign/unassigned subscriber').toBe(404);
+
+    // H1: the enhancement routers must be tenant-scoped for reads.
+    const comm = await request.get(`/api/subscriber-communications/subscriber/${target.id}`, { headers: auth(resellerToken) });
+    expect(comm.status()).toBe(404);
+    const equip = await request.get(`/api/subscriber-equipment/subscriber/${target.id}`, { headers: auth(resellerToken) });
+    expect(equip.status()).toBe(404);
+
+    const commList = await request.get(`/api/subscriber-communications?subscriber_id=${target.id}`, { headers: auth(resellerToken) });
+    expect(commList.ok()).toBeTruthy();
+    expect((await commList.json()).data.every((c: any) => c.subscriber_id !== target.id)).toBe(true);
+    const equipList = await request.get(`/api/subscriber-equipment?subscriber_id=${target.id}`, { headers: auth(resellerToken) });
+    expect(equipList.ok()).toBeTruthy();
+    expect((await equipList.json()).data.every((e: any) => e.subscriber_id !== target.id)).toBe(true);
+
+    // H3 + M1: own live payload carries no credentials, and own history is reachable.
+    const mine = own[0];
+    const live = await request.get(`/api/subscribers/${mine.id}/live`, { headers: auth(resellerToken) });
+    expect(live.ok()).toBeTruthy();
+    expect(Object.prototype.hasOwnProperty.call((await live.json()).subscriber, 'password')).toBe(false);
+    const history = await request.get(`/api/subscribers/${mine.id}/history`, { headers: auth(resellerToken) });
+    expect(history.status(), 'reseller should see their own subscriber history').toBe(200);
+
+    // M2: a reseller cannot reassign their subscriber to another partner via PUT.
+    const reassigned = await request.put(`/api/subscribers/${mine.id}`, {
+      headers: auth(resellerToken),
+      data: { reseller_id: '00000000-0000-0000-0000-000000000000' },
+    });
+    expect(reassigned.ok(), 'PUT with a foreign reseller_id must be rejected or overridden').toBeTruthy();
+    const after = await request.get(`/api/subscribers/${mine.id}`, { headers: auth(resellerToken) });
+    expect((await after.json()).reseller_id).toBe(mine.reseller_id);
+  });
+});
+
 test.describe('GIS mutating flows (opt-in)', () => {
   test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
 

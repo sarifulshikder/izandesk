@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler, getPagination, ValidationError } from './helpers';
 import { auditLog, reqActor } from '../integrations/audit';
+import { resellerScope, assertSubscriberOwnership } from './subscriber-scope';
 
 const router: Router = Router();
 
@@ -32,6 +33,12 @@ router.get('/', asyncHandler(async (req, res) => {
   if (subscriber) { params.push(subscriber); where.push(`subscriber_id = $${params.length}`); }
   if (type) { params.push(type); where.push(`equipment_type = $${params.length}`); }
   if (status) { params.push(status); where.push(`status = $${params.length}`); }
+  const scope = await resellerScope(req);
+  if (scope.restricted && !scope.uuid) return res.status(403).json({ message: 'No reseller account linked to this login' });
+  if (scope.restricted) {
+    params.push(scope.uuid);
+    where.push(`subscriber_id IN (SELECT id FROM subscribers WHERE reseller_id=$${params.length})`);
+  }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const totalRes = await pool.query(`SELECT COUNT(*)::int AS total FROM subscriber_equipment ${whereSql}`, params);
   params.push(limit, offset);
@@ -40,6 +47,7 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.get('/subscriber/:subscriberId', asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, req.params.subscriberId))) return;
   const rows = (await pool.query('SELECT * FROM subscriber_equipment WHERE subscriber_id=$1 ORDER BY created_at DESC', [req.params.subscriberId])).rows;
   res.json({ ok: true, data: rows });
 }));
@@ -47,6 +55,7 @@ router.get('/subscriber/:subscriberId', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const equip = (await pool.query('SELECT * FROM subscriber_equipment WHERE id=$1', [req.params.id])).rows[0];
   if (!equip) return res.status(404).json({ message: 'Equipment not found' });
+  if (!(await assertSubscriberOwnership(req, res, equip.subscriber_id))) return;
   res.json({ ok: true, equipment: equip });
 }));
 
@@ -55,6 +64,7 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!b.subscriber_id) throw new ValidationError('subscriber_id is required');
   if (!b.serial_number) throw new ValidationError('serial_number is required');
   if (!b.equipment_type) throw new ValidationError('equipment_type is required');
+  if (!(await assertSubscriberOwnership(req, res, b.subscriber_id))) return;
 
   // Check if serial already assigned
   const existing = await pool.query('SELECT id FROM subscriber_equipment WHERE serial_number=$1 AND status NOT IN ($2,$3)', [b.serial_number, 'RETURNED', 'RETIRED']);
@@ -78,6 +88,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const existing = (await pool.query('SELECT * FROM subscriber_equipment WHERE id=$1', [req.params.id])).rows[0];
   if (!existing) return res.status(404).json({ message: 'Equipment not found' });
+  if (!(await assertSubscriberOwnership(req, res, existing.subscriber_id))) return;
 
   const type = b.equipment_type ? enumVal(b.equipment_type, EQUIP_TYPES, 'equipment_type', existing.equipment_type) : existing.equipment_type;
   const status = b.status ? enumVal(b.status, EQUIP_STATUSES, 'status', existing.status) : existing.status;
@@ -110,6 +121,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
 router.delete('/:id', asyncHandler(async (req, res) => {
   const existing = (await pool.query('SELECT * FROM subscriber_equipment WHERE id=$1', [req.params.id])).rows[0];
   if (!existing) return res.status(404).json({ message: 'Equipment not found' });
+  if (!(await assertSubscriberOwnership(req, res, existing.subscriber_id))) return;
   if (existing.inventory_serial_id) await pool.query('UPDATE inventory_serials SET status=$2, assigned_subscriber_id=NULL, updated_at=now() WHERE id=$1', [existing.inventory_serial_id, 'IN_STOCK']);
   await pool.query('DELETE FROM subscriber_equipment WHERE id=$1', [req.params.id]);
   await auditLog({ ...reqActor(req), action: 'EQUIPMENT_DELETE', entity_type: 'subscriber_equipment', entity_id: req.params.id, details: { serial: existing.serial_number, subscriber_id: existing.subscriber_id } });
@@ -121,6 +133,9 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 /* ------------------------------------------------------------------ */
 
 router.post('/:id/mark-installed', asyncHandler(async (req, res) => {
+  const target = (await pool.query('SELECT subscriber_id FROM subscriber_equipment WHERE id=$1', [req.params.id])).rows[0];
+  if (!target) return res.status(404).json({ message: 'Equipment not found' });
+  if (!(await assertSubscriberOwnership(req, res, target.subscriber_id))) return;
   const r = await pool.query(`UPDATE subscriber_equipment SET status='INSTALLED', installed_at=now(), installed_by=$2, updated_at=now() WHERE id=$1 RETURNING *`, [req.params.id, reqActor(req).actor_name]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Equipment not found' });
   await auditLog({ ...reqActor(req), action: 'EQUIPMENT_INSTALLED', entity_type: 'subscriber_equipment', entity_id: r.rows[0].id, details: {} });
@@ -129,6 +144,9 @@ router.post('/:id/mark-installed', asyncHandler(async (req, res) => {
 
 router.post('/:id/mark-faulty', asyncHandler(async (req, res) => {
   const b = req.body || {};
+  const target = (await pool.query('SELECT subscriber_id FROM subscriber_equipment WHERE id=$1', [req.params.id])).rows[0];
+  if (!target) return res.status(404).json({ message: 'Equipment not found' });
+  if (!(await assertSubscriberOwnership(req, res, target.subscriber_id))) return;
   const r = await pool.query(`UPDATE subscriber_equipment SET status='FAULTY', notes=COALESCE(notes,'') || $2, updated_at=now() WHERE id=$1 RETURNING *`, [req.params.id, `\n[FAULTY ${new Date().toISOString()}]: ${b.reason || 'Marked faulty'}`]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Equipment not found' });
   await auditLog({ ...reqActor(req), action: 'EQUIPMENT_FAULTY', entity_type: 'subscriber_equipment', entity_id: r.rows[0].id, details: { reason: b.reason } });
@@ -137,6 +155,9 @@ router.post('/:id/mark-faulty', asyncHandler(async (req, res) => {
 
 router.post('/:id/initiate-rma', asyncHandler(async (req, res) => {
   const b = req.body || {};
+  const target = (await pool.query('SELECT subscriber_id FROM subscriber_equipment WHERE id=$1', [req.params.id])).rows[0];
+  if (!target) return res.status(404).json({ message: 'Equipment not found' });
+  if (!(await assertSubscriberOwnership(req, res, target.subscriber_id))) return;
   const r = await pool.query(`UPDATE subscriber_equipment SET status='RMA', notes=COALESCE(notes,'') || $2, updated_at=now() WHERE id=$1 RETURNING *`, [req.params.id, `\n[RMA ${new Date().toISOString()}]: ${b.reason || 'RMA initiated'}`]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Equipment not found' });
   if (r.rows[0].inventory_serial_id) await pool.query('UPDATE inventory_serials SET status=$2, updated_at=now() WHERE id=$1', [r.rows[0].inventory_serial_id, 'RMA']);
@@ -148,6 +169,7 @@ router.post('/:id/return', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const existing = (await pool.query('SELECT * FROM subscriber_equipment WHERE id=$1', [req.params.id])).rows[0];
   if (!existing) return res.status(404).json({ message: 'Equipment not found' });
+  if (!(await assertSubscriberOwnership(req, res, existing.subscriber_id))) return;
   const r = await pool.query(`UPDATE subscriber_equipment SET status='RETURNED', notes=COALESCE(notes,'') || $2, updated_at=now() WHERE id=$1 RETURNING *`, [req.params.id, `\n[RETURNED ${new Date().toISOString()}]: ${b.reason || 'Equipment returned'}`]);
   if (existing.inventory_serial_id) await pool.query('UPDATE inventory_serials SET status=$2, assigned_subscriber_id=NULL, updated_at=now() WHERE id=$1', [existing.inventory_serial_id, 'IN_STOCK']);
   await auditLog({ ...reqActor(req), action: 'EQUIPMENT_RETURN', entity_type: 'subscriber_equipment', entity_id: r.rows[0].id, details: { reason: b.reason } });

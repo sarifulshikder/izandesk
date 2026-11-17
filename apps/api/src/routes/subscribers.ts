@@ -18,6 +18,7 @@ import { mikrotikRemovePppSecret } from '../integrations/mikrotik';
 import { oltFindOnuByClientMac } from '../integrations/olt';
 import { removeSubscriberFromRadiusDb, syncSubscriberToRadiusDb } from '../integrations/radius';
 import { applyProvisioningState } from '../integrations/billing';
+import { resellerScope, assertSubscriberOwnership } from './subscriber-scope';
 import { auditLog, reqActor } from '../integrations/audit';
 import { execFile } from 'child_process';
 
@@ -325,25 +326,6 @@ function stageForStatus(status: string): string {
 /* Reseller RBAC scoping                                               */
 /* ------------------------------------------------------------------ */
 
-async function resellerScope(req: any): Promise<{ restricted: boolean; uuid: string | null }> {
-  const user = req.user || {};
-  if (user.role !== 'RESELLER') return { restricted: false, uuid: null };
-  const code = str(user.resellerId);
-  if (!code) return { restricted: true, uuid: null };
-  const r = await pool.query('SELECT id FROM resellers WHERE id::text=$1 OR lower(code)=lower($1) OR lower(subdomain)=lower($1) LIMIT 1', [code]);
-  return { restricted: true, uuid: r.rows[0]?.id || null };
-}
-
-/** Fail fast when a reseller tries to reach a subscriber that is not theirs. */
-async function assertSubscriberOwnership(req: any, res: any, subscriberId: string): Promise<boolean> {
-  const scope = await resellerScope(req);
-  if (!scope.restricted) return true;
-  if (!scope.uuid) { res.status(403).json({ message: 'No reseller account linked to this login' }); return false; }
-  const r = await pool.query('SELECT id FROM subscribers WHERE id=$1 AND reseller_id=$2', [subscriberId, scope.uuid]);
-  if (!r.rows[0]) { res.status(404).json({ message: 'Subscriber not found' }); return false; }
-  return true;
-}
-
 /* ------------------------------------------------------------------ */
 /* Remove PPP secret helper                                            */
 /* ------------------------------------------------------------------ */
@@ -482,8 +464,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const r = await pool.query(`${LIST_SELECT} WHERE s.id=$1`, [req.params.id]);
   const sub = r.rows[0];
   if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
-  const scope = await resellerScope(req);
-  if (scope.restricted && sub.reseller_id !== scope.uuid) return res.status(404).json({ message: 'Subscriber not found' });
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
 
   const kyc = await pool.query('SELECT * FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [req.params.id]);
   let quota: any = null;
@@ -611,10 +592,14 @@ router.put('/:id', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const existing = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [req.params.id])).rows[0];
   if (!existing) return res.status(404).json({ message: 'Subscriber not found' });
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const scope = await resellerScope(req);
-  if (scope.restricted && existing.reseller_id !== scope.uuid) return res.status(404).json({ message: 'Subscriber not found' });
 
-  const p = await buildPayload(b, existing);
+  // Resellers must never be able to move a subscriber to another partner via PUT.
+  // Override before validation so a client-supplied id cannot change ownership
+  // (or fail validation) at all.
+  const body = scope.restricted ? { ...b, reseller_id: scope.uuid } : b;
+  const p = await buildPayload(body, existing);
   const statusChanged = p.status !== existing.status;
   const usernameChanged = (p.username || '') !== (existing.username || '');
   const provisioningChanged = ['provisioning_mode', 'router_id', 'package_name', 'ip_address', 'password']
@@ -697,8 +682,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
 router.delete('/:id', asyncHandler(async (req, res) => {
   const existing = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [req.params.id])).rows[0];
   if (!existing) return res.status(404).json({ message: 'Subscriber not found' });
-  const scope = await resellerScope(req);
-  if (scope.restricted && existing.reseller_id !== scope.uuid) return res.status(404).json({ message: 'Subscriber not found' });
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
 
   const deps = (await pool.query(`SELECT
     (SELECT COUNT(*)::int FROM invoices WHERE subscriber_id=$1) AS invoices,
@@ -773,8 +757,7 @@ router.get('/packages/catalog', asyncHandler(async (_req, res) => {
 router.get('/:id/history', asyncHandler(async (req, res) => {
   const sub = await pool.query('SELECT id FROM subscribers WHERE id=$1', [req.params.id]);
   if (!sub.rows[0]) return res.status(404).json({ message: 'Subscriber not found' });
-  const scope = await resellerScope(req);
-  if (scope.restricted && sub.rows[0].reseller_id !== scope.uuid) return res.status(404).json({ message: 'Subscriber not found' });
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
 
   // Get status changes from audit logs
   const logs = await pool.query(`SELECT action, details, actor_name, actor_role, created_at FROM audit_logs WHERE entity_type='subscriber' AND entity_id=$1 ORDER BY created_at DESC LIMIT 100`, [req.params.id]);
@@ -794,8 +777,7 @@ router.get('/:id/caf', asyncHandler(async (req, res) => {
   const r = await pool.query(`${LIST_SELECT} WHERE s.id=$1`, [req.params.id]);
   const sub = r.rows[0];
   if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
-  const scope = await resellerScope(req);
-  if (scope.restricted && sub.reseller_id !== scope.uuid) return res.status(404).json({ message: 'Subscriber not found' });
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
 
   const kyc = await pool.query('SELECT * FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [req.params.id]);
 
@@ -1299,7 +1281,7 @@ router.get('/:id/live', asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const id = req.params.id;
   const subRes = await pool.query(`
-    SELECT s.id, s.client_code, s.full_name, s.subscriber_type, s.connection_type, s.username, s.password,
+    SELECT s.id, s.client_code, s.full_name, s.subscriber_type, s.connection_type, s.username,
            s.phone, s.email, s.status, s.package_name, s.bandwidth_mbps, s.monthly_bill,
            s.ip_address, s.mac_address, s.provisioning_mode, s.router_id, s.area_id, s.zone_id, s.distribution_box_id,
            s.address, s.latitude, s.longitude, s.installation_date, s.expiry_date,
@@ -1420,7 +1402,7 @@ router.get('/:id/live', asyncHandler(async (req, res) => {
     latency = await execPing(String(targetIp));
   }
 
-  // Do not mask here if plain text is stored; if hashed it will appear hashed (existing behavior stores hash on change)
+  // Credentials are never selected here — keep them out of live dashboard payloads.
   res.json({
     ok: true,
     subscriber: sub,

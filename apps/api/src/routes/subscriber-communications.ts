@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler, getPagination, ValidationError } from './helpers';
 import { auditLog, reqActor } from '../integrations/audit';
+import { resellerScope, assertSubscriberOwnership } from './subscriber-scope';
 
 const router: Router = Router();
 
@@ -37,6 +38,12 @@ router.get('/', asyncHandler(async (req, res) => {
   if (direction) { params.push(direction); where.push(`direction = $${params.length}`); }
   if (from) { params.push(from); where.push(`created_at >= $${params.length}`); }
   if (to) { params.push(to); where.push(`created_at <= $${params.length}`); }
+  const scope = await resellerScope(req);
+  if (scope.restricted && !scope.uuid) return res.status(403).json({ message: 'No reseller account linked to this login' });
+  if (scope.restricted) {
+    params.push(scope.uuid);
+    where.push(`subscriber_id IN (SELECT id FROM subscribers WHERE reseller_id=$${params.length})`);
+  }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const totalRes = await pool.query(`SELECT COUNT(*)::int AS total FROM subscriber_communications ${whereSql}`, params);
   params.push(limit, offset);
@@ -45,6 +52,7 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.get('/subscriber/:subscriberId', asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, req.params.subscriberId))) return;
   const { limit = '50', offset = '0' } = req.query;
   const rows = (await pool.query('SELECT * FROM subscriber_communications WHERE subscriber_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3', [req.params.subscriberId, limit, offset])).rows;
   res.json({ ok: true, data: rows });
@@ -53,6 +61,7 @@ router.get('/subscriber/:subscriberId', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const comm = (await pool.query('SELECT * FROM subscriber_communications WHERE id=$1', [req.params.id])).rows[0];
   if (!comm) return res.status(404).json({ message: 'Communication not found' });
+  if (!(await assertSubscriberOwnership(req, res, comm.subscriber_id))) return;
   res.json({ ok: true, communication: comm });
 }));
 
@@ -61,6 +70,7 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!b.subscriber_id) throw new ValidationError('subscriber_id is required');
   if (!b.channel) throw new ValidationError('channel is required');
   if (!b.direction) throw new ValidationError('direction is required');
+  if (!(await assertSubscriberOwnership(req, res, b.subscriber_id))) return;
 
   const r = await pool.query(`INSERT INTO subscriber_communications(subscriber_id, direction, channel, subject, body, contact_person, contact_phone, contact_email, related_type, related_id, status, provider_message_id, metadata, created_by)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
@@ -77,6 +87,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const existing = (await pool.query('SELECT * FROM subscriber_communications WHERE id=$1', [req.params.id])).rows[0];
   if (!existing) return res.status(404).json({ message: 'Communication not found' });
+  if (!(await assertSubscriberOwnership(req, res, existing.subscriber_id))) return;
 
   const status = b.status ? enumVal(b.status, STATUSES, 'status', existing.status) : existing.status;
 
@@ -95,6 +106,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
 router.delete('/:id', asyncHandler(async (req, res) => {
   const existing = (await pool.query('SELECT * FROM subscriber_communications WHERE id=$1', [req.params.id])).rows[0];
   if (!existing) return res.status(404).json({ message: 'Communication not found' });
+  if (!(await assertSubscriberOwnership(req, res, existing.subscriber_id))) return;
   await pool.query('DELETE FROM subscriber_communications WHERE id=$1', [req.params.id]);
   await auditLog({ ...reqActor(req), action: 'COMM_DELETE', entity_type: 'subscriber_communication', entity_id: req.params.id, details: {} });
   res.json({ ok: true });
@@ -108,6 +120,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 router.post('/log-call', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.subscriber_id) throw new ValidationError('subscriber_id required');
+  if (!(await assertSubscriberOwnership(req, res, b.subscriber_id))) return;
   const r = await pool.query(`INSERT INTO subscriber_communications(subscriber_id, direction, channel, subject, body, contact_person, contact_phone, status, created_by)
     VALUES($1,'OUTBOUND','CALL',$2,$3,$4,$5,'COMPLETED',$6) RETURNING *`,
     [b.subscriber_id, nullableStr(b.subject), nullableStr(b.body), nullableStr(b.contact_person), nullableStr(b.contact_phone), b.created_by || reqActor(req).actor_name]);
@@ -118,6 +131,7 @@ router.post('/log-call', asyncHandler(async (req, res) => {
 router.post('/log-whatsapp', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.subscriber_id) throw new ValidationError('subscriber_id required');
+  if (!(await assertSubscriberOwnership(req, res, b.subscriber_id))) return;
   const r = await pool.query(`INSERT INTO subscriber_communications(subscriber_id, direction, channel, subject, body, contact_person, contact_phone, status, created_by)
     VALUES($1,'OUTBOUND','WHATSAPP',$2,$3,$4,$5,'COMPLETED',$6) RETURNING *`,
     [b.subscriber_id, nullableStr(b.subject), nullableStr(b.body), nullableStr(b.contact_person), nullableStr(b.contact_phone), b.created_by || reqActor(req).actor_name]);
@@ -128,6 +142,7 @@ router.post('/log-whatsapp', asyncHandler(async (req, res) => {
 router.post('/log-email', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.subscriber_id) throw new ValidationError('subscriber_id required');
+  if (!(await assertSubscriberOwnership(req, res, b.subscriber_id))) return;
   const r = await pool.query(`INSERT INTO subscriber_communications(subscriber_id, direction, channel, subject, body, contact_person, contact_email, status, created_by)
     VALUES($1,'OUTBOUND','EMAIL',$2,$3,$4,$5,'COMPLETED',$6) RETURNING *`,
     [b.subscriber_id, nullableStr(b.subject), nullableStr(b.body), nullableStr(b.contact_person), nullableStr(b.contact_email), b.created_by || reqActor(req).actor_name]);
@@ -138,6 +153,7 @@ router.post('/log-email', asyncHandler(async (req, res) => {
 router.post('/log-sms', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.subscriber_id) throw new ValidationError('subscriber_id required');
+  if (!(await assertSubscriberOwnership(req, res, b.subscriber_id))) return;
   const r = await pool.query(`INSERT INTO subscriber_communications(subscriber_id, direction, channel, subject, body, contact_person, contact_phone, status, created_by)
     VALUES($1,'OUTBOUND','SMS',$2,$3,$4,$5,'COMPLETED',$6) RETURNING *`,
     [b.subscriber_id, nullableStr(b.subject), nullableStr(b.body), nullableStr(b.contact_person), nullableStr(b.contact_phone), b.created_by || reqActor(req).actor_name]);
@@ -148,6 +164,7 @@ router.post('/log-sms', asyncHandler(async (req, res) => {
 router.post('/log-note', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.subscriber_id) throw new ValidationError('subscriber_id required');
+  if (!(await assertSubscriberOwnership(req, res, b.subscriber_id))) return;
   const r = await pool.query(`INSERT INTO subscriber_communications(subscriber_id, direction, channel, subject, body, status, created_by)
     VALUES($1,'INBOUND','NOTE',$2,$3,'COMPLETED',$4) RETURNING *`,
     [b.subscriber_id, nullableStr(b.subject), nullableStr(b.body), b.created_by || reqActor(req).actor_name]);
