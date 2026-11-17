@@ -1,0 +1,77 @@
+name: E2E smoke
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.18.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Start the app stack
+        run: |
+          docker compose -f docker/docker-compose.yml up -d postgres redis api web
+
+      - name: Wait for web and API
+        run: |
+          set -e
+          echo "Waiting for API and web to become ready..."
+          for i in $(seq 1 90); do
+            if curl -fsS http://localhost:4000/api/health >/dev/null 2>&1 \
+               && curl -fsS http://localhost:3000/ >/dev/null 2>&1; then
+              echo "Stack is ready after ${i} checks."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for the stack."
+          docker compose -f docker/docker-compose.yml logs --tail=200 api web postgres
+          exit 1
+
+      - name: Run smoke suite
+        run: pnpm test:e2e
+        env:
+          E2E_BASE_URL: http://localhost:3000
+          E2E_ADMIN_EMAIL: admin@izandesk.com
+          E2E_ADMIN_PASSWORD: admin123
+          E2E_RESELLER_EMAIL: reseller@cybernet.bd
+          E2E_RESELLER_PASSWORD: reseller123
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml logs --tail=300 api web postgres
+
+      - name: Stop the app stack
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v --remove-orphans

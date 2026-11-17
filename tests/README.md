@@ -13,6 +13,12 @@ pnpm test:e2e:mutations       # also creates and deletes one test subscriber
 
 Target a different host with `E2E_BASE_URL=https://your-host`.
 
+CI (`.github/workflows/e2e-smoke.yml`) boots `postgres`, `redis`, `api` and `web`
+from `docker/docker-compose.yml`, waits for `/api/health` and the web root, then
+runs the default (non-mutating) suite against `http://localhost:3000` on every
+push to `master`, pull request and manual dispatch. The opt-in mutating test is
+not run in CI.
+
 ## Configuration
 
 | Variable | Default | Purpose |
