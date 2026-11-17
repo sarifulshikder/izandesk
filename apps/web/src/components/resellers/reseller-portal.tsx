@@ -21,15 +21,6 @@ const d = (v: any) => v ? new Date(v).toLocaleDateString() : '-';
 const daysLeft = (v: any) => { if (!v) return null; const t = new Date(v).getTime(); if (isNaN(t)) return null; return Math.ceil((t - Date.now()) / 86400000); };
 const gb = (v: any) => { const b = Number(v || 0); return b >= 1073741824 ? `${(b / 1073741824).toFixed(2)} GB` : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${b} B`; };
 
-const EXTRA_CUSTOMER_FIELDS: [string, string][] = [
-  ['Customer ID','external_customer_id'], ['Company','company_name'], ['Alt Email','alt_email'], ['Alt Phone','alt_phone'],
-  ['NID Information','nid_info'], ['GPS Location','gps_location'], ['Division','division'], ['Block','block_no'],
-  ['Cable Serial','cable_serial_no'], ['Cable Length','cable_length'], ['Cable Info','cable_info'],
-  ['ONU Info','onu_info'], ['ONU Owner','onu_owner'], ['Established By','connection_established_by'],
-  ['IPv4','ip_address'], ['IPv6 Address','ipv6_address'], ['IPv6 Prefix','ipv6_prefix'], ['MAC','mac_address'],
-  ['District','district'], ['Thana','thana'], ['Upazila','upazila'], ['Ward No','ward_no'], ['Road No','road_no'], ['House No','house_no'],
-  ['Old Expiry','old_expiry_date'], ['Excess Amount','excess_amount'],
-];
 const USER_COLS = ['customer', 'status', 'package', 'bill', 'expiry', 'contact', 'address', 'actions'] as const;
 type UserCol = typeof USER_COLS[number];
 const USER_COL_LABELS: Record<UserCol, string> = { customer: 'Customer', status: 'Status', package: 'Package', bill: 'Bill/Due', expiry: 'Expiry', contact: 'Contact', address: 'Address/Zone', actions: 'Actions' };
@@ -180,7 +171,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const [bulkEditForm, setBulkEditForm] = useState<AnyObj>({ package_name: '', monthly_bill: '', status: '', expiry_date: '', prefix: '', suffix: '' });
   const [bulkMode, setBulkMode] = useState<'EDIT' | 'RENAME'>('EDIT');
   const [sessionSelected, setSessionSelected] = useState<Record<string, boolean>>({});
-  const [editUser, setEditUser] = useState<AnyObj | null>(null); const [editForm, setEditForm] = useState<AnyObj>({});
+
   const [viewUser, setViewUser] = useState<AnyObj | null>(null);
   const [customerDetail, setCustomerDetail] = useState<AnyObj | null>(null);
   const [detailTab, setDetailTab] = useState('basic');
@@ -192,7 +183,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const [deleteTarget, setDeleteTarget] = useState<AnyObj | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [editPay, setEditPay] = useState<AnyObj | null>(null); const [editPayForm, setEditPayForm] = useState<AnyObj>({});
-  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizard, setWizard] = useState<{ initial?: AnyObj } | null>(null);
 
   const reseller = dashboard?.reseller || balance?.reseller || null;
   const isResellerUser = user?.role === 'RESELLER';
@@ -389,7 +380,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   };
   const printInvoice = (invoiceId: string) => { if (!token || !viewUser) return; fetch(`/api/resellers/${resellerId}/customers/${viewUser.id}/invoices/${invoiceId}/pdf`, { headers: { Authorization: `Bearer ${token}` } }).then(async r => { if (!r.ok) { setErr('Invoice PDF unavailable'); return; } const blob = await r.blob(); const url = URL.createObjectURL(blob); window.open(url, '_blank'); setTimeout(()=>URL.revokeObjectURL(url), 60000); }); };
   const openView = async (s: AnyObj) => { setViewUser(s); setCustomerDetail(null); setDetailTab('basic'); setDetailLoading(true); try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/customers/${s.id}/detail`, {}, token || ''); setCustomerDetail(r.data || null); } catch { /* show basic fallback */ } finally { setDetailLoading(false); } };
-  const openEdit = (s: AnyObj) => { setEditUser(s); setEditForm({ id: s.id, full_name: s.full_name||'', username: s.username||'', new_password:'', phone: s.phone||'', email: s.email||'', address: s.address||'', package_name: s.package_name||'', bandwidth_mbps: s.bandwidth_mbps ?? '', monthly_bill: s.monthly_bill ?? '', price_override: s.price_override ?? '', custom_package_note: s.custom_package_note || '', extended_expiry: !!s.extended_expiry, branch_name: s.branch_name || '', status: s.status||'ACTIVE', expiry_date: s.expiry_date ? String(s.expiry_date).slice(0,10) : '', ...Object.fromEntries(EXTRA_CUSTOMER_FIELDS.map(([,k])=>[k, s[k] ?? ''])), static_ip: !!s.static_ip, mac_lock: !!s.mac_lock, multi_session: !!s.multi_session, bill_cycle_enabled: !!s.bill_cycle_enabled }); };
+  const openEdit = (s: AnyObj) => setWizard({ initial: s });
   const uploadImport = async (execute: boolean) => {
     if (!token || !importFile) return;
     setImportBusy(true); setErr(null);
@@ -432,7 +423,6 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
     setMsg(`Deleted ${deleteTarget.full_name || deleteTarget.username}.`);
     setDeleteTarget(null); await Promise.all([loadUsers().catch(()=>{}), loadDashboard().catch(()=>{})]);
   } catch (e: any) { setErr(e.message || 'Delete failed'); setDeleteTarget(null); } finally { setDeleting(false); } };
-  const saveEdit = async () => { if (!token || !editUser) return; setErr(null); setMsg(null); setActionBusy('edit'); try { const payload: AnyObj = { full_name: editForm.full_name, status: editForm.status, phone: editForm.phone, email: editForm.email, address: editForm.address, package_name: editForm.package_name, custom_package_note: editForm.custom_package_note || null, branch_name: editForm.branch_name || null, extended_expiry: !!editForm.extended_expiry, expiry_date: editForm.expiry_date || null }; if (editForm.username && editForm.username !== editUser.username) payload.username = editForm.username; if (editForm.new_password) payload.password = editForm.new_password; if (editForm.monthly_bill !== '' && editForm.monthly_bill !== undefined) payload.monthly_bill = Number(editForm.monthly_bill); if (editForm.bandwidth_mbps !== '' && editForm.bandwidth_mbps !== undefined) payload.bandwidth_mbps = Number(editForm.bandwidth_mbps); if (editForm.price_override !== '' && editForm.price_override !== undefined && editForm.price_override !== null) payload.price_override = Number(editForm.price_override); else payload.price_override = null; for (const [key] of EXTRA_CUSTOMER_FIELDS) payload[key] = editForm[key] === '' ? null : (editForm[key] ?? null); for (const key of ['static_ip','mac_lock','multi_session','bill_cycle_enabled']) payload[key] = !!editForm[key]; if (editForm.excess_amount !== '' && editForm.excess_amount != null) payload.excess_amount = Number(editForm.excess_amount); await apiFetch<any>(`/api/subscribers/${editUser.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token); setMsg(`Updated ${editForm.full_name || editUser.username}${editForm.new_password ? ' (password reset)' : ''}${payload.username ? ' (username changed)' : ''}.`); setEditUser(null); await loadUsers().catch(()=>{}); } catch (e:any) { setErr(e.message); } finally { setActionBusy(null); } };
 
   const loadTemplates = async () => { if (!token) return; try { const r = await apiFetch<any>('/api/messaging/templates', {}, token); setTemplates(r.data || []); } catch { setTemplates([]); } };
   const loadMsgLogs = async () => { if (!token || !canMessage) return; try { const r = await apiFetch<any>('/api/messaging/logs?limit=100', {}, token); setMsgLogs(r.data || []); } catch { setMsgLogs([]); } };
@@ -576,7 +566,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
               <button onClick={() => setShowUserFilters(v => !v)} className="btn btn-outline">More Filters</button>
               <button onClick={loadUsers} className="btn btn-outline">Apply</button>
               {canAddSubscriber && <button onClick={()=>setImportOpen(true)} className="btn btn-outline inline-flex items-center gap-1"><FileSpreadsheet className="w-4 h-4" />Import XLSX</button>}
-              {canAddSubscriber && <button onClick={()=>setWizardOpen(true)} className="btn btn-primary inline-flex items-center gap-1"><UserPlus className="w-4 h-4" />Add Subscriber</button>}
+              {canAddSubscriber && <button onClick={()=>setWizard({})} className="btn btn-primary inline-flex items-center gap-1"><UserPlus className="w-4 h-4" />Add Subscriber</button>}
             </div>
           </div>
           {showUserFilters && <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-2 p-3 rounded-xl border border-border bg-muted/20">
@@ -801,111 +791,23 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
 
       {parityKeys.has(tab) && <ResellerParityPanel tab={tab as ParityTab} resellerId={resellerId} />}
 
-      {wizardOpen && (
+      {wizard && (
         <SubscriberFormWizard
+          initial={wizard.initial || null}
+          showExtraFields={!!wizard.initial}
           lockedResellerId={resellerId}
           lockedResellerName={reseller?.name || reseller?.company_name || 'My Reseller Account'}
           token={token}
-          onCancel={() => setWizardOpen(false)}
+          onCancel={() => setWizard(null)}
           onSaved={(r: any) => {
-            setMsg(`Subscriber created: ${r?.client_code || r?.username || 'successfully'}`);
-            setWizardOpen(false);
+            setMsg(wizard.initial
+              ? `Updated ${r?.full_name || wizard.initial?.full_name || wizard.initial?.username || 'subscriber'}.`
+              : `Subscriber created: ${r?.client_code || r?.username || 'successfully'}`);
+            setWizard(null);
             Promise.all([loadUsers().catch(()=>{}), loadDashboard().catch(()=>{})]);
           }}
         />
       )}
-
-      {editUser && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setEditUser(null)}><div className="w-full max-w-2xl card p-4 space-y-3 max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
-            <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><Edit3 className="w-4 h-4 text-primary" />Edit Subscriber</h3><button onClick={()=>setEditUser(null)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
-            <div className="text-xs text-muted-foreground">{editUser.client_code || editUser.username} • {editUser.id}</div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Full Name</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.full_name||''} onChange={e=>setEditForm((f:any)=>({...f,full_name:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Status</div><select className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.status||'ACTIVE'} onChange={e=>setEditForm((f:any)=>({...f,status:e.target.value}))}>{['ACTIVE','SUSPENDED','EXPIRED','PENDING','TERMINATED','DISABLED'].map(s=><option key={s} value={s}>{s}</option>)}</select></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Phone</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.phone||''} onChange={e=>setEditForm((f:any)=>({...f,phone:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Email</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.email||''} onChange={e=>setEditForm((f:any)=>({...f,email:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Package</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.package_name||''} onChange={e=>setEditForm((f:any)=>({...f,package_name:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Bandwidth (Mbps)</div><input type="number" className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.bandwidth_mbps} onChange={e=>setEditForm((f:any)=>({...f,bandwidth_mbps:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Monthly Bill</div><input type="number" className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.monthly_bill} onChange={e=>setEditForm((f:any)=>({...f,monthly_bill:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Expiry Date</div><input type="date" className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.expiry_date||''} onChange={e=>setEditForm((f:any)=>({...f,expiry_date:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Custom Price Override</div><input type="number" className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.price_override ?? ''} onChange={e=>setEditForm((f:any)=>({...f,price_override:e.target.value}))} /></label>
-              <label className="block"><div className="text-xs text-muted-foreground mb-1">Branch</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.branch_name||''} onChange={e=>setEditForm((f:any)=>({...f,branch_name:e.target.value}))} /></label>
-              <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Custom Package Note</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.custom_package_note||''} onChange={e=>setEditForm((f:any)=>({...f,custom_package_note:e.target.value}))} /></label>
-              <label className="flex items-center gap-2 text-sm md:col-span-2"><input type="checkbox" checked={!!editForm.extended_expiry} onChange={e=>setEditForm((f:any)=>({...f,extended_expiry:e.target.checked}))} /> <span>Extended expiry / custom validity flag</span></label>
-              <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Address</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.address||''} onChange={e=>setEditForm((f:any)=>({...f,address:e.target.value}))} /></label>
-              <div className="md:col-span-2 border-t border-border pt-2 mt-1 text-xs font-semibold text-muted-foreground">Additional details (SRZone parity)</div>
-              {EXTRA_CUSTOMER_FIELDS.map(([label,key]) => <label key={key} className="block"><div className="text-xs text-muted-foreground mb-1">{label}</div><input type={key==='old_expiry_date'?'date':key==='excess_amount'?'number':'text'} className="w-full p-2 rounded-xl border border-border bg-background" value={editForm[key] ?? ''} onChange={e=>setEditForm((f:any)=>({...f,[key]:e.target.value}))} /></label>)}
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={!!editForm.static_ip} onChange={e=>setEditForm((f:any)=>({...f,static_ip:e.target.checked}))} />Static IP</label>
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={!!editForm.mac_lock} onChange={e=>setEditForm((f:any)=>({...f,mac_lock:e.target.checked}))} />MAC Lock</label>
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={!!editForm.multi_session} onChange={e=>setEditForm((f:any)=>({...f,multi_session:e.target.checked}))} />Multiple Sessions</label>
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={!!editForm.bill_cycle_enabled} onChange={e=>setEditForm((f:any)=>({...f,bill_cycle_enabled:e.target.checked}))} />Enable Bill Cycle</label>
-            </div>
-            <div className="rounded-xl border border-border p-3 space-y-2"><div className="text-xs font-semibold flex items-center gap-1"><KeyRound className="w-3.5 h-3.5" />Credentials (rename / reset)</div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm"><label className="block"><div className="text-xs text-muted-foreground mb-1">Username</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.username||''} onChange={e=>setEditForm((f:any)=>({...f,username:e.target.value}))} /></label><label className="block"><div className="text-xs text-muted-foreground mb-1">New Password (leave blank to keep)</div><input type="password" className="w-full p-2 rounded-xl border border-border bg-background" value={editForm.new_password||''} onChange={e=>setEditForm((f:any)=>({...f,new_password:e.target.value}))} /></label></div>
-              <div className="text-[11px] text-muted-foreground">Changing username/password updates subscriber credentials and may trigger provisioning/RADIUS sync depending on configuration.</div>
-            </div>
-            <div className="flex justify-end gap-2"><button onClick={()=>setEditUser(null)} className="px-3 py-2 rounded-xl border border-border text-sm">Cancel</button><button disabled={actionBusy==='edit'} onClick={saveEdit} className="btn btn-primary disabled:opacity-50">{actionBusy==='edit'?'Saving...':'Save Changes'}</button></div>
-          </div></div>)}
-
-      {msgTarget && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setMsgTarget(null)}><div className="w-full max-w-2xl card p-4 space-y-3 max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
-            <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><MessageSquare className="w-4 h-4 text-primary" />{selectedIds.length > 1 ? `Send Message (${selectedIds.length} selected)` : 'Send Message'}</h3><button onClick={()=>setMsgTarget(null)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
-            {!selectedIds.length || selectedIds.length <= 1 ? <div className="text-xs text-muted-foreground">To: <b>{msgTarget.full_name || msgTarget.username}</b> ({msgTarget.client_code || msgTarget.username})</div> : <div className="text-xs text-muted-foreground">Bulk send to <b>{selectedIds.length}</b> selected users (uses each user’s phone/email). Placeholders: {'{name} {username} {due} {expiry} {package} {phone}'}</div>}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-              <label className="text-xs"><div className="text-muted-foreground mb-1">Channel</div><select className="w-full p-2 rounded-xl border border-border bg-background" value={msgForm.channel_type} onChange={e=>setMsgForm(f=>({...f, channel_type:e.target.value, provider: e.target.value==='SMS'?'GREENWEB':e.target.value==='WHATSAPP'?'META_WHATSAPP':'TELEGRAM'}))}><option value="SMS">SMS</option><option value="WHATSAPP">WhatsApp</option><option value="TELEGRAM">Telegram</option></select></label>
-              <label className="text-xs"><div className="text-muted-foreground mb-1">Provider</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={msgForm.provider} onChange={e=>setMsgForm(f=>({...f, provider:e.target.value}))} /></label>
-              <label className="text-xs"><div className="text-muted-foreground mb-1">Template</div><div className="flex gap-1"><select className="w-full p-2 rounded-xl border border-border bg-background" value={msgForm.templateId} onChange={e=>applyTemplate(e.target.value)}><option value="">Custom message</option>{templates.filter(t=>!t.channel_type || t.channel_type===msgForm.channel_type).map(t=><option key={t.id} value={String(t.id)}>{t.name}</option>)}</select><button onClick={loadTemplates} className="px-2 rounded-xl border border-border" title="Reload templates"><RefreshCw className="w-3.5 h-3.5" /></button>{msgForm.templateId && <button onClick={deleteTemplate} disabled={actionBusy==='deltpl'} className="px-2 rounded-xl border border-red-500/30 text-red-400" title="Delete template"><Trash2 className="w-3.5 h-3.5" /></button>}</div></label>
-            </div>
-            {(!selectedIds.length || selectedIds.length <= 1) && <label className="text-xs block"><div className="text-muted-foreground mb-1">Recipient (phone/chat id)</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={msgForm.to} onChange={e=>setMsgForm(f=>({...f, to:e.target.value}))} /></label>}
-            <label className="text-xs block"><div className="text-muted-foreground mb-1">Subject (optional)</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={msgForm.subject} onChange={e=>setMsgForm(f=>({...f, subject:e.target.value}))} /></label>
-            <label className="text-xs block"><div className="text-muted-foreground mb-1">Message (placeholders: {'{name} {username} {due} {expiry} {package} {phone}'})</div><textarea className="w-full p-2 rounded-xl border border-border bg-background min-h-[110px]" value={msgForm.body} onChange={e=>setMsgForm(f=>({...f, body:e.target.value}))} /></label>
-            {canMessage && <div className="flex flex-wrap items-center gap-2 p-2 rounded-xl border border-border bg-muted/10"><span className="text-xs text-muted-foreground flex items-center gap-1"><Save className="w-3.5 h-3.5"/>Save as template</span><input className="flex-1 min-w-[160px] p-1.5 rounded-lg border border-border bg-background text-xs" placeholder="Template name" value={saveTplName} onChange={e=>setSaveTplName(e.target.value)} /><button disabled={actionBusy==='savetpl'} onClick={saveTemplate} className="px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold disabled:opacity-50">{actionBusy==='savetpl'?'...':'Save'}</button></div>}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              {canMessage ? <button onClick={async ()=>{ const next=!showMsgLogs; setShowMsgLogs(next); if(next) await loadMsgLogs(); }} className="text-xs px-2.5 py-1.5 rounded-lg border border-border inline-flex items-center gap-1"><FileText className="w-3.5 h-3.5" />{showMsgLogs?'Hide':'Show'} Delivery Logs</button> : <span />}
-              <div className="flex gap-2"><button onClick={()=>setMsgTarget(null)} className="px-3 py-2 rounded-xl border border-border text-sm">Cancel</button><button disabled={actionBusy==='msg'||actionBusy==='bulkmsg'} onClick={()=>sendMessage(selectedIds.length>1)} className="btn btn-primary inline-flex items-center gap-2 disabled:opacity-50"><Send className="w-4 h-4" />{actionBusy==='msg'||actionBusy==='bulkmsg'?'Sending...':'Send'}</button></div>
-            </div>
-            {showMsgLogs && canMessage && (<div className="rounded-xl border border-border p-2"><div className="text-xs font-semibold mb-2">Recent Delivery Logs</div><div className="overflow-auto max-h-40"><table className="table table-hover text-[11px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-1 px-1">Time</th><th className="text-left py-1 px-1">To</th><th className="text-left py-1 px-1">Channel</th><th className="text-left py-1 px-1">Status</th></tr></thead><tbody>{msgLogs.slice(0,30).map((l:any)=> (<tr key={l.id} className="border-b border-border/40"><td className="py-1 px-1 whitespace-nowrap text-muted-foreground">{dt(l.created_at)}</td><td className="py-1 px-1 max-w-[140px] truncate">{l.recipient||'-'}</td><td className="py-1 px-1">{l.channel_type}/{l.provider}</td><td className="py-1 px-1">{statusBadge(l.status)}</td></tr>))}{!msgLogs.length && <tr><td colSpan={4} className="py-3 text-center text-muted-foreground">No logs or insufficient permission.</td></tr>}</tbody></table></div></div>)}
-          </div></div>)}
-
-      {bulkMsgReport && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setBulkMsgReport(null)}><div className="w-full max-w-2xl card p-4 space-y-3 max-h-[85vh] overflow-auto" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><AlertCircle className="w-4 h-4 text-primary" />Bulk Message Delivery Report</h3><button onClick={()=>setBulkMsgReport(null)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
-        <div className="text-sm">Sent: <b className="text-emerald-400">{bulkMsgReport.filter(r=>r.status==='SENT').length}</b> • Failed/Skipped: <b className="text-red-400">{bulkMsgReport.filter(r=>r.status!=='SENT').length}</b> • Total: {bulkMsgReport.length}</div>
-        <div className="overflow-auto"><table className="table table-hover text-xs"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">User</th><th className="text-left py-2 px-2">Recipient</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Error</th></tr></thead><tbody>{bulkMsgReport.map((r,i)=>(<tr key={i} className="border-b border-border/50"><td className="py-2 px-2">{r.user||'-'}</td><td className="py-2 px-2 font-mono">{r.to||'-'}</td><td className="py-2 px-2">{statusBadge(r.status)}</td><td className="py-2 px-2 text-red-300">{r.error||''}</td></tr>))}</tbody></table></div>
-        <div className="flex justify-end"><button onClick={()=>setBulkMsgReport(null)} className="btn btn-primary">Close</button></div>
-      </div></div>)}
-
-      {editPay && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setEditPay(null)}><div className="w-full max-w-lg card p-4 space-y-3" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><Receipt className="w-4 h-4 text-primary" />Edit Payment / Finance</h3><button onClick={()=>setEditPay(null)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
-        <div className="text-xs text-muted-foreground">{editPay.payment_ref || editPay.trx_id || editPay.id} • {money(editPay.amount)} • {editPay.full_name || editPay.username}</div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-          <label className="block"><div className="text-xs text-muted-foreground mb-1">Payment Type</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={editPayForm.payment_type||''} onChange={e=>setEditPayForm((f:any)=>({...f,payment_type:e.target.value}))} placeholder="e.g. CASH, ONLINE, INVOICE" /></label>
-          <label className="block"><div className="text-xs text-muted-foreground mb-1">Collector</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={editPayForm.collector_name||''} onChange={e=>setEditPayForm((f:any)=>({...f,collector_name:e.target.value}))} placeholder="Collector name" /></label>
-          <label className="block"><div className="text-xs text-muted-foreground mb-1">Approval Status</div><select className="w-full p-2 rounded-xl border border-border bg-background" value={editPayForm.approval_status||'APPROVED'} onChange={e=>setEditPayForm((f:any)=>({...f,approval_status:e.target.value}))}>{['APPROVED','PENDING','REJECTED','ON_HOLD','VERIFIED'].map(s=><option key={s} value={s}>{s}</option>)}</select></label>
-          <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Approval Note</div><textarea className="w-full p-2 rounded-xl border border-border bg-background min-h-[70px]" value={editPayForm.approval_note||''} onChange={e=>setEditPayForm((f:any)=>({...f,approval_note:e.target.value}))} /></label>
-        </div>
-        <div className="flex justify-end gap-2"><button onClick={()=>setEditPay(null)} className="px-3 py-2 rounded-xl border border-border text-sm">Cancel</button><button disabled={actionBusy==='editpay'} onClick={savePayment} className="btn btn-primary disabled:opacity-50">{actionBusy==='editpay'?'Saving...':'Save'}</button></div>
-      </div></div>)}
-
-      {importOpen && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setImportOpen(false)}><div className="w-full max-w-xl card p-4 space-y-3" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><FileSpreadsheet className="w-4 h-4 text-primary" />Bulk Import Subscribers</h3><button onClick={()=>setImportOpen(false)} className="p-1 rounded"><X className="w-4 h-4" /></button></div>
-        <p className="text-xs text-muted-foreground">Upload an XLSX, XLS or CSV file (same columns as the subscriber export). All imported subscribers are assigned to your own account.</p>
-        <input type="file" accept=".xlsx,.xls,.csv" className="text-xs" onChange={e=>{ setImportFile(e.target.files?.[0] || null); setImportPreview(null); }} />
-        {importPreview && <div className="rounded-xl border border-border p-3 text-xs space-y-1"><div>Valid: <b className="text-emerald-400">{importPreview.valid ?? 0}</b> · Invalid: <b className="text-red-400">{importPreview.invalid ?? 0}</b></div>{(importPreview.errors || []).slice(0,5).map((x:any,i:number)=><div key={i} className="text-muted-foreground">{String(x)}</div>)}</div>}
-        <div className="flex justify-end gap-2"><button onClick={()=>setImportOpen(false)} className="px-3 py-2 rounded-xl border border-border text-sm">Cancel</button><button disabled={importBusy || !importFile} onClick={()=>uploadImport(false)} className="btn btn-outline">Preview</button><button disabled={importBusy || !importFile} onClick={()=>uploadImport(true)} className="btn btn-primary">{importBusy?'Working…':'Import'}</button></div>
-      </div></div>)}
-
-      {bulkEditOpen && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setBulkEditOpen(false)}><div className="w-full max-w-lg card p-4 space-y-3" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><Edit3 className="w-4 h-4 text-primary" />{bulkMode === 'RENAME' ? 'Bulk Rename' : 'Bulk Edit'} <span className="text-xs text-muted-foreground font-normal">({selectedIds.length} selected)</span></h3><button onClick={()=>setBulkEditOpen(false)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>
-        <p className="text-xs text-muted-foreground">Changes are applied only to subscribers owned by your account. Leave a field blank to keep its current value.</p>
-        {bulkMode === 'RENAME' ? <div className="grid grid-cols-2 gap-3">
-          <label className="block"><div className="text-xs text-muted-foreground mb-1">Prefix</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={bulkEditForm.prefix || ''} onChange={e=>setBulkEditForm(f=>({...f,prefix:e.target.value}))} placeholder="e.g. RN-" /></label>
-          <label className="block"><div className="text-xs text-muted-foreground mb-1">Suffix</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={bulkEditForm.suffix || ''} onChange={e=>setBulkEditForm(f=>({...f,suffix:e.target.value}))} placeholder="e.g. -2026" /></label>
-        </div> : <div className="grid grid-cols-2 gap-3">
-          <label className="block"><div className="text-xs text-muted-foreground mb-1">Package</div><input className="w-full p-2 rounded-xl border border-border bg-background" value={bulkEditForm.package_name || ''} onChange={e=>setBulkEditForm(f=>({...f,package_name:e.target.value}))} /></label>
-          <label className="block"><div className="text-xs text-muted-foreground mb-1">Monthly Bill</div><input type="number" className="w-full p-2 rounded-xl border border-border bg-background" value={bulkEditForm.monthly_bill || ''} onChange={e=>setBulkEditForm(f=>({...f,monthly_bill:e.target.value}))} /></label>
-          <label className="block"><div className="text-xs text-muted-foreground mb-1">Status</div><select className="w-full p-2 rounded-xl border border-border bg-background" value={bulkEditForm.status || ''} onChange={e=>setBulkEditForm(f=>({...f,status:e.target.value}))}><option value="">Keep current</option>{['ACTIVE','PENDING','SUSPENDED','EXPIRED','TERMINATED'].map(s=><option key={s}>{s}</option>)}</select></label>
-          <label className="block"><div className="text-xs text-muted-foreground mb-1">Expiry Date</div><input type="date" className="w-full p-2 rounded-xl border border-border bg-background" value={bulkEditForm.expiry_date || ''} onChange={e=>setBulkEditForm(f=>({...f,expiry_date:e.target.value}))} /></label>
-        </div>}
-        <div className="flex justify-end gap-2"><button onClick={()=>setBulkEditOpen(false)} className="px-3 py-2 rounded-xl border border-border text-sm">Cancel</button><button disabled={!!actionBusy} onClick={applyBulkEdit} className="btn btn-primary">{actionBusy==='bulkedit'?'Applying...':'Apply to selected'}</button></div>
-      </div></div>)}
 
       {viewUser && (<div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={()=>setViewUser(null)}><div className="w-full max-w-5xl card p-4 space-y-3 max-h-[90vh] overflow-auto" onClick={e=>e.stopPropagation()}>
         <div className="flex items-center justify-between"><h3 className="font-bold flex items-center gap-2"><Eye className="w-4 h-4 text-primary" />Customer 360° — {viewUser.full_name || viewUser.username}</h3><div className="flex items-center gap-2"><button onClick={()=>{ setPayMode('ADD'); setPayOpen(true); }} className="btn btn-outline btn-sm">Add Money</button><button onClick={()=>{ setPayMode('PAY'); setPayOpen(true); }} className="btn btn-primary btn-sm"><CreditCard className="w-3.5 h-3.5" />Pay Now</button><button onClick={()=>setViewUser(null)} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div></div>

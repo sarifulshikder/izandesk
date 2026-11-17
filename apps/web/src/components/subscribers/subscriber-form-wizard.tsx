@@ -29,6 +29,27 @@ const steps = [
   { id: 4, title: 'Review & Save', desc: 'Confirm details' },
 ];
 
+/** Fields the reseller portal needs that the admin wizard doesn't expose.
+ *  Shown as an extra final step only when showExtraFields is set. */
+const EXTRA_DETAIL_FIELDS: [string, string][] = [
+  ['Customer ID', 'external_customer_id'], ['Company', 'company_name'], ['Alt Email', 'alt_email'], ['Alt Phone', 'alt_phone'],
+  ['NID Information', 'nid_info'], ['GPS Location', 'gps_location'], ['Division', 'division'], ['Block', 'block_no'],
+  ['Cable Serial', 'cable_serial_no'], ['Cable Length', 'cable_length'], ['Cable Info', 'cable_info'],
+  ['ONU Info', 'onu_info'], ['ONU Owner', 'onu_owner'], ['Established By', 'connection_established_by'],
+  ['IPv6 Address', 'ipv6_address'], ['IPv6 Prefix', 'ipv6_prefix'],
+  ['Old Expiry', 'old_expiry_date'], ['Excess Amount', 'excess_amount'],
+  ['Expiry Date', 'expiry_date'], ['Price Override', 'price_override'],
+  ['Custom Package Note', 'custom_package_note'], ['Branch', 'branch_name'],
+];
+const EXTRA_DETAIL_BOOLS: [string, string][] = [
+  ['Extended expiry / custom validity', 'extended_expiry'],
+  ['Static IP', 'static_ip'],
+  ['MAC Lock', 'mac_lock'],
+  ['Multiple Sessions', 'multi_session'],
+  ['Enable Bill Cycle', 'bill_cycle_enabled'],
+  ['Parental Control', 'parental_control_enabled'],
+];
+
 interface SubscriberFormWizardProps {
   /** Existing subscriber to edit; omit/null to create a new one. */
   initial?: any | null;
@@ -40,15 +61,20 @@ interface SubscriberFormWizardProps {
   onSaved: (result: any) => void;
   onCancel: () => void;
   token?: string | null;
+  /** Adds a final "Additional Details" step for the reseller portal's parity fields. */
+  showExtraFields?: boolean;
 }
 
 /** A faithful port of the admin panel's 4-step Add/Edit Subscriber wizard so the
  *  reseller portal renders the exact same form. */
 export function SubscriberFormWizard({
-  initial, lockedResellerId, lockedResellerName, onSaved, onCancel, token: tokenProp,
+  initial, lockedResellerId, lockedResellerName, onSaved, onCancel, token: tokenProp, showExtraFields = false,
 }: SubscriberFormWizardProps) {
   const { token: ctxToken } = useAuth();
   const token = tokenProp ?? ctxToken;
+  const activeSteps = showExtraFields
+    ? [...steps, { id: 5, title: 'Additional Details', desc: 'SRZone parity fields' }]
+    : steps;
 
   const [form, setForm] = useState<any>(() => ({
     ...emptyForm,
@@ -165,7 +191,7 @@ export function SubscriberFormWizard({
     setError(null); return true;
   };
 
-  const nextStep = () => { if (validateStep()) setStep(s => Math.min(4, s + 1)); };
+  const nextStep = () => { if (validateStep()) setStep(s => Math.min(activeSteps.length, s + 1)); };
   const prevStep = () => setStep(s => Math.max(1, s - 1));
 
   const save = async () => {
@@ -176,6 +202,7 @@ export function SubscriberFormWizard({
       const payload = { ...form };
       ['bandwidth_mbps', 'monthly_bill', 'latitude', 'longitude'].forEach(k => { if (payload[k] === '') payload[k] = null; });
       ['area_id', 'zone_id', 'distribution_box_id', 'installation_date', 'router_id', 'reseller_id'].forEach(k => { if (payload[k] === '') payload[k] = null; });
+      if (showExtraFields) EXTRA_DETAIL_FIELDS.forEach(([, key]) => { if (payload[key] === '') payload[key] = null; });
       if (payload.provisioning_mode === 'RADIUS') payload.router_id = null;
       if (lockedResellerId) payload.reseller_id = lockedResellerId;
       if (payload.password === '') delete payload.password;
@@ -197,14 +224,14 @@ export function SubscriberFormWizard({
         <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-border">
           <div>
             <h2 className="font-bold text-lg">{initial ? 'Edit Subscriber' : 'Add Subscriber'} — Wizard</h2>
-            <p className="text-xs text-muted-foreground">Step {step} of 4: {steps[step - 1].title} — {steps[step - 1].desc}</p>
+            <p className="text-xs text-muted-foreground">Step {step} of {activeSteps.length}: {activeSteps[step - 1].title} — {activeSteps[step - 1].desc}</p>
           </div>
           <button onClick={onCancel} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4" /></button>
         </div>
 
         <div className="px-4 sm:px-5 pt-4">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {steps.map(s => (
+          <div className={`grid grid-cols-2 gap-2 ${activeSteps.length === 5 ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
+            {activeSteps.map(s => (
               <button key={s.id} onClick={() => { if (s.id < step || validateStep()) setStep(s.id); }} className={`text-left p-2.5 rounded-xl border text-xs ${step === s.id ? 'border-primary bg-primary/10' : 'border-border bg-muted/20'} ${s.id < step ? 'opacity-100' : ''}`}>
                 <div className="flex items-center gap-2 font-semibold text-foreground"><span className={`w-5 h-5 rounded-full inline-flex items-center justify-center text-[10px] ${step >= s.id ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{step > s.id ? <CheckCircle2 className="w-3.5 h-3.5" /> : s.id}</span>{s.title}</div>
                 <div className="text-muted-foreground mt-0.5 hidden sm:block">{s.desc}</div>
@@ -330,13 +357,39 @@ export function SubscriberFormWizard({
               <div className="text-xs text-muted-foreground p-3 rounded-xl border border-border bg-muted/20">Review all details. Client code will be generated automatically for new subscribers. You can edit later and upload KYC documents from the subscriber details panel.</div>
             </div>
           )}
+
+          {showExtraFields && step === 5 && (
+            <div className="space-y-4">
+              <div className="text-xs text-muted-foreground p-3 rounded-xl border border-border bg-muted/20">
+                These are the partner-portal fields from the subscriber record. Values already captured in the previous steps (name, address, IPv4/MAC, package) are edited there.
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {EXTRA_DETAIL_FIELDS.map(([label, key]) => (
+                  <Input key={key} label={label} value={form[key] ?? ''}
+                    type={key === 'old_expiry_date' || key === 'expiry_date' ? 'date' : key === 'excess_amount' || key === 'price_override' ? 'number' : 'text'}
+                    onChange={v => setForm((f: any) => ({ ...f, [key]: v }))} />
+                ))}
+              </div>
+              <div className="p-4 rounded-xl border border-border bg-muted/20">
+                <div className="font-semibold text-sm mb-3">Provisioning &amp; validity flags</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {EXTRA_DETAIL_BOOLS.map(([label, key]) => (
+                    <label key={key} className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={!!form[key]} onChange={e => setForm((f: any) => ({ ...f, [key]: e.target.checked }))} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="px-4 sm:px-5 py-4 border-t border-border flex flex-col sm:flex-row justify-between gap-2">
           <button onClick={onCancel} className="px-4 py-2 rounded-xl border border-border">Cancel</button>
           <div className="flex gap-2 justify-end">
             <button onClick={prevStep} disabled={step === 1} className="px-4 py-2 rounded-xl border border-border disabled:opacity-50 inline-flex items-center gap-1"><ChevronLeft className="w-4 h-4" />Back</button>
-            {step < 4 ? (
+            {step < activeSteps.length ? (
               <button onClick={nextStep} className="btn btn-primary inline-flex items-center gap-1">Next<ChevronRight className="w-4 h-4" /></button>
             ) : (
               <button onClick={save} disabled={saving} className="btn btn-primary disabled:opacity-50">{saving ? 'Saving…' : (initial ? 'Save Changes' : 'Create Subscriber')}</button>
