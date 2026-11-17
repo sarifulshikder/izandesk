@@ -1,11 +1,22 @@
 import { pool } from '../db';
-import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikDisconnectPppUser } from './mikrotik';
+import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikEnsureParentalProfile, mikrotikDisconnectPppUser, PARENTAL_CONTROL_PROFILE } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
 import { auditLog } from './audit';
 import { getCached } from './settings';
 
 type AnyObj = Record<string, any>;
+
+/** Parental profile for a ROUTER-mode subscriber, or null when not applicable.
+ *  Billing restrictions always win; an active FUP profile gets a combined name
+ *  so filtering is not lost when a subscriber is speed-limited. */
+export function parentalProfileFor(sub: any, fupMbps?: number | null): string | null {
+  if (!sub?.parental_control_enabled) return null;
+  if (['SUSPENDED', 'TERMINATED', 'EXPIRED'].includes(String(sub.status || '').toUpperCase())) return null;
+  if (sub.walled_garden) return null;
+  if (['WALLED_GARDEN', 'ISOLATED', 'SUSPENDED'].includes(String(sub.suspension_stage || '').toUpperCase())) return null;
+  return fupMbps ? `${PARENTAL_CONTROL_PROFILE}-fup-${Math.max(1, Math.round(Number(fupMbps) || 1))}m` : PARENTAL_CONTROL_PROFILE;
+}
 
 export const SUSPENSION_STAGES = {
   NONE: 'NONE',
@@ -166,6 +177,15 @@ export async function applyProvisioningState(subId: string, desired: { status?: 
   if (restrictedProfile) effective.profile_name = restrictedProfile;
   if (desired.status === 'SUSPENDED' || desired.stage === SUSPENSION_STAGES.ISOLATED || desired.stage === SUSPENSION_STAGES.SUSPENDED) {
     if (!walled) effective.status = 'SUSPENDED';
+  }
+
+  // ROUTER mode: RADIUS replies never reach the device, so apply parental
+  // control by moving the PPPoE secret to a dedicated filtered profile.
+  const hardSuspended = effective.status === 'SUSPENDED' || effective.status === 'EXPIRED' || effective.status === 'TERMINATED';
+  const parentalProfile = !walled && !hardSuspended ? parentalProfileFor(effective) : null;
+  if (parentalProfile && mode === 'ROUTER' && router && ['API', 'REST'].includes(String(router.integration_mode || '').toUpperCase())) {
+    effective.profile_name = parentalProfile;
+    await mikrotikEnsureParentalProfile(router, {}).catch(() => {});
   }
 
   // Direct router provisioning (PPPoE secrets/profiles)
@@ -669,7 +689,13 @@ export async function runFupEnforcementSweep() {
         if (String(sub.provisioning_mode||'').toUpperCase() === 'ROUTER' && sub.router_id && sub.username) {
           const rr = (await pool.query('SELECT * FROM network_routers WHERE id=$1', [sub.router_id])).rows[0];
           if (rr && ['API','REST'].includes(String(rr.integration_mode||'').toUpperCase()) && rr.is_enabled !== false) {
-            if (shouldFup && fupMbps) {
+            const parentalProf = parentalProfileFor(sub, shouldFup ? fupMbps : null);
+            if (parentalProf) {
+              const speed = Math.max(1, Math.round(Number(fupMbps)||1));
+              const rate = shouldFup && fupMbps ? `${speed}M/${speed}M` : undefined;
+              await mikrotikEnsureParentalProfile(rr, { profileName: parentalProf, rateLimit: rate }).catch(()=>{});
+              routerOk = await mikrotikSyncPppSecret(rr, { ...effective, profile_name: parentalProf, profile: parentalProf }).catch((e:any)=>({ ok:false, error: e.message }));
+            } else if (shouldFup && fupMbps) {
               const prof = `izn-fup-${Math.max(1, Math.round(Number(fupMbps)||1))}m`;
               await mikrotikEnsureFupProfile(rr, { speedMbps: Number(fupMbps), profileName: prof }).catch(()=>{});
               routerOk = await mikrotikSyncPppSecret(rr, { ...effective, profile_name: prof, profile: prof }).catch((e:any)=>({ ok:false, error: e.message }));

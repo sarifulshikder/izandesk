@@ -2,8 +2,7 @@ import { Router } from 'express';
 import XLSX = require('xlsx');
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
-import { recalcSubscriberDue, reactivateSubscriber, getInvoiceWithItems } from '../integrations/billing';
-import { syncSubscriberToRadiusDb } from '../integrations/radius';
+import { recalcSubscriberDue, reactivateSubscriber, getInvoiceWithItems, applyProvisioningState } from '../integrations/billing';
 import { renderSimpleInvoicePdf } from '../integrations/pdf';
 import { nextTicketNo } from '../utils/ticket-no';
 
@@ -1460,13 +1459,12 @@ router.put('/:id/parental-control/:sid', asyncHandler(async (req, res) => {
   if (!sub) return;
   const enabled = !!req.body?.enabled;
   await pool.query('UPDATE subscribers SET parental_control_enabled=$2, updated_at=now() WHERE id=$1', [req.params.sid, enabled]);
-  // Re-sync RADIUS so the change takes effect on the next authentication/CoA.
-  let radius: any = null;
-  try {
-    const fresh = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [req.params.sid])).rows[0];
-    radius = await syncSubscriberToRadiusDb(fresh);
-  } catch (e: any) { radius = { ok: false, error: e.message }; }
-  res.json({ ok: true, enabled, radius });
+  // Re-provision so the change takes effect immediately: RADIUS replies for
+  // RADIUS-mode users, a filtered PPPoE profile for direct-router users.
+  let provisioning: any = null;
+  try { provisioning = await applyProvisioningState(req.params.sid, { sendCoa: true, reason: `Parental control ${enabled ? 'enabled' : 'disabled'} by reseller` }); }
+  catch (e: any) { provisioning = { ok: false, error: e.message }; }
+  res.json({ ok: true, enabled, provisioning });
 }));
 
 export default router;
