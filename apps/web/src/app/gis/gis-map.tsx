@@ -1,11 +1,11 @@
 'use client';
 
-import React from 'react';
-import { DivIcon } from 'leaflet';
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, CircleMarker } from 'react-leaflet';
+import React, { useEffect, useMemo } from 'react';
+import { DivIcon, latLngBounds } from 'leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, CircleMarker, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// No CDN marker images: boxes use a DivIcon and subscribers use CircleMarkers.
+// No CDN marker images: boxes use DivIcons and subscribers use CircleMarkers.
 // Point NEXT_PUBLIC_GIS_TILE_URL at an internal tile server for offline/air-gapped
 // deployments, and NEXT_PUBLIC_GIS_CENTER at "lat,lng" for a different region.
 const TILE_URL = process.env.NEXT_PUBLIC_GIS_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -16,67 +16,161 @@ const parseCenter = (): [number, number] => {
   const [lat, lng] = raw.split(',').map(Number);
   return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : DEFAULT_CENTER;
 };
-
-const boxIcon = new DivIcon({
+const boxIcon = (selected: boolean) => new DivIcon({
   className: '',
-  html: `<div style="width:18px;height:18px;border-radius:4px;background:#3b82f6;border:2px solid white;box-shadow:0 0 0 2px rgba(59,130,246,.4)"></div>`,
-  iconSize: [18,18], iconAnchor: [9,9]
+  html: `<div style="width:${selected ? 24 : 18}px;height:${selected ? 24 : 18}px;border-radius:5px;background:${selected ? '#8b5cf6' : '#3b82f6'};border:2px solid white;box-shadow:0 0 0 3px rgba(59,130,246,.35)"></div>`,
+  iconSize: [selected ? 24 : 18, selected ? 24 : 18],
+  iconAnchor: [selected ? 12 : 9, selected ? 12 : 9],
 });
 
-function ClickCapture({ onPick }: { onPick: (lat:number,lng:number)=>void }) {
+export interface GisMapProps {
+  data: any;
+  onPick?: (lat: number, lng: number) => void;
+  draftLine?: [number, number][];
+  layers?: Record<string, boolean>;
+  focus?: { lat: number; lng: number; zoom?: number; key: number } | null;
+  fitKey?: number;
+  locateKey?: number;
+  selectedBoxId?: string | null;
+  onBoxMove?: (id: string, lat: number, lng: number) => void;
+  onBoxAction?: (id: string, action: 'details' | 'edit' | 'delete') => void;
+  onSubscriberAction?: (id: string, action: 'trace') => void;
+}
+
+function ClickCapture({ onPick }: { onPick: (lat: number, lng: number) => void }) {
   useMapEvents({ click(e) { onPick(e.latlng.lat, e.latlng.lng); } });
   return null;
 }
 
-export default function GisMap({ data, onPick, draftLine }: any) {
-  const center: [number, number] = parseCenter();
-  const boxes = data?.boxes?.features || [];
-  const subs = data?.subscribers?.features || [];
-  const routes = data?.fiberRoutes?.features || [];
+function MapCommands({ focus, fitKey, locateKey, points }: {
+  focus: GisMapProps['focus']; fitKey?: number; locateKey?: number; points: [number, number][];
+}) {
+  const map = useMap();
+  useEffect(() => {
+    if (focus) map.flyTo([focus.lat, focus.lng], focus.zoom || 16, { duration: 0.7 });
+  }, [focus?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!fitKey || !points.length) return;
+    map.fitBounds(latLngBounds(points), { padding: [48, 48], maxZoom: 17 });
+  }, [fitKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!locateKey || !navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (p) => map.flyTo([p.coords.latitude, p.coords.longitude], 15, { duration: 0.7 }),
+      () => {},
+      { enableHighAccuracy: false, timeout: 8000 },
+    );
+  }, [locateKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
+export default function GisMap({
+  data, onPick, draftLine, layers, focus, fitKey, locateKey,
+  selectedBoxId, onBoxMove, onBoxAction, onSubscriberAction,
+}: GisMapProps) {
+  const center = useMemo(parseCenter, []);
+  const shown = (key: string) => layers?.[key] !== false;
+  const statusKey = (status: string) => status === 'ACTIVE' ? 'status_active' : status === 'SUSPENDED' ? 'status_suspended' : 'status_other';
+  const statusColor = (status: string) => status === 'ACTIVE' ? '#22c55e' : status === 'SUSPENDED' ? '#ef4444' : '#f59e0b';
+
+  const boxes: any[] = shown('boxes') ? (data?.boxes?.features || []) : [];
+  const subs: any[] = (data?.subscribers?.features || []).filter((f: any) => shown(statusKey(f.properties.status)));
+  const routes: any[] = shown('routes') ? (data?.fiberRoutes?.features || []) : [];
+
+  const fitPoints = useMemo<[number, number][]>(() => {
+    const pts: [number, number][] = [];
+    for (const f of boxes) pts.push([f.geometry.coordinates[1], f.geometry.coordinates[0]]);
+    for (const f of subs) pts.push([f.geometry.coordinates[1], f.geometry.coordinates[0]]);
+    for (const f of routes) for (const c of (f.geometry?.coordinates || [])) pts.push([c[1], c[0]]);
+    return pts;
+  }, [boxes, subs, routes]);
 
   return (
     <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }} className="rounded-2xl overflow-hidden">
       <TileLayer attribution='&copy; OpenStreetMap contributors' url={TILE_URL} />
+      <MapCommands focus={focus} fitKey={fitKey} locateKey={locateKey} points={fitPoints} />
       {onPick && <ClickCapture onPick={onPick} />}
+
       {boxes.map((f: any) => {
         const [lng, lat] = f.geometry.coordinates;
         const p = f.properties;
+        const selected = selectedBoxId === p.id;
         return (
-          <Marker key={`b-${p.id}`} position={[lat,lng]} icon={boxIcon}>
+          <Marker
+            key={`b-${p.id}`}
+            position={[lat, lng]}
+            icon={boxIcon(selected)}
+            draggable={!!onBoxMove}
+            eventHandlers={onBoxMove ? {
+              dragend: (e: any) => { const ll = e.target.getLatLng(); onBoxMove(p.id, ll.lat, ll.lng); },
+            } : {}}
+          >
             <Popup>
-              <div style={{minWidth:180}}>
-                <b>{p.name}</b> {p.code ? `(${p.code})` : ''}<br/>
-                Type: {p.box_type} • Ports: {p.capacity_ports}<br/>
-                Subscribers: {p.subscriber_count || 0}<br/>
-                {p.zone_name || ''} {p.area_name ? `, ${p.area_name}` : ''}
+              <div style={{ minWidth: 190 }}>
+                <b>{p.name}</b> {p.code ? `(${p.code})` : ''}<br />
+                Type: {p.box_type} • Ports: {p.capacity_ports}<br />
+                Subscribers: {p.subscriber_count || 0}<br />
+                {p.zone_name || ''}{p.area_name ? `, ${p.area_name}` : ''}
+                {onBoxAction && (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                    <button onClick={() => onBoxAction(p.id, 'details')} style={btnStyle('#2563eb')}>Details</button>
+                    <button onClick={() => onBoxAction(p.id, 'edit')} style={btnStyle('#7c3aed')}>Edit</button>
+                    <button onClick={() => onBoxAction(p.id, 'delete')} style={btnStyle('#dc2626')}>Delete</button>
+                  </div>
+                )}
               </div>
             </Popup>
           </Marker>
         );
       })}
+
       {subs.map((f: any) => {
         const [lng, lat] = f.geometry.coordinates;
         const p = f.properties;
-        const color = p.status === 'ACTIVE' ? '#22c55e' : p.status === 'SUSPENDED' ? '#ef4444' : '#f59e0b';
+        const color = statusColor(p.status);
         return (
-          <CircleMarker key={`s-${p.id}`} center={[lat,lng]} radius={6} pathOptions={{ color, fillColor: color, fillOpacity: 0.9, weight: 2 }}>
+          <CircleMarker key={`s-${p.id}`} center={[lat, lng]} radius={6} pathOptions={{ color, fillColor: color, fillOpacity: 0.9, weight: 2 }}>
             <Popup>
-              <div style={{minWidth:180}}>
-                <b>{p.full_name}</b><br/>
-                {p.client_code}<br/>
-                {p.connection_type} {p.username ? `• ${p.username}` : ''}<br/>
-                Status: {p.status}<br/>
+              <div style={{ minWidth: 190 }}>
+                <b>{p.full_name}</b><br />
+                {p.client_code}<br />
+                {p.connection_type}{p.username ? ` • ${p.username}` : ''}<br />
+                Status: {p.status}<br />
                 Box: {p.distribution_box_name || '-'}
+                {onSubscriberAction && (
+                  <div style={{ marginTop: 8 }}>
+                    <button onClick={() => onSubscriberAction(p.id, 'trace')} style={btnStyle('#0891b2')}>Trace fiber to this subscriber</button>
+                  </div>
+                )}
               </div>
             </Popup>
           </CircleMarker>
         );
       })}
+
       {routes.map((f: any) => {
-        const coords = (f.geometry.coordinates || []).map((c: any) => [c[1], c[0]]);
-        return <Polyline key={`r-${f.properties.id}`} positions={coords} pathOptions={{ color: '#06b6d4', weight: 4, opacity: 0.8 }}><Popup><b>{f.properties.name}</b><br/>{f.properties.from_box_name || '?'} → {f.properties.to_box_name || '?'}</Popup></Polyline>;
+        const coords = (f.geometry?.coordinates || []).map((c: any) => [c[1], c[0]]);
+        const p = f.properties;
+        return (
+          <Polyline key={`r-${p.id}`} positions={coords} pathOptions={{ color: '#06b6d4', weight: 4, opacity: 0.8 }}>
+            <Popup>
+              <div style={{ minWidth: 190 }}>
+                <b>{p.name}</b><br />
+                {p.from_box_name || '?'} → {p.to_box_name || '?'}<br />
+                {p.route_type}{p.length_m ? ` • ${(Number(p.length_m) / 1000).toFixed(2)} km` : ''}
+                {p.notes ? <><br />{p.notes}</> : null}
+              </div>
+            </Popup>
+          </Polyline>
+        );
       })}
+
       {draftLine && draftLine.length >= 2 && <Polyline positions={draftLine} pathOptions={{ color: '#f59e0b', weight: 4, dashArray: '6 6' }} />}
     </MapContainer>
   );
 }
+
+const btnStyle = (bg: string): React.CSSProperties => ({
+  background: bg, color: '#fff', border: 0, borderRadius: 6,
+  padding: '4px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+});

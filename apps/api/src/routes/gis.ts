@@ -32,6 +32,13 @@ async function subscriberScope(req: any): Promise<{ restricted: boolean; uuid: s
   return { restricted: true, uuid: null };
 }
 
+function scopeFor(scope: { restricted: boolean; uuid: string | null }) {
+  return {
+    sql: scope.restricted ? (scope.uuid ? 's.reseller_id=$1' : 'FALSE') : 'TRUE',
+    params: scope.restricted && scope.uuid ? [scope.uuid] : [] as any[],
+  };
+}
+
 /** Guard against an unbounded payload when a deployment has many geocoded
  *  subscribers. Callers may raise it via ?limit= but never beyond 10000. */
 function mapLimit(req: any): number {
@@ -39,14 +46,16 @@ function mapLimit(req: any): number {
 }
 
 const SUB_COLUMNS = `s.id, s.client_code, s.full_name, s.status, s.connection_type, s.username,
-  s.latitude, s.longitude, s.address, z.name as zone_name, a.name as area_name,
-  d.name as distribution_box_name`;
+  s.latitude, s.longitude, s.address, s.distribution_box_id as box_id,
+  z.name as zone_name, a.name as area_name, d.name as distribution_box_name`;
+const SUB_JOINS = `LEFT JOIN zones z ON z.id=s.zone_id
+  LEFT JOIN areas a ON a.id=s.area_id
+  LEFT JOIN distribution_boxes d ON d.id=s.distribution_box_id`;
 
 router.get('/overview', asyncHandler(async (req, res) => {
   const scope = await subscriberScope(req);
-  const subWhere = scope.restricted ? (scope.uuid ? 'AND s.reseller_id=$1' : 'AND FALSE') : '';
-  const params: any[] = scope.restricted && scope.uuid ? [scope.uuid] : [];
-  params.push(mapLimit(req));
+  const scoped = scopeFor(scope);
+  const limitParam = `$${scoped.params.length + 1}`;
 
   const boxes = await pool.query(`
     SELECT d.id, d.name, d.code, d.box_type, d.capacity_ports, d.latitude, d.longitude, d.address,
@@ -55,25 +64,29 @@ router.get('/overview', asyncHandler(async (req, res) => {
     FROM distribution_boxes d
     LEFT JOIN zones z ON z.id=d.zone_id
     LEFT JOIN areas a ON a.id=z.area_id
-    WHERE d.latitude IS NOT NULL AND d.longitude IS NOT NULL`, params.slice(0, scope.uuid ? 1 : 0));
+    WHERE d.latitude IS NOT NULL AND d.longitude IS NOT NULL`, scoped.params);
   const subs = await pool.query(`
     SELECT ${SUB_COLUMNS}
-    FROM subscribers s
-    LEFT JOIN zones z ON z.id=s.zone_id
-    LEFT JOIN areas a ON a.id=s.area_id
-    LEFT JOIN distribution_boxes d ON d.id=s.distribution_box_id
-    WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL ${subWhere}
-    ORDER BY s.id LIMIT $${params.length}`, params);
+    FROM subscribers s ${SUB_JOINS}
+    WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL AND ${scoped.sql}
+    ORDER BY s.id LIMIT ${limitParam}`, [...scoped.params, mapLimit(req)]);
   const routes = await pool.query(`
     SELECT f.id, f.name, f.route_type, f.notes, fb.name as from_box_name, tb.name as to_box_name,
-           ST_AsGeoJSON(f.path::geometry) as path_geojson
+           ST_AsGeoJSON(f.path::geometry) as path_geojson,
+           ROUND(ST_Length(f.path)::numeric) as length_m
     FROM fiber_routes f
     LEFT JOIN distribution_boxes fb ON fb.id=f.from_box_id
     LEFT JOIN distribution_boxes tb ON tb.id=f.to_box_id
     WHERE f.path IS NOT NULL`);
+  const totals = await pool.query(`
+    SELECT count(*)::int AS total,
+           count(*) FILTER (WHERE s.latitude IS NOT NULL AND s.longitude IS NOT NULL)::int AS geocoded
+    FROM subscribers s WHERE ${scoped.sql}`, scoped.params);
+  const byStatus = await pool.query(`
+    SELECT s.status, count(*)::int AS n FROM subscribers s WHERE ${scoped.sql}
+    GROUP BY s.status ORDER BY n DESC`, scoped.params);
 
   const toFeatureCollection = (features: any[]) => ({ type: 'FeatureCollection', features });
-
   const boxFeatures = boxes.rows.map((b: any) => ({
     type: 'Feature',
     geometry: { type: 'Point', coordinates: [Number(b.longitude), Number(b.latitude)] },
@@ -87,30 +100,66 @@ router.get('/overview', asyncHandler(async (req, res) => {
   const routeFeatures = routes.rows.map((r: any) => ({
     type: 'Feature',
     geometry: r.path_geojson ? JSON.parse(r.path_geojson) : null,
-    properties: { id: r.id, name: r.name, route_type: r.route_type, notes: r.notes, from_box_name: r.from_box_name, to_box_name: r.to_box_name, kind: 'fiber_route' },
+    properties: { id: r.id, name: r.name, route_type: r.route_type, notes: r.notes,
+      from_box_name: r.from_box_name, to_box_name: r.to_box_name, length_m: r.length_m, kind: 'fiber_route' },
   })).filter((f: any) => f.geometry);
+
+  const totalSubs = totals.rows[0]?.total || 0;
+  const geocodedSubs = totals.rows[0]?.geocoded || 0;
+  const summary = {
+    subscribers_total: totalSubs,
+    subscribers_geocoded: geocodedSubs,
+    geocoded_coverage_pct: totalSubs ? Math.round((geocodedSubs / totalSubs) * 100) : 0,
+    by_status: Object.fromEntries(byStatus.rows.map((r: any) => [r.status || 'UNKNOWN', r.n])),
+    boxes_total: boxes.rows.length,
+    boxes_in_use: boxes.rows.filter((b: any) => Number(b.subscriber_count) > 0).length,
+    capacity_ports: boxes.rows.reduce((a: number, b: any) => a + Number(b.capacity_ports || 0), 0),
+    routes_total: routeFeatures.length,
+    route_length_m: Math.round(routeFeatures.reduce((a: number, f: any) => a + Number(f.properties.length_m || 0), 0)),
+  };
 
   res.json({
     boxes: toFeatureCollection(boxFeatures),
     subscribers: toFeatureCollection(subFeatures),
     fiberRoutes: toFeatureCollection(routeFeatures),
+    summary,
   });
+}));
+
+/** Everything attached to one distribution box — subscribers and upstream routes.
+ *  Powers the box details panel in the GIS workbench. */
+router.get('/boxes/:id/details', asyncHandler(async (req, res) => {
+  const scope = await subscriberScope(req);
+  const scoped = scopeFor(scope);
+  const boxIdParam = `$${scoped.params.length + 1}`;
+  const box = await pool.query(`
+    SELECT d.*, z.name as zone_name, a.name as area_name
+    FROM distribution_boxes d
+    LEFT JOIN zones z ON z.id=d.zone_id
+    LEFT JOIN areas a ON a.id=z.area_id
+    WHERE d.id=${boxIdParam}`, scoped.params.concat(req.params.id));
+  if (!box.rows[0]) return res.status(404).json({ message: 'Box not found' });
+  const subs = await pool.query(`
+    SELECT ${SUB_COLUMNS} FROM subscribers s ${SUB_JOINS}
+    WHERE s.distribution_box_id=${boxIdParam} AND ${scoped.sql}
+    ORDER BY s.full_name`, scoped.params.concat(req.params.id));
+  const routes = await pool.query(`
+    SELECT f.*, ST_AsGeoJSON(f.path::geometry) as path_geojson,
+           ROUND(ST_Length(f.path)::numeric) as length_m
+    FROM fiber_routes f WHERE f.from_box_id=$1 OR f.to_box_id=$1`, [req.params.id]);
+  res.json({ box: box.rows[0], subscribers: subs.rows, routes: routes.rows });
 }));
 
 // Trace: subscriber -> box -> upstream routes. Explicit column allowlist and
 // the same reseller scope as the overview — never SELECT * of a subscriber.
 router.get('/trace/subscriber/:id', asyncHandler(async (req, res) => {
   const scope = await subscriberScope(req);
-  const scopeClause = scope.restricted ? (scope.uuid ? 'AND s.reseller_id=$2' : 'AND FALSE') : '';
-  const params: any[] = [req.params.id];
-  if (scope.restricted && scope.uuid) params.push(scope.uuid);
+  const scoped = scopeFor(scope);
+  const idParam = `$${scoped.params.length + 1}`;
   const s = await pool.query(`
     SELECT ${SUB_COLUMNS}, s.distribution_box_id, s.reseller_id, s.provisioning_mode
-    FROM subscribers s
-    LEFT JOIN zones z ON z.id=s.zone_id
-    LEFT JOIN areas a ON a.id=s.area_id
-    LEFT JOIN distribution_boxes d ON d.id=s.distribution_box_id
-    WHERE s.id=$1 ${scopeClause}`, params);
+    FROM subscribers s ${SUB_JOINS}
+    WHERE s.id=${idParam} AND ${scoped.sql}`, scoped.params.concat(req.params.id));
   if (!s.rows[0]) return res.status(404).json({ message: 'Subscriber not found' });
   const sub = s.rows[0];
   let routes: any[] = [];

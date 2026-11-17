@@ -25,6 +25,21 @@ function checkCoords(lat: any, lng: any): void {
   }
 }
 
+/** Validate and encode a route path as GeoJSON LineString text for PostGIS. */
+function buildPathSql(b: any): string | null {
+  if (b.path_geojson) return b.path_geojson;
+  if (Array.isArray(b.path) && b.path.length >= 2) {
+    for (const pt of b.path) {
+      const lng = Number(pt?.[0]), lat = Number(pt?.[1]);
+      if (!Array.isArray(pt) || !Number.isFinite(lng) || !Number.isFinite(lat) || lng < -180 || lng > 180 || lat < -90 || lat > 90) {
+        throw new ValidationError('route path points must be [longitude, latitude] pairs within range');
+      }
+    }
+    return JSON.stringify({ type: 'LineString', coordinates: b.path });
+  }
+  return null;
+}
+
 // Areas
 router.get('/areas', asyncHandler(async (_req, res) => {
   const r = await pool.query('SELECT * FROM areas ORDER BY name');
@@ -122,7 +137,8 @@ router.delete('/boxes/:id', requireTopologyRole, asyncHandler(async (req, res) =
 router.get('/fiber-routes', asyncHandler(async (_req, res) => {
   const r = await pool.query(`
     SELECT f.*, fb.name as from_box_name, tb.name as to_box_name,
-           ST_AsGeoJSON(f.path::geometry) as path_geojson
+           ST_AsGeoJSON(f.path::geometry) as path_geojson,
+           ROUND(ST_Length(f.path)::numeric) as length_m
     FROM fiber_routes f
     LEFT JOIN distribution_boxes fb ON fb.id=f.from_box_id
     LEFT JOIN distribution_boxes tb ON tb.id=f.to_box_id
@@ -132,18 +148,27 @@ router.get('/fiber-routes', asyncHandler(async (_req, res) => {
 router.post('/fiber-routes', requireTopologyRole, asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.name) return res.status(400).json({ message: 'name is required' });
-  // path as GeoJSON LineString or array of [lng,lat]
-  let pathSql: any = null;
-  if (b.path_geojson) pathSql = b.path_geojson;
-  else if (Array.isArray(b.path) && b.path.length >= 2) {
-    pathSql = JSON.stringify({ type: 'LineString', coordinates: b.path });
-  }
+  const pathSql = buildPathSql(b);
   const r = await pool.query(`
     INSERT INTO fiber_routes(name,route_type,from_box_id,to_box_id,path,notes)
     VALUES($1,$2,$3,$4, CASE WHEN $5::text IS NOT NULL THEN ST_SetSRID(ST_GeomFromGeoJSON($5),4326)::geography ELSE NULL END,$6)
     RETURNING *, ST_AsGeoJSON(path::geometry) as path_geojson`,
     [b.name, b.route_type || 'FIBER', b.from_box_id || null, b.to_box_id || null, pathSql, b.notes || null]);
   res.status(201).json(r.rows[0]);
+}));
+router.put('/fiber-routes/:id', requireTopologyRole, asyncHandler(async (req, res) => {
+  const b = req.body || {};
+  const cur = (await pool.query('SELECT *, ST_AsGeoJSON(path::geometry) as path_geojson FROM fiber_routes WHERE id=$1', [req.params.id])).rows[0];
+  if (!cur) return res.status(404).json({ message: 'Not found' });
+  const pathSql = (b.path_geojson !== undefined || b.path !== undefined) ? buildPathSql(b) : (cur.path_geojson || null);
+  const r = await pool.query(`
+    UPDATE fiber_routes SET name=$1, route_type=$2, from_box_id=$3, to_box_id=$4,
+      path=CASE WHEN $5::text IS NOT NULL THEN ST_SetSRID(ST_GeomFromGeoJSON($5),4326)::geography ELSE NULL END,
+      notes=$6
+    WHERE id=$7 RETURNING *, ST_AsGeoJSON(path::geometry) as path_geojson`,
+    [b.name ?? cur.name, b.route_type ?? cur.route_type, b.from_box_id ?? cur.from_box_id,
+     b.to_box_id ?? cur.to_box_id, pathSql, b.notes ?? cur.notes, req.params.id]);
+  res.json(r.rows[0]);
 }));
 router.delete('/fiber-routes/:id', requireTopologyRole, asyncHandler(async (req, res) => {
   await pool.query('DELETE FROM fiber_routes WHERE id=$1', [req.params.id]);

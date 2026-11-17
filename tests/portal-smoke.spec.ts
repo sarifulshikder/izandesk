@@ -243,9 +243,16 @@ test.describe('GIS authorization', () => {
       expect(adminTrace.ok(), `admin trace for ${traceId}`).toBeTruthy();
     }
 
-    for (const path of ['/api/gis/overview', '/api/gis/trace/subscriber/00000000-0000-0000-0000-000000000000']) {
+    for (const path of ['/api/gis/overview', '/api/gis/trace/subscriber/00000000-0000-0000-0000-000000000000', '/api/gis/boxes/00000000-0000-0000-0000-000000000000/details']) {
       const r = await request.get(path, { headers: auth(resellerToken) });
       expect(r.status(), `reseller GET ${path}`).toBe(403);
+    }
+    const overviewBody = await adminOverview.json();
+    expect(overviewBody.summary).toBeTruthy();
+    const firstBox = overviewBody.boxes?.features?.[0]?.properties?.id;
+    if (firstBox) {
+      const details = await request.get(`/api/gis/boxes/${firstBox}/details`, { headers: auth(adminToken) });
+      expect(details.ok(), 'admin box details').toBeTruthy();
     }
     const mutation = await request.post('/api/topology/areas', {
       headers: auth(resellerToken),
@@ -263,5 +270,31 @@ test.describe('GIS authorization', () => {
     await gotoStable(page, '/gis');
     await expect(page.getByText('Access restricted')).toBeVisible();
     await expect(page.getByText('Fiber GIS Map & Topology')).toHaveCount(0);
+  });
+
+  test('admin GIS workbench exposes KPIs, layers and management panels', async ({ page }) => {
+    // Tile/image requests can be blocked in CI; only watch our own API.
+    const apiErrors: string[] = [];
+    page.on('response', r => { if (r.status() >= 400 && r.url().includes('/api/')) apiErrors.push(`${r.status()}: ${r.url()}`); });
+    await login(page, admin);
+    await gotoStable(page, '/gis');
+    await expect(page.getByRole('heading', { name: 'Fiber GIS Map & Topology' })).toBeVisible();
+    await expect(page.getByText('Geo coverage')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Zoom to fit' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Export GeoJSON' })).toBeVisible();
+    await expect(page.getByText('Map layers')).toBeVisible();
+    await expect(page.getByLabel('Boxes')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Areas & Zones' }).click();
+    await expect(page.getByPlaceholder('New area name')).toBeVisible();
+
+    // Toolbar buttons swap the side panel directly — no need to close first.
+    await page.getByRole('button', { name: 'Add Box', exact: true }).click();
+    await expect(page.getByText('Add Distribution Box', { exact: true }).first()).toBeVisible();
+    expect(apiErrors, `API errors: ${apiErrors.join('; ')}`).toEqual([]);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+    expect(overflow, 'GIS workbench should not scroll horizontally on a phone').toBe(false);
   });
 });
