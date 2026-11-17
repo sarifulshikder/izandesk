@@ -235,6 +235,13 @@ test.describe('GIS authorization', () => {
 
     const adminOverview = await request.get('/api/gis/overview', { headers: auth(adminToken) });
     expect(adminOverview.ok()).toBeTruthy();
+    const traceId = adminOverview.ok()
+      ? (await adminOverview.json()).subscribers?.features?.[0]?.properties?.id
+      : undefined;
+    if (traceId) {
+      const adminTrace = await request.get(`/api/gis/trace/subscriber/${traceId}`, { headers: auth(adminToken) });
+      expect(adminTrace.ok(), `admin trace for ${traceId}`).toBeTruthy();
+    }
 
     for (const path of ['/api/gis/overview', '/api/gis/trace/subscriber/00000000-0000-0000-0000-000000000000']) {
       const r = await request.get(path, { headers: auth(resellerToken) });

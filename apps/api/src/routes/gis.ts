@@ -106,7 +106,10 @@ router.get('/trace/subscriber/:id', asyncHandler(async (req, res) => {
   if (scope.restricted && scope.uuid) params.push(scope.uuid);
   const s = await pool.query(`
     SELECT ${SUB_COLUMNS}, s.distribution_box_id, s.reseller_id, s.provisioning_mode
-    FROM subscribers s LEFT JOIN distribution_boxes d ON d.id=s.distribution_box_id
+    FROM subscribers s
+    LEFT JOIN zones z ON z.id=s.zone_id
+    LEFT JOIN areas a ON a.id=s.area_id
+    LEFT JOIN distribution_boxes d ON d.id=s.distribution_box_id
     WHERE s.id=$1 ${scopeClause}`, params);
   if (!s.rows[0]) return res.status(404).json({ message: 'Subscriber not found' });
   const sub = s.rows[0];
