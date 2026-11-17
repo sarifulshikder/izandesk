@@ -46,15 +46,23 @@ export default function GisPage() {
   const [undoMove, setUndoMove] = useState<{ id: string; name: string; lat: number; lng: number } | null>(null);
   // Satellite is the default basemap; the choice is remembered per browser.
   const [mapStyle, setMapStyle] = useState<MapStyle>('satellite');
+  const [satelliteLabels, setSatelliteLabels] = useState(true);
   useEffect(() => {
     try {
       const saved = localStorage.getItem('izandesk-gis-map-style');
       if (saved === 'streets' || saved === 'satellite') setMapStyle(saved);
+      if (localStorage.getItem('izandesk-gis-satellite-labels') === '0') setSatelliteLabels(false);
     } catch {}
   }, []);
   const changeMapStyle = (style: MapStyle) => {
     setMapStyle(style);
     try { localStorage.setItem('izandesk-gis-map-style', style); } catch {}
+  };
+  const toggleSatelliteLabels = () => {
+    setSatelliteLabels(v => {
+      try { localStorage.setItem('izandesk-gis-satellite-labels', v ? '0' : '1'); } catch {}
+      return !v;
+    });
   };
   const [showLive, setShowLive] = useState(false);
   const [liveSessions, setLiveSessions] = useState<any[]>([]);
@@ -409,10 +417,14 @@ export default function GisPage() {
           <div className="absolute top-3 right-3 z-[1100] flex rounded-xl overflow-hidden border border-border bg-card/95 shadow">
             <button onClick={() => changeMapStyle('streets')} className={`px-3 py-1.5 text-xs font-semibold ${mapStyle === 'streets' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Streets</button>
             <button onClick={() => changeMapStyle('satellite')} className={`px-3 py-1.5 text-xs font-semibold ${mapStyle === 'satellite' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Satellite</button>
+            {mapStyle === 'satellite' && (
+              <button onClick={toggleSatelliteLabels} className={`px-3 py-1.5 text-xs font-semibold border-l border-border ${satelliteLabels ? 'text-primary' : 'text-muted-foreground'}`}>Labels {satelliteLabels ? 'on' : 'off'}</button>
+            )}
           </div>
           <GisMap
             data={data}
             mapStyle={mapStyle}
+            satelliteLabels={satelliteLabels}
             readOnly={!canWrite}
             heatmap={layers.heat}
             liveSessions={liveSessions}

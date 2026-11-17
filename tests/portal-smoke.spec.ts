@@ -325,6 +325,11 @@ test.describe('GIS authorization', () => {
     await gotoStable(page, '/gis');
     await expect(page.getByRole('button', { name: 'Streets' }), 'basemap choice should persist').toHaveClass(/bg-primary/);
     await page.getByRole('button', { name: 'Satellite' }).click();
+    // Satellite is a hybrid view: Esri reference labels must sit over the imagery.
+    await expect(page.locator('img.leaflet-tile[src*="World_Boundaries_and_Places"]').first()).toBeVisible({ timeout: 15000 });
+    await page.getByRole('button', { name: 'Labels on' }).click();
+    await expect(page.locator('img.leaflet-tile[src*="World_Boundaries_and_Places"]')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Labels off' }).click();
     await page.getByLabel('Heatmap').check();
     await expect(page.locator('canvas.leaflet-heatmap-layer')).toHaveCount(1);
     await page.getByLabel('Live sessions').check();
