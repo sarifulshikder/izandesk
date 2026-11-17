@@ -9,7 +9,7 @@ import { MapPin, Route, Plus, RefreshCw, X, Box, LocateFixed } from 'lucide-reac
 const GisMap = dynamic(() => import('./gis-map'), { ssr: false, loading: () => <div className="h-[600px] card flex items-center justify-center text-muted-foreground">Loading map...</div> });
 
 export default function GisPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [data, setData] = useState<any>(null);
   const [zones, setZones] = useState<any[]>([]);
   const [boxesList, setBoxesList] = useState<any[]>([]);
@@ -22,7 +22,7 @@ export default function GisPage() {
   const [form, setForm] = useState<any>({});
 
   const load = useCallback(async () => {
-    if (!token) return;
+    if (!token || user?.role === 'RESELLER') return;
     setLoading(true); setError(null);
     try {
       const [g, z, b, s] = await Promise.all([
@@ -80,6 +80,17 @@ export default function GisPage() {
   const boxCount = data?.boxes?.features?.length || 0;
   const subCount = data?.subscribers?.features?.length || 0;
   const routeCount = data?.fiberRoutes?.features?.length || 0;
+
+  // Defense in depth: the API denies resellers, so don't even render the map
+  // shell (or fire its requests) when one navigates here directly by URL.
+  if (user?.role === 'RESELLER') {
+    return (
+      <div className="card p-6 space-y-2">
+        <h1 className="page-title">Access restricted</h1>
+        <p className="text-sm text-muted-foreground">The Fiber GIS Map covers ISP-wide topology and customer locations, and is available to administrators only.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">

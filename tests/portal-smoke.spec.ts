@@ -226,3 +226,35 @@ test.describe('admin subscriber wizard', () => {
     await expect(modal).toContainText('Add Subscriber — Wizard');
   });
 });
+
+test.describe('GIS authorization', () => {
+  test('reseller is denied GIS reads and topology mutations, but keeps reference reads', async ({ request }) => {
+    const adminToken = await loginToken(request, admin);
+    const resellerToken = await loginToken(request, reseller);
+    const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
+
+    const adminOverview = await request.get('/api/gis/overview', { headers: auth(adminToken) });
+    expect(adminOverview.ok()).toBeTruthy();
+
+    for (const path of ['/api/gis/overview', '/api/gis/trace/subscriber/00000000-0000-0000-0000-000000000000']) {
+      const r = await request.get(path, { headers: auth(resellerToken) });
+      expect(r.status(), `reseller GET ${path}`).toBe(403);
+    }
+    const mutation = await request.post('/api/topology/areas', {
+      headers: auth(resellerToken),
+      data: { name: 'E2E should not be created' },
+    });
+    expect(mutation.status()).toBe(403);
+
+    // The reseller subscriber wizard still needs read-only topology lookups.
+    const reference = await request.get('/api/topology/areas', { headers: auth(resellerToken) });
+    expect(reference.ok()).toBeTruthy();
+  });
+
+  test('reseller navigating directly to /gis sees an access-restricted page', async ({ page }) => {
+    await login(page, reseller);
+    await gotoStable(page, '/gis');
+    await expect(page.getByText('Access restricted')).toBeVisible();
+    await expect(page.getByText('Fiber GIS Map & Topology')).toHaveCount(0);
+  });
+});

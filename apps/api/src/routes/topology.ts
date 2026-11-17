@@ -1,25 +1,46 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler } from './helpers';
+import { asyncHandler, hasGisAccess, ValidationError } from './helpers';
 
 const router: Router = Router();
+
+/** Reading reference/topology data is safe for every authenticated role (the
+ *  reseller subscriber wizard needs areas/zones/boxes). Mutations are admin/ops
+ *  only — the same boundary as the GIS map. */
+function requireTopologyRole(req: any, res: any, next: any) {
+  if (!hasGisAccess(req)) return res.status(403).json({ message: 'Forbidden' });
+  next();
+}
+
+/** Reject NaN/out-of-range/half-cleared coordinates before they reach PostGIS.
+ *  Called with the exact values that will be written. */
+function checkCoords(lat: any, lng: any): void {
+  const hasLat = lat !== undefined && lat !== null && lat !== '';
+  const hasLng = lng !== undefined && lng !== null && lng !== '';
+  if (hasLat !== hasLng) throw new ValidationError('latitude and longitude must be provided together');
+  if (!hasLat) return;
+  const nlat = Number(lat), nlng = Number(lng);
+  if (!Number.isFinite(nlat) || !Number.isFinite(nlng) || nlat < -90 || nlat > 90 || nlng < -180 || nlng > 180) {
+    throw new ValidationError('latitude must be between -90 and 90, longitude between -180 and 180');
+  }
+}
 
 // Areas
 router.get('/areas', asyncHandler(async (_req, res) => {
   const r = await pool.query('SELECT * FROM areas ORDER BY name');
   res.json({ data: r.rows });
 }));
-router.post('/areas', asyncHandler(async (req, res) => {
+router.post('/areas', requireTopologyRole, asyncHandler(async (req, res) => {
   const { name } = req.body || {};
   if (!name) return res.status(400).json({ message: 'name is required' });
   const r = await pool.query('INSERT INTO areas(name) VALUES($1) RETURNING *', [name]);
   res.status(201).json(r.rows[0]);
 }));
-router.put('/areas/:id', asyncHandler(async (req, res) => {
+router.put('/areas/:id', requireTopologyRole, asyncHandler(async (req, res) => {
   const r = await pool.query('UPDATE areas SET name=$1 WHERE id=$2 RETURNING *', [req.body?.name, req.params.id]);
   res.json(r.rows[0]);
 }));
-router.delete('/areas/:id', asyncHandler(async (req, res) => {
+router.delete('/areas/:id', requireTopologyRole, asyncHandler(async (req, res) => {
   await pool.query('DELETE FROM areas WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 }));
@@ -32,18 +53,18 @@ router.get('/zones', asyncHandler(async (req, res) => {
     : await pool.query('SELECT z.*, a.name as area_name FROM zones z JOIN areas a ON a.id=z.area_id ORDER BY a.name, z.name');
   res.json({ data: r.rows });
 }));
-router.post('/zones', asyncHandler(async (req, res) => {
+router.post('/zones', requireTopologyRole, asyncHandler(async (req, res) => {
   const { area_id, name } = req.body || {};
   if (!area_id || !name) return res.status(400).json({ message: 'area_id and name are required' });
   const r = await pool.query('INSERT INTO zones(area_id,name) VALUES($1,$2) RETURNING *', [area_id, name]);
   res.status(201).json(r.rows[0]);
 }));
-router.put('/zones/:id', asyncHandler(async (req, res) => {
+router.put('/zones/:id', requireTopologyRole, asyncHandler(async (req, res) => {
   const { area_id, name } = req.body || {};
   const r = await pool.query('UPDATE zones SET area_id=COALESCE($1,area_id), name=COALESCE($2,name) WHERE id=$3 RETURNING *', [area_id || null, name || null, req.params.id]);
   res.json(r.rows[0]);
 }));
-router.delete('/zones/:id', asyncHandler(async (req, res) => {
+router.delete('/zones/:id', requireTopologyRole, asyncHandler(async (req, res) => {
   await pool.query('DELETE FROM zones WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 }));
@@ -63,11 +84,12 @@ router.get('/boxes', asyncHandler(async (req, res) => {
     ORDER BY d.created_at DESC`, params);
   res.json({ data: r.rows });
 }));
-router.post('/boxes', asyncHandler(async (req, res) => {
+router.post('/boxes', requireTopologyRole, asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.name) return res.status(400).json({ message: 'name is required' });
   const lat = b.latitude === '' || b.latitude == null ? null : Number(b.latitude);
   const lng = b.longitude === '' || b.longitude == null ? null : Number(b.longitude);
+  checkCoords(lat, lng);
   const r = await pool.query(`
     INSERT INTO distribution_boxes(zone_id,name,code,box_type,capacity_ports,latitude,longitude,location,address,notes)
     VALUES($1,$2,$3,$4,$5,$6,$7, CASE WHEN $6::float IS NOT NULL AND $7::float IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7,$6),4326)::geography ELSE NULL END,$8,$9)
@@ -75,13 +97,14 @@ router.post('/boxes', asyncHandler(async (req, res) => {
     [b.zone_id || null, b.name, b.code || null, b.box_type || 'TJ', b.capacity_ports || 8, lat, lng, b.address || null, b.notes || null]);
   res.status(201).json(r.rows[0]);
 }));
-router.put('/boxes/:id', asyncHandler(async (req, res) => {
+router.put('/boxes/:id', requireTopologyRole, asyncHandler(async (req, res) => {
   const b = req.body || {};
   const curR = await pool.query('SELECT * FROM distribution_boxes WHERE id=$1', [req.params.id]);
   if (!curR.rows[0]) return res.status(404).json({ message: 'Not found' });
   const cur = curR.rows[0];
   const lat = b.latitude === '' || b.latitude == null ? (b.latitude === null ? null : cur.latitude) : Number(b.latitude);
   const lng = b.longitude === '' || b.longitude == null ? (b.longitude === null ? null : cur.longitude) : Number(b.longitude);
+  checkCoords(lat, lng);
   const r = await pool.query(`
     UPDATE distribution_boxes SET zone_id=$1,name=$2,code=$3,box_type=$4,capacity_ports=$5,latitude=$6,longitude=$7,
       location=CASE WHEN $6::float IS NOT NULL AND $7::float IS NOT NULL THEN ST_SetSRID(ST_MakePoint($7,$6),4326)::geography ELSE NULL END,
@@ -90,7 +113,7 @@ router.put('/boxes/:id', asyncHandler(async (req, res) => {
     [b.zone_id ?? cur.zone_id, b.name ?? cur.name, b.code ?? cur.code, b.box_type ?? cur.box_type, b.capacity_ports ?? cur.capacity_ports, lat, lng, b.address ?? cur.address, b.notes ?? cur.notes, req.params.id]);
   res.json(r.rows[0]);
 }));
-router.delete('/boxes/:id', asyncHandler(async (req, res) => {
+router.delete('/boxes/:id', requireTopologyRole, asyncHandler(async (req, res) => {
   await pool.query('DELETE FROM distribution_boxes WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 }));
@@ -106,7 +129,7 @@ router.get('/fiber-routes', asyncHandler(async (_req, res) => {
     ORDER BY f.created_at DESC`);
   res.json({ data: r.rows });
 }));
-router.post('/fiber-routes', asyncHandler(async (req, res) => {
+router.post('/fiber-routes', requireTopologyRole, asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.name) return res.status(400).json({ message: 'name is required' });
   // path as GeoJSON LineString or array of [lng,lat]
@@ -122,7 +145,7 @@ router.post('/fiber-routes', asyncHandler(async (req, res) => {
     [b.name, b.route_type || 'FIBER', b.from_box_id || null, b.to_box_id || null, pathSql, b.notes || null]);
   res.status(201).json(r.rows[0]);
 }));
-router.delete('/fiber-routes/:id', asyncHandler(async (req, res) => {
+router.delete('/fiber-routes/:id', requireTopologyRole, asyncHandler(async (req, res) => {
   await pool.query('DELETE FROM fiber_routes WHERE id=$1', [req.params.id]);
   res.json({ ok: true });
 }));

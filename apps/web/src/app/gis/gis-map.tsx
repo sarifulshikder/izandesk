@@ -1,18 +1,23 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React from 'react';
+import { DivIcon } from 'leaflet';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, CircleMarker } from 'react-leaflet';
-import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-});
+// No CDN marker images: boxes use a DivIcon and subscribers use CircleMarkers.
+// Point NEXT_PUBLIC_GIS_TILE_URL at an internal tile server for offline/air-gapped
+// deployments, and NEXT_PUBLIC_GIS_CENTER at "lat,lng" for a different region.
+const TILE_URL = process.env.NEXT_PUBLIC_GIS_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+const DEFAULT_CENTER: [number, number] = [23.8103, 90.4125];
+const parseCenter = (): [number, number] => {
+  const raw = process.env.NEXT_PUBLIC_GIS_CENTER;
+  if (!raw) return DEFAULT_CENTER;
+  const [lat, lng] = raw.split(',').map(Number);
+  return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : DEFAULT_CENTER;
+};
 
-const boxIcon = new L.DivIcon({
+const boxIcon = new DivIcon({
   className: '',
   html: `<div style="width:18px;height:18px;border-radius:4px;background:#3b82f6;border:2px solid white;box-shadow:0 0 0 2px rgba(59,130,246,.4)"></div>`,
   iconSize: [18,18], iconAnchor: [9,9]
@@ -24,14 +29,14 @@ function ClickCapture({ onPick }: { onPick: (lat:number,lng:number)=>void }) {
 }
 
 export default function GisMap({ data, onPick, draftLine }: any) {
-  const center: [number, number] = [23.8103, 90.4125];
+  const center: [number, number] = parseCenter();
   const boxes = data?.boxes?.features || [];
   const subs = data?.subscribers?.features || [];
   const routes = data?.fiberRoutes?.features || [];
 
   return (
     <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }} className="rounded-2xl overflow-hidden">
-      <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+      <TileLayer attribution='&copy; OpenStreetMap contributors' url={TILE_URL} />
       {onPick && <ClickCapture onPick={onPick} />}
       {boxes.map((f: any) => {
         const [lng, lat] = f.geometry.coordinates;

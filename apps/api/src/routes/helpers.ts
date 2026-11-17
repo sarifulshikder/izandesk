@@ -21,6 +21,16 @@ export class ConflictError extends Error {
   status = 409;
 }
 
+/** Roles that may view the global GIS map and mutate network topology.
+ *  Resellers are deliberately excluded: the map contains customer PII and the
+ *  topology is ISP-wide infrastructure. The web UI hides these screens from
+ *  resellers; this list enforces the same boundary on the API. */
+export const GIS_ROLES = ['SUPER_ADMIN', 'NOC_ENGINEER', 'BILLING_OPERATOR', 'TECHNICIAN'];
+
+export function hasGisAccess(req: any): boolean {
+  return GIS_ROLES.includes(String(req?.user?.role || ''));
+}
+
 /** Remove sensitive/internal fields before returning a subscriber to clients. */
 export function sanitizeSubscriber<T = any>(row: T): T {
   if (!row || typeof row !== 'object') return row;
