@@ -746,7 +746,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
           <h2 className="font-bold flex items-center gap-2"><Ban className="w-4 h-4 text-primary" />Parental Control <span className="text-xs text-muted-foreground font-normal">({parentalEnabledCount} protected)</span></h2>
           <button onClick={()=>loadParental()} className="btn btn-outline btn-sm"><RefreshCw className="w-3.5 h-3.5" />Refresh</button>
         </div>
-        <p className="text-xs text-muted-foreground">Enable content filtering for your own subscribers. Protected users are counted on the dashboard.</p>
+        <p className="text-xs text-muted-foreground">Applies a RADIUS content-filtering policy on the next session. Requires the router-side address list <code className="font-mono">izn-parental-control</code>.</p>
         <div className="flex flex-wrap items-end gap-2 text-xs">
           <label className="block"><span className="form-label">Search</span><input className="form-control" placeholder="Name, username, client code, phone..." value={parentalFilters.q || ''} onChange={e=>setParentalFilters((f:any)=>({...f,q:e.target.value}))} /></label>
           <label className="block"><span className="form-label">Filter</span><select className="form-control" value={parentalFilters.enabled || ''} onChange={e=>setParentalFilters((f:any)=>({...f,enabled:e.target.value}))}><option value="">All users</option><option value="1">Protected only</option><option value="0">Unprotected only</option></select></label>

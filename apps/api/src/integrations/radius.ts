@@ -39,7 +39,11 @@ export async function syncAllRadiusNas() {
   return { synced: r.rows.length };
 }
 
-export async function syncSubscriberToRadiusDb(sub: any, opts: { walledGarden?: boolean; restrictedRateLimit?: string; addressList?: string; fupRateLimit?: string | null; fupExceeded?: boolean } = {}) {
+/** Address list a router admin must define to enforce parental filtering.
+ *  Disabled users are placed in this list via a Mikrotik-Address-List reply. */
+export const PARENTAL_CONTROL_ADDRESS_LIST = process.env.PARENTAL_CONTROL_ADDRESS_LIST || 'izn-parental-control';
+
+export async function syncSubscriberToRadiusDb(sub: any, opts: { walledGarden?: boolean; restrictedRateLimit?: string; addressList?: string; fupRateLimit?: string | null; fupExceeded?: boolean; parentalAddressList?: string } = {}) {
   const username = String(sub.username || '').trim();
   if (!username) return { skipped: true, reason: 'no username' };
   const password = String(sub.password || 'changeme');
@@ -70,8 +74,17 @@ export async function syncSubscriberToRadiusDb(sub: any, opts: { walledGarden?: 
     await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Mikrotik-Rate-Limit',':=',$2)", [username, fup]);
     await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Reply-Message',':=',$2)", [username, 'FUP/data cap reached: speed reduced until next billing cycle']);
   }
+  // Parental control: a dedicated address list the router uses for filtered
+  // access. Billing restrictions (walled garden / suspension) take precedence,
+  // so the two never compete for the same Mikrotik-Address-List attribute.
+  const parental = !suspended && !walled && !!(opts.parentalAddressList || sub.parental_control_enabled);
+  const parentalList = parental ? (opts.parentalAddressList || PARENTAL_CONTROL_ADDRESS_LIST) : null;
+  if (parentalList) {
+    await pool.query("INSERT INTO radreply(username,attribute,op,value) VALUES($1,'Mikrotik-Address-List',':=',$2)", [username, parentalList]);
+  }
   await pool.query("INSERT INTO radusergroup(username,groupname,priority) VALUES($1,$2,1)", [username, profile || 'default']);
-  return { ok: true, username, profile, walled_garden: walled && !suspended, suspended: suspended && !walled, fup_applied: !!fup, fup_rate_limit: fup };
+  return { ok: true, username, profile, walled_garden: walled && !suspended, suspended: suspended && !walled, fup_applied: !!fup, fup_rate_limit: fup,
+    parental_control: parental, parental_address_list: parentalList };
 }
 
 /** Remove all RADIUS artifacts for a username (used when a subscriber is deleted or renamed). */

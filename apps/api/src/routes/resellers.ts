@@ -3,6 +3,7 @@ import XLSX = require('xlsx');
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { recalcSubscriberDue, reactivateSubscriber, getInvoiceWithItems } from '../integrations/billing';
+import { syncSubscriberToRadiusDb } from '../integrations/radius';
 import { renderSimpleInvoicePdf } from '../integrations/pdf';
 import { nextTicketNo } from '../utils/ticket-no';
 
@@ -1459,7 +1460,13 @@ router.put('/:id/parental-control/:sid', asyncHandler(async (req, res) => {
   if (!sub) return;
   const enabled = !!req.body?.enabled;
   await pool.query('UPDATE subscribers SET parental_control_enabled=$2, updated_at=now() WHERE id=$1', [req.params.sid, enabled]);
-  res.json({ ok: true, enabled });
+  // Re-sync RADIUS so the change takes effect on the next authentication/CoA.
+  let radius: any = null;
+  try {
+    const fresh = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [req.params.sid])).rows[0];
+    radius = await syncSubscriberToRadiusDb(fresh);
+  } catch (e: any) { radius = { ok: false, error: e.message }; }
+  res.json({ ok: true, enabled, radius });
 }));
 
 export default router;
