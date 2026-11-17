@@ -44,7 +44,18 @@ export default function GisPage() {
   const [zoneArea, setZoneArea] = useState('');
   const [renaming, setRenaming] = useState<{ type: 'area' | 'zone'; id: string; name: string } | null>(null);
   const [undoMove, setUndoMove] = useState<{ id: string; name: string; lat: number; lng: number } | null>(null);
-  const [mapStyle, setMapStyle] = useState<MapStyle>('streets');
+  // Satellite is the default basemap; the choice is remembered per browser.
+  const [mapStyle, setMapStyle] = useState<MapStyle>('satellite');
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('izandesk-gis-map-style');
+      if (saved === 'streets' || saved === 'satellite') setMapStyle(saved);
+    } catch {}
+  }, []);
+  const changeMapStyle = (style: MapStyle) => {
+    setMapStyle(style);
+    try { localStorage.setItem('izandesk-gis-map-style', style); } catch {}
+  };
   const [showLive, setShowLive] = useState(false);
   const [liveSessions, setLiveSessions] = useState<any[]>([]);
   const [bbox, setBbox] = useState<[number, number, number, number] | null>(null);
@@ -396,8 +407,8 @@ export default function GisPage() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="xl:col-span-2 h-[650px] card overflow-hidden relative">
           <div className="absolute top-3 right-3 z-[1100] flex rounded-xl overflow-hidden border border-border bg-card/95 shadow">
-            <button onClick={() => setMapStyle('streets')} className={`px-3 py-1.5 text-xs font-semibold ${mapStyle === 'streets' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Streets</button>
-            <button onClick={() => setMapStyle('satellite')} className={`px-3 py-1.5 text-xs font-semibold ${mapStyle === 'satellite' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Satellite</button>
+            <button onClick={() => changeMapStyle('streets')} className={`px-3 py-1.5 text-xs font-semibold ${mapStyle === 'streets' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Streets</button>
+            <button onClick={() => changeMapStyle('satellite')} className={`px-3 py-1.5 text-xs font-semibold ${mapStyle === 'satellite' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Satellite</button>
           </div>
           <GisMap
             data={data}

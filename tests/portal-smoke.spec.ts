@@ -319,9 +319,12 @@ test.describe('GIS authorization', () => {
     await expect(page.getByRole('button', { name: 'Streets' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Satellite' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Satellite' }).click();
-    await expect(page.getByRole('button', { name: 'Satellite' })).toHaveClass(/bg-primary/);
+    await expect(page.getByRole('button', { name: 'Satellite' }), 'satellite should be the default basemap').toHaveClass(/bg-primary/);
     await page.getByRole('button', { name: 'Streets' }).click();
+    await expect(page.getByRole('button', { name: 'Streets' })).toHaveClass(/bg-primary/);
+    await gotoStable(page, '/gis');
+    await expect(page.getByRole('button', { name: 'Streets' }), 'basemap choice should persist').toHaveClass(/bg-primary/);
+    await page.getByRole('button', { name: 'Satellite' }).click();
     await page.getByLabel('Heatmap').check();
     await expect(page.locator('canvas.leaflet-heatmap-layer')).toHaveCount(1);
     await page.getByLabel('Live sessions').check();
