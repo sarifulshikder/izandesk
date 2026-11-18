@@ -8,7 +8,7 @@ import {
   MapPin, LocateFixed, ChevronLeft, ChevronRight, CheckCircle2, X,
 } from 'lucide-react';
 
-// Same map picker the admin panel uses. Loaded client-side only (Leaflet needs window).
+// Same MapLibre map picker the admin panel uses. Loaded client-side only (WebGL needs window).
 const LocationPicker = dynamic(() => import('@/app/subscribers/location-picker'), {
   ssr: false,
   loading: () => <div className="h-[320px] sm:h-[380px] rounded-xl border border-border bg-muted/20 flex items-center justify-center text-sm text-muted-foreground">Loading map picker...</div>,

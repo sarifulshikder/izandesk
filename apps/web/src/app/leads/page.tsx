@@ -1,10 +1,17 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { Search, Plus, Pencil, Trash2, X, Phone, Mail, MessageSquare, MapPin, User, ChevronLeft, ChevronRight, CheckCircle2, ArrowRight, Filter, Filter as FunnelIcon } from 'lucide-react';
+
+// Same MapLibre picker the subscriber wizard uses (free hybrid basemap, no key).
+const LocationPicker = dynamic(() => import('@/app/subscribers/location-picker'), {
+  ssr: false,
+  loading: () => <div className="h-[320px] sm:h-[380px] rounded-xl border border-border bg-muted/20 flex items-center justify-center text-sm text-muted-foreground">Loading map…</div>,
+});
 
 const LEAD_STATUSES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST'];
 const LEAD_SOURCES = ['WALK_IN', 'CALL', 'WEBSITE', 'REFERRAL', 'SOCIAL_MEDIA', 'CAMPAIGN', 'OTHER'];
@@ -506,34 +513,3 @@ function Select({ label, value, onChange, options }: { label: string; value: any
   );
 }
 
-// LocationPicker component (reuse from subscribers page)
-const LocationPicker = ({ lat, lng, onChange }: { lat: number | null; lng: number | null; onChange: (lat: number, lng: number) => void }) => {
-  const [map, setMap] = useState<any>(null);
-  const [marker, setMarker] = useState<any>(null);
-  const mapRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!mapRef.current || map) return;
-    import('leaflet').then(L => {
-      const m = L.map(mapRef.current!).setView([lat || 23.8103, lng || 90.4125], 14);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(m);
-      if (lat && lng) {
-        const mk = L.marker([lat, lng], { draggable: true }).addTo(m);
-        mk.on('dragend', (e: any) => { const pos = e.target.getLatLng(); onChange(pos.lat, pos.lng); });
-        setMarker(mk);
-      }
-      m.on('click', (e: any) => {
-        if (marker) marker.setLatLng(e.latlng);
-        else setMarker(L.marker(e.latlng, { draggable: true }).addTo(m));
-        marker.on('dragend', (ev: any) => { const pos = ev.target.getLatLng(); onChange(pos.lat, pos.lng); });
-        onChange(e.latlng.lat, e.latlng.lng);
-      });
-      setMap(m);
-    });
-  }, [lat, lng, onChange]);
-
-  return (
-    <div ref={mapRef} className="h-[320px] sm:h-[380px] rounded-xl border border-border" style={{ zIndex: 1 }} />
-  );
-};
-const { useRef } = React;

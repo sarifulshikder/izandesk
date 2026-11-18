@@ -470,6 +470,16 @@ test.describe('subscriber scoping', () => {
     expect(await page.locator('img[src*="unpkg.com"]').count()).toBe(0);
     await expect(page.getByRole('button', { name: 'Satellite' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Streets' })).toBeVisible();
+
+    // The leads wizard reuses the same picker — no Leaflet anywhere in the app.
+    await gotoStable(page, '/leads?new=1');
+    const leadModal = page.locator('div.fixed.inset-0.z-50').last();
+    await expect(leadModal).toContainText('Add Lead — Wizard');
+    await leadModal.locator('input').first().fill('Picker Test Lead');
+    await leadModal.getByRole('button', { name: 'Next' }).click();
+    await expect(leadModal.getByText('Map Pin Picker')).toBeVisible();
+    await expect(leadModal.locator('canvas.maplibregl-canvas').first()).toBeVisible({ timeout: 20000 });
+    expect(await page.locator('img[src*="unpkg.com"], img.leaflet-tile').count()).toBe(0);
     expect(errors, `page errors: ${errors.join('; ')}`).toEqual([]);
   });
 });
