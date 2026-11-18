@@ -84,13 +84,31 @@ const RULES: Array<[string, RegExp]> = [
   ['gis_sites', /(gis|map|site|zone|area|মানচিত্র|সাইট|জোন|এলাকা)/i],
 ];
 
+/** Pull a subscriber identifier out of a question that clearly names someone. */
+const NOT_A_NAME = /^(?:whose|which|that|this|with|from|about|for|the|and|his|her|their|named|called|is|of|in|on|my|our|who|how|what|info|details|status|please|a|an)$/i;
+function extractEntity(text: string): string | undefined {
+  const quoted = text.match(/["']([a-z0-9][a-z0-9._@ -]{1,63})["']/i);
+  if (quoted && !NOT_A_NAME.test(quoted[1].trim())) return quoted[1].trim();
+  // "whose name is isa", "subscriber named isa", "username idc040@isa"…
+  // The filler guard stops "subscriber whose …" from capturing "whose".
+  const named = text.match(/\b(?:name\s+(?:is|of)?\s*|named\s+|called\s+|username\s+(?:is\s*)?|client(?:\s+code)?\s+(?:is\s*)?|customer(?:\s+(?:id|name))?\s+(?:is\s*)?|subscriber(?:\s+(?:id|name))?\s+(?:is\s*)?)(?!whose\b|which\b|that\b|this\b|with\b|from\b|about\b|for\b|the\b|and\b|his\b|her\b|their\b|named\b|called\b|is\b|of\b|in\b|on\b|my\b|our\b|who\b|how\b|what\b|info\b|details\b|status\b|please\b|a\b|an\b)([a-z0-9][a-z0-9._@-]{1,63})\b/i);
+  if (named) return named[1];
+  const possessive = text.match(/\b([a-z0-9][a-z0-9._@-]{1,63})'s\b/i);
+  if (possessive && !NOT_A_NAME.test(possessive[1])) return possessive[1];
+  const code = text.match(/\b(?:izn-[a-z0-9-]{3,}|cus-?\d{3,}|0?1[3-9]\d{8,11}|\+?8801[3-9]\d{8,})\b/i);
+  return code ? code[0] : undefined;
+}
+
 function detectIntent(message: string): Detection {
   const lang = detectLang(message);
   const text = message.trim().toLowerCase();
+  // A named subscriber takes priority over topic keywords: "isa's ONU info"
+  // must not be answered with the generic OLT health table.
+  const entity = extractEntity(text);
+  if (entity && /(subscriber|customer|client|name|username|profile|info|details|onu|olt|গ্রাহক|সাবস্ক্রাইবার|কাস্টমার|নাম|অনু|ওএলটি|তথ্য|বিবরণ)/i.test(text)) {
+    return { intent: /(onu|olt|optical|অনু|ওএলটি|অপটিক্যাল)/i.test(text) ? 'subscriber_onu' : 'customer_lookup', lang, entity };
+  }
   for (const [intent, re] of RULES) if (re.test(text)) return { intent, lang };
-  // Customer lookup: client code, phone number, PPPoE username or a bare ID.
-  const entity = text.match(/\b(?:izn-[a-z0-9-]{3,}|cus-?\d{3,}|0?1[3-9]\d{8,11}|\+?8801[3-9]\d{8,})\b/);
-  if (entity) return { intent: 'customer_lookup', lang, entity: entity[0] };
   if (/^[a-z0-9._@:-]{3,64}$/.test(text) && /\d/.test(text)) return { intent: 'customer_lookup', lang, entity: text };
   return { intent: 'free_form', lang };
 }
@@ -323,9 +341,23 @@ async function intentExtras(pool: any, ctx: Ctx, intent: string, entity?: string
       const [sql, p] = bind(`SELECT s.client_code, s.full_name, s.username, s.phone, s.status, s.package_name,
         s.monthly_bill, s.created_at, COALESCE(i.due,0) AS due FROM subscribers s
         LEFT JOIN (SELECT subscriber_id, SUM(due_amount) due FROM invoices WHERE due_amount>0 GROUP BY subscriber_id) i ON i.subscriber_id=s.id
-        WHERE (s.client_code ILIKE $E OR s.username ILIKE $E OR s.phone ILIKE $E)${sc.sql} LIMIT 5`, sc.params);
+        WHERE (s.client_code ILIKE $E OR s.username ILIKE $E OR s.full_name ILIKE $E OR s.phone ILIKE $E)${sc.sql} LIMIT 5`, sc.params);
       const text = sql.replace(/\$E/g, () => `$${p.length + 1}`);
       rows = await many(pool, text, [...p, `%${entity}%`]);
+      break;
+    }
+    case 'subscriber_onu': {
+      if (!entity) break;
+      const [sql, p] = bind(`SELECT s.client_code, s.full_name, s.username, s.status AS subscriber_status,
+        o.name AS onu_name, o.serial_number, o.pon_port, o.onu_id, o.status AS onu_status,
+        o.rx_power_dbm, o.tx_power_dbm, o.distance_m, o.last_down_cause, o.last_seen_at,
+        ol.name AS olt_name, ol.vendor AS olt_vendor
+        FROM subscribers s
+        LEFT JOIN onus o ON o.subscriber_id = s.id
+        LEFT JOIN olts ol ON ol.id = o.olt_id
+        WHERE (s.client_code ILIKE $E OR s.username ILIKE $E OR s.full_name ILIKE $E OR s.phone ILIKE $E)${sc.sql}
+        ORDER BY o.updated_at DESC NULLS LAST LIMIT 5`, sc.params);
+      rows = await many(pool, sql.replace(/\$E/g, () => `$${p.length + 1}`), [...p, `%${entity}%`]);
       break;
     }
     case 'gis_sites': {
@@ -570,10 +602,27 @@ function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows:
       cards.push({ title: bn ? 'গ্রাহক তালিকা' : 'Subscriber list', url: '/clients' });
       break;
     }
+    case 'subscriber_onu': {
+      body = `### ${bn ? '🛰️ গ্রাহকের ONU তথ্য' : '🛰️ Subscriber ONU details'} · \`${esc(entity)}\`\n\n` + (rows.length
+        ? rows.map(r => {
+            const head = `**${esc(r.full_name)}** · \`${esc(r.client_code)}\` · ${esc(r.username)} · ${esc(r.subscriber_status)}\n`;
+            if (!r.onu_name && !r.serial_number) return head + `- ${bn ? 'এই গ্রাহকের সাথে কোনো ONU যুক্ত নেই।' : 'No ONU is linked to this subscriber.'}\n`;
+            const rx = r.rx_power_dbm == null ? '-' : `${Number(r.rx_power_dbm).toFixed(2)} dBm`;
+            const weak = r.rx_power_dbm != null && Number(r.rx_power_dbm) < -27
+              ? (bn ? ' ⚠️ কম সিগন্যাল' : ' ⚠️ weak signal') : '';
+            return head + table(
+              bn ? ['OLT', 'PON', 'ONU', 'সিরিয়াল', 'স্ট্যাটাস', 'Rx পাওয়ার', 'দূরত্ব'] : ['OLT', 'PON', 'ONU', 'Serial', 'Status', 'Rx power', 'Distance'],
+              [[esc(r.olt_name), esc(r.pon_port), esc(r.onu_id), esc(r.serial_number), esc(r.onu_status), `${rx}${weak}`, r.distance_m != null ? `${r.distance_m} m` : '-']]
+            ) + (r.last_down_cause ? `> ${bn ? 'শেষ ডাউন কারণ' : 'Last down cause'}: ${esc(r.last_down_cause)}\n` : '');
+          }).join('\n')
+        : `> ${bn ? `\`${esc(entity)}\` দিয়ে কোনো গ্রাহক পাওয়া যায়নি।` : `No subscriber found for \`${esc(entity)}\`.`}`);
+      cards.push({ title: bn ? 'OLT ম্যানেজার' : 'OLT manager', url: '/olts' });
+      break;
+    }
     default: {
       body = `### ${T.help}\n\n` + (bn
-        ? 'আমি আপনার লাইভ ISP ডেটা থেকে প্রশ্নের উত্তর দিই: কালেকশন, গ্রাহক সংখ্যা, বকেয়া, মেয়াদ, রাউটার হেলথ, OLT, টিকেট, লিড, হটস্পট, ইনভেন্টরি ও প্যাকেজ রেট।\n\nকোনো গ্রাহকের কাস্টমার আইডি বা ফোন নম্বরও দিতে পারেন।'
-        : 'I answer questions from your live ISP data: collections, customers, dues, expiry, router health, OLT, tickets, leads, hotspot, inventory and package rates. You can also give me a customer ID or phone number.');
+        ? 'আমি আপনার লাইভ ISP ডেটা থেকে প্রশ্নের উত্তর দিই: কালেকশন, গ্রাহক সংখ্যা, বকেয়া, মেয়াদ, রাউটার হেলথ, OLT, টিকেট, লিড, হটস্পট, ইনভেন্টরি ও প্যাকেজ রেট।\n\nকোনো গ্রাহকের নাম, কাস্টমার আইডি বা ফোন নম্বর দিতে পারেন। নেটওয়ার্ক ভূমিকায় “isa-র ONU তথ্য” বললে তার ONU-র বিবরণ দেখাব।'
+        : 'I answer questions from your live ISP data: collections, customers, dues, expiry, router health, OLT, tickets, leads, hotspot, inventory and package rates. Give me a customer name, ID or phone number — network roles can also ask for a named subscriber’s ONU details.');
       break;
     }
   }
@@ -595,6 +644,7 @@ const INTENT_ROLES: Record<string, string[]> = {
   staff_collection: MONEY_ROLES,
   router_health: [...NETWORK_ROLES, 'TECHNICIAN'],
   olt_health: [...NETWORK_ROLES, 'TECHNICIAN'],
+  subscriber_onu: [...NETWORK_ROLES, 'TECHNICIAN'],
   leads: CRM_ROLES,
   kyc: CRM_ROLES,
   gis_sites: [...NETWORK_ROLES, 'BILLING_OPERATOR', 'TECHNICIAN'],
@@ -614,7 +664,7 @@ function filterStatsForRole(stats: Record<string, any>, role: string) {
 }
 const TITLE_KEYS: Record<string, string> = {
   collection_today: 'collection', revenue_month: 'collection', dues: 'dues', customer_stats: 'customers',
-  online_users: 'online', expiring: 'expiring', router_health: 'router', olt_health: 'olt', tickets: 'ticket',
+  online_users: 'online', expiring: 'expiring', router_health: 'router', olt_health: 'olt', subscriber_onu: 'olt', tickets: 'ticket',
   new_connections: 'newconn', reseller_wallet: 'reseller', hotspot: 'hotspot', inventory: 'stock',
   packages: 'package', payment_gateways: 'gateway', staff_collection: 'staff', leads: 'lead', kyc: 'kyc',
   gis_sites: 'gis', customer_lookup: 'customer', greeting: 'help', help: 'help', free_form: 'help', sms_templates: 'help',

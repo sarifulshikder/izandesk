@@ -891,6 +891,31 @@ test.describe('AI Copilot', () => {
     expect(await page.locator('table').count()).toBeGreaterThan(0);
     expect(errors).toEqual([]);
   });
+
+  test('a named subscriber ONU question resolves to that subscriber', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const reply = await (await request.post('/api/ai/chat', {
+      headers, data: { message: 'There is a subscriber whose name is isa . I want to know his onu info' },
+    })).json();
+    expect(reply.intent).toBe('subscriber_onu');
+    expect(reply.provider).toBe('local');
+    expect(reply.reply.toLowerCase()).toContain('isa');
+    expect(reply.reply).not.toContain('BDCOM P3310C'); // not the network-wide OLT table
+
+    // Without a subscriber name, ONU still means the network health view.
+    const generic = await (await request.post('/api/ai/chat', {
+      headers, data: { message: 'OLT / ONU status' },
+    })).json();
+    expect(generic.intent).toBe('olt_health');
+
+    // Non-network roles cannot read subscriber ONU details.
+    const billingToken = await loginToken(request, { email: 'billing@izandesk.com', password: 'billing123' });
+    const denied = await (await request.post('/api/ai/chat', {
+      headers: { Authorization: `Bearer ${billingToken}` }, data: { message: "isa's onu info" },
+    })).json();
+    expect(denied.meta.restricted).toBe(true);
+  });
 });
 
 test.describe('CRM access control', () => {
