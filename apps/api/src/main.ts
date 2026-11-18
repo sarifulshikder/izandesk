@@ -39,6 +39,7 @@ import installationOrdersRouter from './routes/installation-orders';
 import subscriberEquipmentRouter from './routes/subscriber-equipment';
 import subscriberCommunicationsRouter from './routes/subscriber-communications';
 import settingsRouter from './routes/settings';
+import aiRouter from './routes/ai';
 import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
@@ -299,6 +300,9 @@ async function bootstrap() {
   app.use('/api/topology', authMiddleware, topologyRouter);
   app.use('/api/inventory', authMiddleware, inventoryRouter);
   app.use('/api/gis', authMiddleware, gisRouter);
+
+  // AI Copilot: role-scoped, bilingual assistant (free local engine by default)
+  app.use('/api/ai', authMiddleware, aiRouter);
 
   // Phase 3: Network OSS, OLT, AAA/RADIUS, WireGuard overlay
   app.use('/api/network', authMiddleware, networkRouter);

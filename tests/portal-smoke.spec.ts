@@ -764,6 +764,81 @@ test.describe('network & OSS access control', () => {
   });
 });
 
+test.describe('AI Copilot', () => {
+  test('status and chat are role-scoped and private by default', async ({ request }) => {
+    const adminToken = await loginToken(request, admin);
+    const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+    const status = await (await request.get('/api/ai/status', { headers: adminHeaders })).json();
+    expect(status.available).toBe(true);
+    expect(status.engine).toBe('local');
+    expect(status.privacy).toContain('Local-only');
+    expect(status.capabilities).toContain('finance');
+
+    const reply = await (await request.post('/api/ai/chat', {
+      headers: adminHeaders, data: { message: 'আজকের কালেকশন কত?' },
+    })).json();
+    expect(reply.intent).toBe('collection_today');
+    expect(reply.provider).toBe('local');
+    expect(reply.reply).toContain('কালেকশন');
+    expect(reply.cards?.length).toBeGreaterThan(0);
+    expect(reply.stats.total_clients).toBeGreaterThanOrEqual(0);
+
+    // Technician cannot see finance topics or hidden money totals.
+    const techToken = await loginToken(request, { email: 'tech@izandesk.com', password: 'tech123' });
+    const techHeaders = { Authorization: `Bearer ${techToken}` };
+    const techStatus = await (await request.get('/api/ai/status', { headers: techHeaders })).json();
+    expect(techStatus.capabilities).not.toContain('finance');
+    const techReply = await (await request.post('/api/ai/chat', {
+      headers: techHeaders, data: { message: 'আজকের কালেকশন কত?' },
+    })).json();
+    expect(techReply.meta.restricted).toBe(true);
+    expect(techReply.stats).not.toHaveProperty('today_collection');
+    expect(techReply.stats).not.toHaveProperty('total_dues');
+
+    // Reseller gets their own scoped prompts and data only.
+    const resellerToken = await loginToken(request, reseller);
+    const resellerHeaders = { Authorization: `Bearer ${resellerToken}` };
+    const resellerStatus = await (await request.get('/api/ai/status', { headers: resellerHeaders })).json();
+    expect(resellerStatus.capabilities).toEqual(['own_subscribers', 'own_wallet', 'own_tickets']);
+    expect(resellerStatus.quick_prompts.join(' ')).toContain('আমার');
+    const resellerReply = await (await request.post('/api/ai/chat', {
+      headers: resellerHeaders, data: { message: 'বকেয়া গ্রাহকদের তালিকা' },
+    })).json();
+    expect(resellerReply.meta.restricted).toBe(false);
+    expect(resellerReply.stats).not.toHaveProperty('routers_total');
+  });
+
+  test('AI settings and validation are guarded', async ({ request }) => {
+    const resellerToken = await loginToken(request, reseller);
+    expect((await request.get('/api/ai/settings', { headers: { Authorization: `Bearer ${resellerToken}` } })).status()).toBe(403);
+    expect((await request.put('/api/ai/settings', {
+      headers: { Authorization: `Bearer ${resellerToken}` }, data: { 'ai.allow_external': true },
+    })).status()).toBe(403);
+
+    const adminToken = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${adminToken}` };
+    const settings = await (await request.get('/api/ai/settings', { headers })).json();
+    expect(settings.values['ai.allow_external']).toBe(false);
+    const masked = settings.values['ai.gemini_api_key'];
+    expect(typeof masked.masked).toBe('string');
+    expect(masked.has_value).toBe(false);
+    expect((await request.post('/api/ai/chat', { headers, data: { message: '' } })).status()).toBe(400);
+  });
+
+  test('admin AI page renders and answers with a rendered markdown table', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+    await login(page, admin);
+    await gotoStable(page, '/ai-assistant');
+    await expect(page.getByRole('heading', { name: 'AI Copilot' })).toBeVisible();
+    await page.locator('textarea').fill('আজকের কালেকশন কত?');
+    await page.locator('textarea').press('Enter');
+    await expect(page.getByText('কালেকশন ও আর্থিক বিবরণী')).toBeVisible({ timeout: 20_000 });
+    expect(await page.locator('table').count()).toBeGreaterThan(0);
+    expect(errors).toEqual([]);
+  });
+});
+
 test.describe('CRM access control', () => {
   test('leads and messaging configuration are staff-only', async ({ request }) => {
     const token = await loginToken(request, reseller);

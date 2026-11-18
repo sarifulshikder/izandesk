@@ -10,7 +10,7 @@ import {
   Clock3, UserX, UserMinus, CreditCard, Receipt, Wallet, Landmark, BarChart3,
   ScrollText, Briefcase, Radio, Network, Shield, ShieldCheck, Wifi, Package,
   LifeBuoy, MessageSquare, Puzzle, Smartphone, ShoppingCart, Settings, Server,
-  X, ChevronDown, ChevronRight, BellRing, Building2, AlertCircle, Ban,
+  X, ChevronDown, ChevronRight, BellRing, Building2, AlertCircle, Ban, Sparkles,
 } from 'lucide-react';
 
 interface NavGroup {
@@ -131,6 +131,7 @@ export function Sidebar() {
     {
       label: 'Support',
       items: [
+        { name: 'AI Copilot', href: '/ai-assistant', icon: Sparkles, badge: 'AI' },
         { name: 'My Tickets', href: '/tickets', icon: LifeBuoy },
       ],
     },
@@ -219,6 +220,7 @@ export function Sidebar() {
     {
       label: 'Support',
       items: [
+        { name: 'AI Copilot', href: '/ai-assistant', icon: Sparkles, badge: 'AI' },
         { name: 'CRM & Tickets', href: '/tickets', icon: LifeBuoy },
         { name: 'Omnichannel SMS', href: '/messaging', icon: MessageSquare },
         { name: 'Customer Portal', href: '/portal', icon: Users, badge: 'PWA' },

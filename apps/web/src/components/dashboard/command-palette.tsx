@@ -38,6 +38,7 @@ const baseResults: SearchResult[] = [
   { id: 'nav-olts', category: 'Navigation', title: 'FTTH & OLTs', subtitle: 'OLT telemetry views', href: '/olts' },
   { id: 'nav-billing', category: 'Navigation', title: 'Billing & Invoices', subtitle: 'Billing module shell', href: '/billing' },
   { id: 'nav-plugins', category: 'Navigation', title: 'Plugin Kernel', subtitle: 'Hot-reload plugin status and controls', href: '/plugins' },
+  { id: 'nav-ai', category: 'Navigation', title: 'AI Copilot', subtitle: 'Bilingual, role-scoped assistant for live ISP data', href: '/ai-assistant', badge: 'AI' },
   { id: 'nav-settings', category: 'Navigation', title: 'Settings & Security', subtitle: 'System and RBAC settings shell', href: '/settings' },
   { id: '1', category: 'Subscriber', title: 'Rohit Sharma (IZN-00142)', subtitle: 'PPPoE: rohit5656 | 50 Mbps | Mirpur Zone', href: '/subscribers', badge: 'Active' },
   { id: '3', category: 'Router', title: 'MikroTik CCR2004 — Core BDIX', subtitle: 'IP: 103.150.24.1 | 1,420 Active Sessions', href: '/routers', badge: 'Online' },
@@ -52,6 +53,7 @@ const resellerResults: SearchResult[] = [
   { id: 'rs-complaints', category: 'Navigation', title: 'Complaints', subtitle: 'File and track reseller complaints', href: '/resellers?tab=complaints' },
   { id: 'rs-parental', category: 'Navigation', title: 'Parental Control', subtitle: 'Manage content filtering for your subscribers', href: '/resellers?tab=parental' },
   { id: 'rs-tickets', category: 'Navigation', title: 'My Tickets', subtitle: 'Support tickets for this reseller', href: '/tickets' },
+  { id: 'rs-ai', category: 'Navigation', title: 'AI Copilot', subtitle: 'Ask about your own customers and wallet', href: '/ai-assistant', badge: 'AI' },
 ];
 
 export function CommandPalette() {

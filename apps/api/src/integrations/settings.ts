@@ -33,6 +33,7 @@ export const SETTINGS_CATEGORIES: Record<string, { label: string; description: s
   billing: { label: 'Billing', description: 'Due policy, late fees and auto-suspension.' },
   network: { label: 'Network', description: 'Default device/management parameters.' },
   acs: { label: 'ACS / TR-069', description: 'GenieACS (TR-069/CWMP) integration for CPE management.' },
+  ai: { label: 'AI Copilot', description: 'Bilingual operations assistant: free local engine, optional Gemini/OpenAI for free-form questions.' },
 };
 
 export const SETTINGS_SCHEMA: SettingDef[] = [
@@ -104,6 +105,17 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { key: 'acs.genieacs_url', category: 'acs', label: 'GenieACS NBI URL', type: 'string', default: '', description: 'GenieACS Northbound Interface base URL (e.g. http://genieacs:7557 or http://<server>:7557). Env GENIEACS_URL is used as fallback if not set here.' },
   { key: 'acs.genieacs_user', category: 'acs', label: 'GenieACS Username', type: 'string', default: '', description: 'Optional HTTP Basic auth username for GenieACS NBI.' },
   { key: 'acs.genieacs_pass', category: 'acs', label: 'GenieACS Password', type: 'password', default: '', secret: true, description: 'Optional HTTP Basic auth password for GenieACS NBI.' },
+
+  // ---- ai copilot ----
+  { key: 'ai.enabled', category: 'ai', label: 'Enable AI Copilot', type: 'boolean', default: true },
+  { key: 'ai.provider', category: 'ai', label: 'Provider', type: 'select', options: ['auto', 'local', 'gemini', 'openai'], default: 'auto', description: 'auto/local use the free built-in engine. Gemini/OpenAI are used only for free-form questions when external access is allowed.' },
+  { key: 'ai.allow_external', category: 'ai', label: 'Allow external AI providers', type: 'boolean', default: false, description: 'OFF by default. When ON, free-form questions send aggregate-only metrics (never subscriber PII or credentials) to the configured provider.' },
+  { key: 'ai.gemini_api_key', category: 'ai', label: 'Google Gemini API Key', type: 'password', default: '', secret: true, description: 'Optional free-tier key from Google AI Studio.' },
+  { key: 'ai.gemini_model', category: 'ai', label: 'Gemini Model', type: 'string', default: 'gemini-2.0-flash' },
+  { key: 'ai.openai_api_key', category: 'ai', label: 'OpenAI API Key', type: 'password', default: '', secret: true, description: 'Optional key for GPT-4o-mini.' },
+  { key: 'ai.openai_model', category: 'ai', label: 'OpenAI Model', type: 'string', default: 'gpt-4o-mini' },
+  { key: 'ai.rate_limit_per_min', category: 'ai', label: 'Requests per minute per user', type: 'number', min: 1, max: 300, default: 30 },
+  { key: 'ai.max_history', category: 'ai', label: 'Max conversation turns sent', type: 'number', min: 0, max: 100, default: 20 },
 ];
 
 export function defFor(key: string): SettingDef | undefined {
