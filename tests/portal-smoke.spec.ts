@@ -825,6 +825,33 @@ test.describe('AI Copilot', () => {
     expect((await request.post('/api/ai/chat', { headers, data: { message: '' } })).status()).toBe(400);
   });
 
+  test('floating chat bubble gives quick access and stays clear of mobile chrome', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+    await login(page, admin);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoStable(page, '/subscribers');
+
+    const bubble = page.getByRole('button', { name: 'Open AI Copilot' });
+    await expect(bubble).toBeVisible();
+    await bubble.click();
+    const input = page.getByPlaceholder(/Ask about collection/);
+    await expect(input).toBeVisible();
+    await input.fill('মোট গ্রাহক সংখ্যা');
+    await input.press('Enter');
+    await expect(page.getByText('গ্রাহক ও সাবস্ক্রাইবার লাইভ পরিসংখ্যান')).toBeVisible({ timeout: 20_000 });
+
+    // Mobile: panel open must not create horizontal scroll.
+    const width = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth }));
+    expect(width.sw).toBeLessThanOrEqual(width.iw);
+
+    // No duplicate widget on the full assistant page.
+    await gotoStable(page, '/ai-assistant');
+    await expect(page.getByRole('heading', { name: 'AI Copilot' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open AI Copilot' })).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
   test('admin AI page renders and answers with a rendered markdown table', async ({ page }) => {
     const errors: string[] = [];
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });

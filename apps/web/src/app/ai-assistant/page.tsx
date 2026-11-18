@@ -1,23 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import {
-  Sparkles, Send, RotateCcw, Volume2, VolumeX, Copy, Download, Bot, User,
-  ExternalLink, Loader2, ShieldCheck, Globe2, Zap, Check,
+  Sparkles, Send, RotateCcw, Volume2, VolumeX, Download, Bot,
+  Loader2, ShieldCheck, Globe2, Zap,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import Markdown from '@/components/ai/markdown';
+import ChatMessage, { speakReply, type AiMessage } from '@/components/ai/chat-message';
 
-type Msg = {
-  role: 'user' | 'assistant';
-  content: string;
-  cards?: Array<{ title: string; badge?: string; desc?: string; url?: string }>;
-  provider?: string;
-  intent?: string;
-  meta?: Record<string, any>;
-};
+type Msg = AiMessage;
 
 type Status = {
   ok?: boolean; available?: boolean; engine?: string; active_mode?: string;
@@ -39,7 +31,6 @@ export default function AiAssistantPage() {
   const [err, setErr] = useState<string | null>(null);
   const [voice, setVoice] = useState(false);
   const [usage, setUsage] = useState<any>(null);
-  const [copied, setCopied] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -57,17 +48,7 @@ export default function AiAssistantPage() {
   useEffect(() => { load(); }, [load]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, busy]);
 
-  const speak = useCallback((text: string) => {
-    if (!voice || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    try {
-      window.speechSynthesis.cancel();
-      const clean = String(text).replace(/[#*`>|]/g, ' ').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').slice(0, 1200);
-      const utter = new SpeechSynthesisUtterance(clean);
-      utter.lang = /[\u0980-\u09FF]/.test(clean) ? 'bn-BD' : 'en-US';
-      utter.rate = 1;
-      window.speechSynthesis.speak(utter);
-    } catch { /* speech is best-effort */ }
-  }, [voice]);
+  const speak = useCallback((text: string) => speakReply(text, voice), [voice]);
 
   const send = useCallback(async (text: string) => {
     const msg = String(text || '').trim();
@@ -96,10 +77,6 @@ export default function AiAssistantPage() {
   const newChat = () => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();
     setMessages([]); setErr(null); inputRef.current?.focus();
-  };
-
-  const copy = async (text: string, idx: number) => {
-    try { await navigator.clipboard.writeText(text); setCopied(idx); setTimeout(() => setCopied(null), 1500); } catch {}
   };
 
   const exportChat = () => {
@@ -180,53 +157,7 @@ export default function AiAssistantPage() {
               )}
 
               {messages.map((m, idx) => (
-                <div key={idx} className={`flex gap-2 sm:gap-3 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  {m.role === 'assistant' && (
-                    <span className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
-                      <Bot className="w-4 h-4" />
-                    </span>
-                  )}
-                  <div className={`max-w-[88%] sm:max-w-[82%] min-w-0 rounded-xl px-3 py-2.5 text-sm ${
-                    m.role === 'user' ? 'bg-primary text-primary-foreground' : 'border border-border/70 bg-muted/20'
-                  }`}>
-                    {m.role === 'user' ? (
-                      <p className="whitespace-pre-wrap break-words">{m.content}</p>
-                    ) : (
-                      <>
-                        <Markdown text={m.content} />
-                        {!!m.cards?.length && (
-                          <div className="mt-3 space-y-2">
-                            {m.cards.map((c, ci) => (
-                              <Link key={ci} href={c.url || '#'} className="flex items-center justify-between gap-2 p-2.5 rounded-lg border border-border/60 bg-card/60 hover:border-primary/40 transition-colors text-xs">
-                                <span className="min-w-0">
-                                  <span className="font-bold block truncate">{c.title}</span>
-                                  {c.desc && <span className="text-muted-foreground block truncate">{c.desc}</span>}
-                                </span>
-                                <span className="flex items-center gap-1.5 shrink-0">
-                                  {c.badge && <span className="badge badge-primary">{c.badge}</span>}
-                                  <ExternalLink className="w-3 h-3 text-muted-foreground" />
-                                </span>
-                              </Link>
-                            ))}
-                          </div>
-                        )}
-                        <div className="flex items-center gap-2 pt-2 mt-2 border-t border-border/50 text-[11px] text-muted-foreground">
-                          <button className="inline-flex items-center gap-1 hover:text-primary" onClick={() => void copy(m.content, idx)}>
-                            {copied === idx ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />} Copy
-                          </button>
-                          <button className="inline-flex items-center gap-1 hover:text-primary" onClick={() => speak(m.content)}>
-                            <Volume2 className="w-3 h-3" /> Read
-                          </button>
-                          {m.provider && <span className="ml-auto">via {m.provider}</span>}
-                          {m.meta?.restricted && <span className="badge badge-warning">restricted</span>}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                  {m.role === 'user' && (
-                    <span className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center shrink-0"><User className="w-4 h-4" /></span>
-                  )}
-                </div>
+                <ChatMessage key={idx} msg={m} index={idx} voice={voice} />
               ))}
 
               {busy && (

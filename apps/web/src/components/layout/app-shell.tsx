@@ -7,6 +7,7 @@ import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
 import { MobileBottomNav } from '@/components/layout/mobile-bottom-nav';
 import { CommandPalette } from '@/components/dashboard/command-palette';
+import AiChatBubble from '@/components/ai/chat-bubble';
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -33,6 +34,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
       <MobileBottomNav />
       <CommandPalette />
+      <AiChatBubble />
     </>
   );
 }
