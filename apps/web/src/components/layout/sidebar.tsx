@@ -48,7 +48,7 @@ export function Sidebar() {
   const [routers, setRouters] = useState<any[]>([]);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     'Reseller Portal': true, 'Partner Finance': true, 'Partner Operations': true, Dashboard: true, Clients: true, Billing: true, Resellers: false, Network: true, 'OLT & Tools': true,
-    Support: false, 'Finance & Ops': false, Plugins: false, System: false,
+    Support: false, 'AI Copilot': true, 'Finance & Ops': false, Plugins: false, System: false,
   });
   const [openSub, setOpenSub] = useState<Record<string, boolean>>({
     'Payment Gateways': true, 'All Resellers': true, 'FTTH & OLTs': true, 'Network & Routers': true,
@@ -131,8 +131,13 @@ export function Sidebar() {
     {
       label: 'Support',
       items: [
-        { name: 'AI Copilot', href: '/ai-assistant', icon: Sparkles, badge: 'AI' },
         { name: 'My Tickets', href: '/tickets', icon: LifeBuoy },
+      ],
+    },
+    {
+      label: 'AI Copilot',
+      items: [
+        { name: 'AI Copilot', href: '/ai-assistant', icon: Sparkles, badge: 'AI' },
       ],
     },
   ];
@@ -220,10 +225,16 @@ export function Sidebar() {
     {
       label: 'Support',
       items: [
-        { name: 'AI Copilot', href: '/ai-assistant', icon: Sparkles, badge: 'AI' },
         { name: 'CRM & Tickets', href: '/tickets', icon: LifeBuoy },
         { name: 'Omnichannel SMS', href: '/messaging', icon: MessageSquare },
         { name: 'Customer Portal', href: '/portal', icon: Users, badge: 'PWA' },
+      ],
+    },
+    {
+      label: 'AI Copilot',
+      items: [
+        { name: 'AI Copilot', href: '/ai-assistant', icon: Sparkles, badge: 'AI' },
+        { name: 'AI Copilot Settings', href: '/ai-settings', icon: Settings },
       ],
     },
     {

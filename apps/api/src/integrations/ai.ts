@@ -16,7 +16,7 @@ export type AIActor = { id: string; name: string; role: string; resellerId?: str
 export type AICard = { title: string; badge?: string; desc?: string; url?: string; prompt?: string };
 export type AIResult = {
   reply: string;
-  provider: 'local' | 'gemini' | 'openai';
+  provider: 'local' | 'gemini' | 'openai' | 'nim';
   intent: string;
   lang: 'bn' | 'en';
   cards: AICard[];
@@ -625,13 +625,12 @@ function pct(part: number, total: number) {
 
 /* ------------------------- external LLM (opt-in) ------------------------ */
 
-async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn' | 'en', s: Record<string, any>): Promise<{ reply: string; provider: 'gemini' | 'openai' } | null> {
+async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn' | 'en', s: Record<string, any>): Promise<{ reply: string; provider: 'gemini' | 'openai' | 'nim' } | null> {
   const allow = await getCached('ai.allow_external', false);
   if (!allow) return null;
   const provider = String(await getCached('ai.provider', 'auto'));
-  const key = provider === 'openai'
-    ? String(await getCached('ai.openai_api_key', ''))
-    : String(await getCached('ai.gemini_api_key', ''));
+  if (!['gemini', 'openai', 'nim'].includes(provider)) return null;
+  const key = String(await getCached(`ai.${provider}_api_key`, ''));
   if (!key) return null;
 
   const safe = filterStatsForRole(s, ctx.role);
@@ -664,6 +663,22 @@ async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn'
       const j: any = await r.json();
       const text = j?.choices?.[0]?.message?.content;
       return text ? { reply: String(text).slice(0, 4000), provider: 'openai' } : null;
+    }
+    if (provider === 'nim') {
+      // NVIDIA NIM exposes an OpenAI-compatible Chat Completions API, both for
+      // NIM Cloud (integrate.api.nvidia.com) and self-hosted NIM containers.
+      const base = String(await getCached('ai.nim_base_url', 'https://integrate.api.nvidia.com/v1')).replace(/\/+$/, '');
+      const model = String(await getCached('ai.nim_model', 'meta/llama-3.3-70b-instruct'));
+      const r = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: message }], max_tokens: 600, temperature: 0.2, stream: false }),
+        signal: (AbortSignal as any).timeout(20000),
+      });
+      if (!r.ok) return null;
+      const j: any = await r.json();
+      const text = j?.choices?.[0]?.message?.content;
+      return text ? { reply: String(text).slice(0, 4000), provider: 'nim' } : null;
     }
     const model = String(await getCached('ai.gemini_model', 'gemini-2.0-flash'));
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {

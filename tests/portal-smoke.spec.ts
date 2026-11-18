@@ -822,7 +822,26 @@ test.describe('AI Copilot', () => {
     const masked = settings.values['ai.gemini_api_key'];
     expect(typeof masked.masked).toBe('string');
     expect(masked.has_value).toBe(false);
+    expect(settings.values['ai.nim_api_key'].has_value).toBe(false);
+    expect(settings.values['ai.nim_base_url']).toContain('api.nvidia.com');
+    expect(settings.values['ai.nim_model']).toContain('llama');
     expect((await request.post('/api/ai/chat', { headers, data: { message: '' } })).status()).toBe(400);
+  });
+
+  test('staff sidebar has an AI group with Copilot and settings', async ({ page }) => {
+    await login(page, admin);
+    await expect(page.getByRole('link', { name: /^AI Copilot Settings$/ })).toBeVisible();
+    await page.getByRole('link', { name: /^AI Copilot Settings$/ }).click();
+    await expect(page.getByRole('heading', { name: 'AI Copilot Settings' })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('NVIDIA NIM', { exact: true }).nth(1)).toBeVisible();
+    const options = await page.locator('select option').allTextContents();
+    expect(options.join(' ')).toContain('NVIDIA NIM');
+  });
+
+  test('reseller sidebar has the AI group but no staff settings entry', async ({ page }) => {
+    await login(page, reseller);
+    await expect(page.getByRole('link', { name: /AI Copilot/ }).first()).toBeVisible();
+    expect(await page.getByRole('link', { name: /AI Copilot Settings/ }).count()).toBe(0);
   });
 
   test('floating chat bubble gives quick access and stays clear of mobile chrome', async ({ page }) => {
@@ -1159,5 +1178,26 @@ test.describe('import mutating flows (opt-in)', () => {
     const listed = await (await request.get(`/api/subscribers?q=${username}`, { headers })).json();
     const created = (listed.data || []).find((s: any) => s.username === username);
     if (created) await request.delete(`/api/subscribers/${created.id}`, { headers });
+  });
+});
+
+test.describe('AI settings mutating flows (opt-in)', () => {
+  test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
+
+  test('saving AI settings persists values (bare field names)', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const before = await (await request.get('/api/ai/settings', { headers })).json();
+    const original = before.values['ai.rate_limit_per_min'];
+    try {
+      const saved = await (await request.put('/api/ai/settings', {
+        headers, data: { 'ai.rate_limit_per_min': 41 },
+      })).json();
+      expect(saved.updated.length).toBeGreaterThan(0);
+      const after = await (await request.get('/api/ai/settings', { headers })).json();
+      expect(after.values['ai.rate_limit_per_min']).toBe(41);
+    } finally {
+      await request.put('/api/ai/settings', { headers, data: { 'ai.rate_limit_per_min': original } });
+    }
   });
 });

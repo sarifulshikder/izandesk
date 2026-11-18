@@ -39,6 +39,7 @@ const baseResults: SearchResult[] = [
   { id: 'nav-billing', category: 'Navigation', title: 'Billing & Invoices', subtitle: 'Billing module shell', href: '/billing' },
   { id: 'nav-plugins', category: 'Navigation', title: 'Plugin Kernel', subtitle: 'Hot-reload plugin status and controls', href: '/plugins' },
   { id: 'nav-ai', category: 'Navigation', title: 'AI Copilot', subtitle: 'Bilingual, role-scoped assistant for live ISP data', href: '/ai-assistant', badge: 'AI' },
+  { id: 'nav-ai-settings', category: 'Navigation', title: 'AI Copilot Settings', subtitle: 'Engine, NVIDIA NIM / Gemini / OpenAI keys and limits', href: '/ai-settings' },
   { id: 'nav-settings', category: 'Navigation', title: 'Settings & Security', subtitle: 'System and RBAC settings shell', href: '/settings' },
   { id: '1', category: 'Subscriber', title: 'Rohit Sharma (IZN-00142)', subtitle: 'PPPoE: rohit5656 | 50 Mbps | Mirpur Zone', href: '/subscribers', badge: 'Active' },
   { id: '3', category: 'Router', title: 'MikroTik CCR2004 — Core BDIX', subtitle: 'IP: 103.150.24.1 | 1,420 Active Sessions', href: '/routers', badge: 'Online' },

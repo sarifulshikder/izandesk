@@ -10,6 +10,7 @@ const router: Router = Router();
 const AI_SETTING_KEYS = [
   'ai.enabled', 'ai.provider', 'ai.allow_external', 'ai.gemini_api_key',
   'ai.gemini_model', 'ai.openai_api_key', 'ai.openai_model',
+  'ai.nim_api_key', 'ai.nim_base_url', 'ai.nim_model',
   'ai.rate_limit_per_min', 'ai.max_history',
 ];
 
@@ -46,19 +47,24 @@ router.get('/status', asyncHandler(async (req, res) => {
   const enabled = await getCached('ai.enabled', true);
   const provider = String(await getCached('ai.provider', 'auto'));
   const externalAllowed = !!(await getCached('ai.allow_external', false));
-  const hasKey = !!(await getCached('ai.gemini_api_key', '')) || !!(await getCached('ai.openai_api_key', ''));
+  const labels: Record<string, string> = { gemini: 'Gemini', openai: 'OpenAI', nim: 'NVIDIA NIM' };
+  const externalReady = ['gemini', 'openai', 'nim'].includes(provider)
+    && externalAllowed
+    && !!(await getCached(`ai.${provider}_api_key`, ''));
   res.json({
     ok: true,
     available: !!enabled,
-    engine: !enabled ? 'disabled' : (provider === 'gemini' || provider === 'openai') && externalAllowed && hasKey ? provider : 'local',
-    active_mode: !enabled ? 'Disabled' : externalAllowed && hasKey && (provider === 'gemini' || provider === 'openai')
-      ? `${provider === 'gemini' ? 'Gemini' : 'OpenAI'} + Built-in Engine`
+    engine: !enabled ? 'disabled' : externalReady ? provider : 'local',
+    active_mode: !enabled ? 'Disabled' : externalReady
+      ? `${labels[provider]} + Built-in Engine`
       : 'Built-in Free Engine',
     role,
     capabilities: capabilitiesFor(role),
     quick_prompts: quickPromptsFor(role, 'bn'),
     limits: { per_minute: Number(await getCached('ai.rate_limit_per_min', 30)) || 30, message_chars: 2000, history_turns: Number(await getCached('ai.max_history', 20)) || 20 },
-    privacy: externalAllowed ? 'External AI is enabled for free-form questions; only aggregate metrics are shared.' : 'Local-only: your questions and data never leave IzanDesk.',
+    privacy: externalReady
+      ? `${labels[provider]} is enabled for free-form questions; only aggregate metrics are shared.`
+      : 'Local-only: your questions and data never leave IzanDesk.',
   });
 }));
 
@@ -101,7 +107,10 @@ router.put('/settings', asyncHandler(async (req, res) => {
   const unknown = Object.keys(body).filter((k) => !AI_SETTING_KEYS.includes(k));
   if (unknown.length) throw new ValidationError(`Unknown setting(s): ${unknown.join(', ')}`);
   const values: Record<string, any> = {};
-  for (const k of AI_SETTING_KEYS) if (Object.prototype.hasOwnProperty.call(body, k)) values[k] = body[k];
+  // setCategory() expects bare field names ("nim_api_key"), not "ai.nim_api_key".
+  for (const k of AI_SETTING_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(body, k)) values[k.slice(3)] = body[k];
+  }
   const updated = await setCategory('ai', values, reqActor(req));
   const all = maskedView(await getAllSettings());
   const masked: Record<string, any> = {};
