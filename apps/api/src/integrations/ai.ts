@@ -10,12 +10,19 @@
  *  - Every response is deterministic in shape so the UI can render cards,
  *    quick prompts and deep links consistently.
  */
+import { randomBytes } from 'crypto';
 import { getCached } from './settings';
 
 export type AIActor = { id: string; name: string; role: string; resellerId?: string | null };
 export type AICard = { title: string; badge?: string; desc?: string; url?: string; prompt?: string };
-/** Frontend actions are a closed allowlist — the model never supplies these. */
-export type AIAction = { type: 'set_theme'; value: 'dark' | 'light' | 'toggle' };
+/** Frontend actions are a closed allowlist — the model never supplies these.
+ *  Mutations carry only server-generated values, never free-form model output. */
+export type AIAction =
+  | { type: 'set_theme'; value: 'dark' | 'light' | 'toggle' }
+  | { type: 'create_subscriber'; payload: {
+      full_name: string; username: string; password: string;
+      subscriber_type: string; connection_type: string; status: string;
+    } };
 export type AIResult = {
   reply: string;
   provider: 'local' | 'gemini' | 'openai' | 'nim';
@@ -61,10 +68,24 @@ function detectLang(message: string): 'bn' | 'en' {
   return /[\u0980-\u09FF]/.test(message) ? 'bn' : 'en';
 }
 
-type Detection = { intent: string; lang: 'bn' | 'en'; entity?: string; value?: AIAction['value'] };
+type Detection = { intent: string; lang: 'bn' | 'en'; entity?: string; value?: 'dark' | 'light' | 'toggle'; action?: AIAction };
+
+/** Generate a fresh, valid PPPoE identity for a demo subscriber. The cleartext
+ *  password is the RADIUS secret; the subscribers route hashes the portal copy. */
+function randomSubscriberDraft(): Extract<AIAction, { type: 'create_subscriber' }>['payload'] {
+  const hex = randomBytes(5).toString('hex');
+  return {
+    full_name: `AI Demo Subscriber ${hex.slice(0, 4).toUpperCase()}`,
+    username: `ai-${hex}`,
+    password: randomBytes(9).toString('base64url').slice(0, 12),
+    subscriber_type: 'HOME',
+    connection_type: 'PPPOE',
+    status: 'PENDING',
+  };
+}
 
 /** UI theme commands stay local — they are a frontend action, never LLM input. */
-function detectThemeCommand(text: string): AIAction['value'] | undefined {
+function detectThemeCommand(text: string): 'dark' | 'light' | 'toggle' | undefined {
   // Only short, command-like requests are UI actions — never a data question
   // that happens to mention a theme ("did dark mode affect collections?").
   if (text.length > 80 || text.includes('?')) return undefined;
@@ -119,6 +140,13 @@ function detectIntent(message: string): Detection {
   const text = message.trim().toLowerCase();
   const theme = detectThemeCommand(text);
   if (theme) return { intent: 'ui_theme', lang, value: theme };
+  // Explicit creation commands only — questions ("how do I add a customer?")
+  // stay informational. The payload is generated here, never from user text.
+  const createVerb = /\b(create|add|register|onboard|provision)\b|তৈরি|যোগ কর/i.test(text);
+  const subscriberNoun = /\b(subscriber|customer|client)\b|গ্রাহক|সাবস্ক্রাইবার|কাস্টমার/i.test(text);
+  if (!text.includes('?') && createVerb && subscriberNoun) {
+    return { intent: 'create_subscriber', lang, action: { type: 'create_subscriber', payload: randomSubscriberDraft() } };
+  }
   // A named subscriber takes priority over topic keywords: "isa's ONU info"
   // must not be answered with the generic OLT health table.
   const entity = extractEntity(text);
@@ -413,7 +441,7 @@ function table(headers: string[], rows: any[][]) {
 }
 const esc = (v: any) => String(v ?? '-').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
-function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows: Row[], ctx: Ctx, entity?: string, value?: AIAction['value']): { reply: string; cards: AICard[] } {
+function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows: Row[], ctx: Ctx, entity?: string, value?: 'dark' | 'light' | 'toggle', action?: AIAction): { reply: string; cards: AICard[] } {
   const T = lang === 'bn' ? BN.title : EN.title;
   const bn = lang === 'bn';
   const cards: AICard[] = [];
@@ -644,6 +672,17 @@ function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows:
         : `✅ The interface theme has been **${label}**. Ask again to switch, or use the theme button in the top bar.`);
       break;
     }
+    case 'create_subscriber': {
+      const p = action?.type === 'create_subscriber' ? action.payload : null;
+      body = `### ${bn ? '👤 নতুন গ্রাহক তৈরি' : '👤 Create subscriber'}\n\n` + (p
+        ? `**${esc(p.full_name)}**\n\n` + table(
+            bn ? ['PPPoE ইউজার', 'পাসওয়ার্ড', 'স্ট্যাটাস'] : ['PPPoE user', 'Password', 'Status'],
+            [[esc(p.username), esc(p.password), esc(p.status)]]
+          ) + `\n> ${bn ? 'রেকর্ডটি এখন তৈরি করা হচ্ছে…' : 'Creating the record now…'}`
+        : `> ${bn ? 'গ্রাহক তৈরি করা যায়নি।' : 'Could not prepare a subscriber draft.'}`);
+      cards.push({ title: bn ? 'গ্রাহক তালিকা' : 'Subscriber list', url: '/clients' });
+      break;
+    }
     default: {
       body = `### ${T.help}\n\n` + (bn
         ? 'আমি আপনার লাইভ ISP ডেটা থেকে প্রশ্নের উত্তর দিই: কালেকশন, গ্রাহক সংখ্যা, বকেয়া, মেয়াদ, রাউটার হেলথ, OLT, টিকেট, লিড, হটস্পট, ইনভেন্টরি ও প্যাকেজ রেট।\n\nকোনো গ্রাহকের নাম, কাস্টমার আইডি বা ফোন নম্বর দিতে পারেন। নেটওয়ার্ক ভূমিকায় “isa-র ONU তথ্য” বললে তার ONU-র বিবরণ দেখাব।'
@@ -670,6 +709,8 @@ const INTENT_ROLES: Record<string, string[]> = {
   router_health: [...NETWORK_ROLES, 'TECHNICIAN'],
   olt_health: [...NETWORK_ROLES, 'TECHNICIAN'],
   subscriber_onu: [...NETWORK_ROLES, 'TECHNICIAN'],
+  // Creating records is a SUPER_ADMIN-only AI action; others get the standard notice.
+  create_subscriber: ['SUPER_ADMIN'],
   leads: CRM_ROLES,
   kyc: CRM_ROLES,
   gis_sites: [...NETWORK_ROLES, 'BILLING_OPERATOR', 'TECHNICIAN'],
@@ -692,7 +733,7 @@ const TITLE_KEYS: Record<string, string> = {
   online_users: 'online', expiring: 'expiring', router_health: 'router', olt_health: 'olt', subscriber_onu: 'olt', tickets: 'ticket',
   new_connections: 'newconn', reseller_wallet: 'reseller', hotspot: 'hotspot', inventory: 'stock',
   packages: 'package', payment_gateways: 'gateway', staff_collection: 'staff', leads: 'lead', kyc: 'kyc',
-  gis_sites: 'gis', customer_lookup: 'customer', ui_theme: 'theme', greeting: 'help', help: 'help', free_form: 'help', sms_templates: 'help',
+  gis_sites: 'gis', customer_lookup: 'customer', ui_theme: 'theme', create_subscriber: 'customer', greeting: 'help', help: 'help', free_form: 'help', sms_templates: 'help',
 };
 function pct(part: number, total: number) {
   return total > 0 ? `${Math.round((part / total) * 100)}%` : '—';
@@ -725,6 +766,8 @@ async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn'
     `tokens, phone numbers or personal data. If the answer is not in the context, say you don't have that data and suggest ` +
     `asking one of the supported topics. For interface/theme requests, tell the user to say "dark mode" or "light mode" ` +
     `and the app will switch it (or use the top-bar theme button) — never claim you cannot control the interface. ` +
+    `For subscriber creation, tell a super admin to say "create a subscriber with random credentials" and the app will ` +
+    `create it through the normal validated API; otherwise point them to the Add Subscriber form. ` +
     `Keep it short and practical. Context: ${context}`;
 
   try {
@@ -791,13 +834,12 @@ export async function askAI(pool: any, actor: AIActor, message: string, _history
     const T = detected.lang === 'bn' ? BN.title : EN.title;
     reply = `### ${(T as any)[TITLE_KEYS[detected.intent] || 'help']}\n\n${denyText(detected.lang === 'bn')}`;
   } else {
-    const rendered = render(detected.intent, detected.lang, merged, extras.rows, ctx, detected.entity, detected.value);
+    const rendered = render(detected.intent, detected.lang, merged, extras.rows, ctx, detected.entity, detected.value, detected.action);
     reply = rendered.reply;
     cards = rendered.cards;
     // Only the deterministic local engine may emit an action — never the LLM.
-    if (detected.intent === 'ui_theme' && detected.value) {
-      action = { type: 'set_theme', value: detected.value };
-    }
+    if (detected.action) action = detected.action;
+    else if (detected.intent === 'ui_theme' && detected.value) action = { type: 'set_theme', value: detected.value };
     if (detected.intent === 'free_form') {
       const external = await freeFormExternal(pool, ctx, message, detected.lang, merged);
       if (external) { reply = external.reply; provider = external.provider; }

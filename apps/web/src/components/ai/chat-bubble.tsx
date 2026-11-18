@@ -10,6 +10,7 @@ import {
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import ChatMessage, { speakReply, type AiMessage } from './chat-message';
+import { useAiActions } from './use-ai-actions';
 
 /** Floating quick-access assistant, mounted in the app shell so it is
  *  available on every staff/reseller page. State survives navigation because
@@ -20,6 +21,8 @@ export default function AiChatBubble() {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<any>(null);
   const [messages, setMessages] = useState<AiMessage[]>([]);
+  const handleActionResult = useCallback((m: AiMessage) => setMessages((prev) => [...prev, m]), []);
+  const handleAction = useAiActions(handleActionResult);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [voice, setVoice] = useState(false);
@@ -118,7 +121,7 @@ export default function AiChatBubble() {
                 </div>
               </div>
             )}
-            {messages.map((m, idx) => <ChatMessage key={idx} msg={m} index={idx} voice={voice} compact />)}
+            {messages.map((m, idx) => <ChatMessage key={idx} msg={m} index={idx} voice={voice} compact onAction={handleAction} />)}
             {busy && (
               <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                 <Bot className="w-4 h-4 text-primary" /><Loader2 className="w-3 h-3 animate-spin" /> Thinking…

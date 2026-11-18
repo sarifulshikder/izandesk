@@ -923,6 +923,35 @@ test.describe('AI Copilot', () => {
     expect(r.action).toEqual({ type: 'set_theme', value: 'dark' });
   });
 
+  test('subscriber creation is a super-admin-only local action', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const ask = async (message: string, h = headers) => (await request.post('/api/ai/chat', { headers: h, data: { message } })).json();
+
+    const draft = await ask('create a subscriber with random credentials');
+    expect(draft.intent).toBe('create_subscriber');
+    expect(draft.provider).toBe('local');
+    expect(draft.action.type).toBe('create_subscriber');
+    expect(draft.action.payload.username).toMatch(/^ai-[a-f0-9]{10}$/);
+    expect(draft.action.payload.password.length).toBeGreaterThanOrEqual(12);
+    expect(draft.action.payload.status).toBe('PENDING');
+    expect(draft.reply).toContain(draft.action.payload.username);
+    // The action never reaches the external provider.
+    expect(draft.reply).not.toContain('I can\'t create');
+
+    // Questions are informational, not mutations.
+    const question = await ask('how do I create a subscriber?');
+    expect(question.intent).not.toBe('create_subscriber');
+    expect(question.action).toBeUndefined();
+
+    for (const creds of [reseller, { email: 'billing@izandesk.com', password: 'billing123' }]) {
+      const t = await loginToken(request, creds);
+      const denied = await ask('create a subscriber with random credentials', { Authorization: `Bearer ${t}` });
+      expect(denied.meta.restricted).toBe(true);
+      expect(denied.action).toBeUndefined();
+    }
+  });
+
   test('a Copilot theme command actually switches the interface', async ({ page }) => {
     await login(page, admin);
     await page.evaluate(() => localStorage.setItem('izandesk_theme', 'light'));
@@ -1280,6 +1309,39 @@ test.describe('AI settings mutating flows (opt-in)', () => {
       expect(after.values['ai.rate_limit_per_min']).toBe(41);
     } finally {
       await request.put('/api/ai/settings', { headers, data: { 'ai.rate_limit_per_min': original } });
+    }
+  });
+});
+
+test.describe('AI mutations (opt-in)', () => {
+  test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
+
+  test('Copilot creates a real subscriber through the validated API', async ({ page, request }) => {
+    await login(page, admin);
+    await gotoStable(page, '/ai-assistant');
+    const input = page.locator('textarea');
+    const chatResponse = page.waitForResponse((r) => r.url().includes('/api/ai/chat') && r.request().method() === 'POST');
+    await input.fill('create a subscriber with random credentials');
+    await input.press('Enter');
+    const chat = await (await chatResponse).json();
+    expect(chat.action.type).toBe('create_subscriber');
+    const payload = chat.action.payload;
+
+    await expect(page.getByText('✅ Created')).toBeVisible({ timeout: 30_000 });
+    const body = await page.locator('body').innerText();
+    expect(body).toContain(payload.username);
+    expect(body).toContain(payload.password);
+
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const listed = await (await request.get(`/api/subscribers?q=${encodeURIComponent(payload.username)}`, { headers })).json();
+    const created = (listed.data || []).find((s: any) => s.username === payload.username);
+    expect(created).toBeTruthy();
+    try {
+      expect(created.status).toBe('PENDING');
+      expect(created.client_code).toMatch(/^IZN-/);
+    } finally {
+      await request.delete(`/api/subscribers/${created.id}`, { headers });
     }
   });
 });

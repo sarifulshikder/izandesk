@@ -6,8 +6,13 @@ import { Bot, User, Copy, Volume2, Check, ExternalLink } from 'lucide-react';
 import Markdown from './markdown';
 import { useAuth } from '@/lib/auth-context';
 
-/** Allowlisted UI actions emitted only by the local intent engine. */
-export type AiMessageAction = { type: 'set_theme'; value: 'dark' | 'light' | 'toggle' };
+/** Allowlisted actions emitted only by the local intent engine. */
+export type AiMessageAction =
+  | { type: 'set_theme'; value: 'dark' | 'light' | 'toggle' }
+  | { type: 'create_subscriber'; payload: {
+      full_name: string; username: string; password: string;
+      subscriber_type: string; connection_type: string; status: string;
+    } };
 
 export type AiMessage = {
   role: 'user' | 'assistant';
@@ -35,8 +40,8 @@ export async function copyText(text: string) {
 }
 
 export default function ChatMessage({
-  msg, index, voice = false, compact = false,
-}: { msg: AiMessage; index: number; voice?: boolean; compact?: boolean }) {
+  msg, index, voice = false, compact = false, onAction,
+}: { msg: AiMessage; index: number; voice?: boolean; compact?: boolean; onAction?: (action: AiMessageAction) => void }) {
   const [copied, setCopied] = useState(false);
   const appliedAction = useRef(false);
   const { theme, setTheme } = useAuth();
@@ -47,11 +52,15 @@ export default function ChatMessage({
   // The action is a closed allowlist from the local engine; never trust arbitrary payloads.
   useEffect(() => {
     const a = msg.action;
-    if (msg.role !== 'assistant' || appliedAction.current || !a || a.type !== 'set_theme') return;
+    if (msg.role !== 'assistant' || appliedAction.current || !a) return;
     appliedAction.current = true;
-    if (a.value === 'toggle') setTheme(theme === 'dark' ? 'light' : 'dark');
-    else if (a.value === 'dark' || a.value === 'light') setTheme(a.value);
-  }, [msg.action, msg.role, theme, setTheme]);
+    if (a.type === 'set_theme') {
+      if (a.value === 'toggle') setTheme(theme === 'dark' ? 'light' : 'dark');
+      else setTheme(a.value);
+    } else if (a.type === 'create_subscriber') {
+      onAction?.(a);
+    }
+  }, [msg.action, msg.role, theme, setTheme, onAction]);
 
   return (
     <div className={`flex gap-2 sm:gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>

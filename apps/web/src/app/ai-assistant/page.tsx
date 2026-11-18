@@ -8,6 +8,7 @@ import {
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import ChatMessage, { speakReply, type AiMessage } from '@/components/ai/chat-message';
+import { useAiActions } from '@/components/ai/use-ai-actions';
 
 type Msg = AiMessage;
 
@@ -26,6 +27,8 @@ export default function AiAssistantPage() {
   const { token } = useAuth();
   const [status, setStatus] = useState<Status | null>(null);
   const [messages, setMessages] = useState<Msg[]>([]);
+  const handleActionResult = useCallback((m: AiMessage) => setMessages((prev) => [...prev, m]), []);
+  const handleAction = useAiActions(handleActionResult);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -158,7 +161,7 @@ export default function AiAssistantPage() {
               )}
 
               {messages.map((m, idx) => (
-                <ChatMessage key={idx} msg={m} index={idx} voice={voice} />
+                <ChatMessage key={idx} msg={m} index={idx} voice={voice} onAction={handleAction} />
               ))}
 
               {busy && (
