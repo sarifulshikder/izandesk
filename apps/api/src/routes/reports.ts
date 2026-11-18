@@ -3,7 +3,9 @@ import { pool } from '../db';
 import { asyncHandler } from './helpers';
 
 const router: Router = Router();
-function guard(req:any,res:any){ if(!['SUPER_ADMIN','BILLING_OPERATOR','NOC_ENGINEER','RESELLER'].includes(String((req as any).user?.role||''))){ res.status(403).json({message:'Forbidden'}); return false;} return true; }
+// Reports are ISP-wide (payroll, partner wallets, P&L) — resellers must use
+// their own scoped partner reports instead.
+function guard(req:any,res:any){ if(!['SUPER_ADMIN','BILLING_OPERATOR','NOC_ENGINEER'].includes(String((req as any).user?.role||''))){ res.status(403).json({message:'Forbidden'}); return false;} return true; }
 function toCsv(rows:any[], cols?:string[]){
   const keys = cols || Object.keys(rows[0]||{});
   const esc=(v:any)=>{ const s=v==null?'':(typeof v==='object'?JSON.stringify(v):String(v)); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };

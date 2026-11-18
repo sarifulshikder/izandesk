@@ -4,6 +4,18 @@ import { asyncHandler } from './helpers';
 
 const router: Router = Router();
 
+// Inventory carries serial numbers and asset locations — staff only.
+const INVENTORY_READ_ROLES = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER', 'TECHNICIAN'];
+const INVENTORY_WRITE_ROLES = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'];
+router.use((req: any, res: any, next: any) => {
+  const role = String(req.user?.role || '');
+  if (!INVENTORY_READ_ROLES.includes(role)) return res.status(403).json({ message: 'Inventory access is restricted to staff accounts' });
+  if (req.method !== 'GET' && req.method !== 'HEAD' && !INVENTORY_WRITE_ROLES.includes(role)) {
+    return res.status(403).json({ message: 'Insufficient permissions to modify inventory' });
+  }
+  return next();
+});
+
 // Warehouses
 router.get('/warehouses', asyncHandler(async (_req, res) => {
   const r = await pool.query(`

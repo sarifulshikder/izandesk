@@ -108,14 +108,16 @@ router.post('/vouchers/sync-radius/batch', asyncHandler(async (req,res)=>{
   res.json({ok:true,synced:ok,failed:fail,total:rows.length});
 }));
 
-router.get('/summary', asyncHandler(async (_req,res)=>{
+router.get('/summary', asyncHandler(async (req,res)=>{
+  if(!guard(req,res,['SUPER_ADMIN','BILLING_OPERATOR'])) return;
   const r=await pool.query(`SELECT COUNT(*)::int as total, COUNT(*) FILTER (WHERE status='AVAILABLE')::int as available, COUNT(*) FILTER (WHERE status='SOLD')::int as sold,
     COUNT(*) FILTER (WHERE status='ACTIVE')::int as active, COUNT(*) FILTER (WHERE status='USED')::int as used, COUNT(*) FILTER (WHERE status='EXPIRED')::int as expired,
     COALESCE(SUM(price) FILTER (WHERE status IN ('SOLD','ACTIVE','USED')),0)::numeric(14,2) as revenue FROM hotspot_vouchers`);
   res.json({ok:true,data:r.rows[0]});
 }));
 
-router.get('/reconciliation', asyncHandler(async (_req,res)=>{
+router.get('/reconciliation', asyncHandler(async (req,res)=>{
+  if(!guard(req,res,['SUPER_ADMIN','BILLING_OPERATOR'])) return;
   const [sum, byBatch, finance] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int total, COALESCE(SUM(price) FILTER (WHERE status IN ('SOLD','ACTIVE','USED')),0)::numeric(14,2) sold_value FROM hotspot_vouchers`),
     pool.query(`SELECT batch_no, COUNT(*)::int count, COALESCE(SUM(price) FILTER (WHERE status IN ('SOLD','ACTIVE','USED')),0)::numeric(14,2) sold_value FROM hotspot_vouchers GROUP BY batch_no ORDER BY MIN(created_at) DESC LIMIT 50`),

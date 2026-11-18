@@ -748,6 +748,25 @@ test.describe('CRM access control', () => {
   });
 });
 
+test.describe('remaining modules access control', () => {
+  test('resellers cannot read inventory, global reports or hotspot reconciliation', async ({ request }) => {
+    const token = await loginToken(request, reseller);
+    const headers = { Authorization: `Bearer ${token}` };
+    for (const path of [
+      '/api/inventory/warehouses', '/api/inventory/items', '/api/inventory/serials',
+      '/api/reports/overview', '/api/reports/profit-loss', '/api/reports/payroll',
+      '/api/hotspot/summary', '/api/hotspot/reconciliation',
+    ]) {
+      expect(await (await request.get(path, { headers })).status(), `${path} should be denied`).toBe(403);
+    }
+    const adminToken = await loginToken(request, admin);
+    const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+    for (const path of ['/api/inventory/warehouses', '/api/reports/overview', '/api/hotspot/summary']) {
+      expect((await request.get(path, { headers: adminHeaders })).ok()).toBeTruthy();
+    }
+  });
+});
+
 test.describe('portal auth security', () => {
   test('subscriber portal login is rate-limited and tokens are role-separated', async ({ request }) => {
     // Unknown identifiers cannot be brute-forced: the 5th failure locks briefly.
