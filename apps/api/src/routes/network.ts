@@ -4,6 +4,7 @@ import { asyncHandler, sanitizeRouter, sanitizeRouters, networkGuard, hasNetwork
 import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret } from '../integrations/mikrotik';
 import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas } from '../integrations/radius';
 import { autoLinkOnusBulk } from '../integrations/onu-autolink';
+import { hashPassword } from '../utils/password';
 
 const router: Router = Router();
 router.use(networkGuard);
@@ -341,11 +342,12 @@ router.post('/routers/:id/mikrotik/import', asyncHandler(async (req, res) => {
           const ins = await pool.query(`INSERT INTO subscribers(
               client_code, full_name, subscriber_type, connection_type, username, password, phone, email, nid_number,
               package_name, bandwidth_mbps, monthly_bill, status, address, ip_address, mac_address,
-              provisioning_mode, router_id
-            ) VALUES($1,$2,'HOME','PPPOE',$3,$4,NULL,NULL,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id, username, client_code`,
+              provisioning_mode, router_id, portal_password
+            ) VALUES($1,$2,'HOME','PPPOE',$3,$4,NULL,NULL,NULL,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id, username, client_code`,
             [clientCode, uname, uname, it.password || null, pkg?.name || it.profile || null, pkg?.download_mbps || null, Number(pkg?.price || 0), status,
              it.comment || `Imported from MikroTik ${row.name}`, it.remote_address || null, it.caller_id || null,
-             provisionRouterMode === 'RADIUS' ? 'RADIUS' : 'ROUTER', provisionRouterMode === 'RADIUS' ? null : row.id]);
+             provisionRouterMode === 'RADIUS' ? 'RADIUS' : 'ROUTER', provisionRouterMode === 'RADIUS' ? null : row.id,
+             it.password ? await hashPassword(String(it.password)) : null]);
           summary.imported++;
         } catch (e: any) { summary.failed++; summary.errors.push({ name: it.name, error: e.message }); }
       }
@@ -367,11 +369,12 @@ router.post('/routers/:id/mikrotik/import', asyncHandler(async (req, res) => {
           await pool.query(`INSERT INTO subscribers(
               client_code, full_name, subscriber_type, connection_type, username, password, phone, email, nid_number,
               package_name, bandwidth_mbps, monthly_bill, status, address, mac_address,
-              provisioning_mode, router_id
-            ) VALUES($1,$2,'HOTSPOT','HOTSPOT',$3,$4,NULL,NULL,NULL,$5,NULL,0,$6,$7,$8,$9,$10)`,
+              provisioning_mode, router_id, portal_password
+            ) VALUES($1,$2,'HOTSPOT','HOTSPOT',$3,$4,NULL,NULL,NULL,$5,NULL,0,$6,$7,$8,$9,$10,$11)`,
             [clientCode, uname, uname, it.password || null, it.profile || null, status,
              it.comment || `Imported Hotspot user from MikroTik ${row.name}`, it.mac_address || null,
-             provisionRouterMode === 'RADIUS' ? 'RADIUS' : 'ROUTER', provisionRouterMode === 'RADIUS' ? null : row.id]);
+             provisionRouterMode === 'RADIUS' ? 'RADIUS' : 'ROUTER', provisionRouterMode === 'RADIUS' ? null : row.id,
+             it.password ? await hashPassword(String(it.password)) : null]);
           summary.imported++;
         } catch (e: any) { summary.failed++; summary.errors.push({ name: it.name, error: e.message }); }
       }

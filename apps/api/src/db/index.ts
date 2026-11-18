@@ -1611,6 +1611,13 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_wallet_topup_reseller ON wallet_topup_requests(reseller_id, created_at DESC);
   `).catch(e => console.error('[DB] SRZone parity schema error', e.message));
 
+  // Portal credential is separate from the cleartext PPPoE/RADIUS secret.
+  // Backfill legacy bcrypt values (which were never valid NAS passwords) and
+  // clear them from the provisioning field.
+  await pool.query('ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS portal_password TEXT').catch(() => {});
+  await pool.query("UPDATE subscribers SET portal_password=password WHERE portal_password IS NULL AND password ~ '^\\$2[aby]\\$'").catch(() => {});
+  await pool.query("UPDATE subscribers SET password=NULL WHERE password ~ '^\\$2[aby]\\$'").catch(() => {});
+
   // Stable client-code sequence (UUID primary keys have no serial sequence).
   // Seed it from the highest numeric suffix already present so new codes never collide.
   await pool.query('CREATE SEQUENCE IF NOT EXISTS subscriber_client_code_seq').catch(() => {});

@@ -34,6 +34,7 @@ const EXTRA_SUBSCRIBER_TEXT = [
 const EXTRA_SUBSCRIBER_BOOL = ['static_ip', 'mac_lock', 'multi_session', 'bill_cycle_enabled', 'parental_control_enabled'];
 const EXTRA_SUBSCRIBER_OTHER = ['old_expiry_date', 'excess_amount'];
 const EXTRA_SUBSCRIBER_FIELDS = [...EXTRA_SUBSCRIBER_TEXT, ...EXTRA_SUBSCRIBER_BOOL, ...EXTRA_SUBSCRIBER_OTHER];
+const EXTRA_FIELD_COUNT = EXTRA_SUBSCRIBER_FIELDS.length;
 
 const uploadDir = path.resolve(__dirname, '../../../uploads/kyc');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -234,16 +235,18 @@ async function buildPayload(b: any, cur: any) {
     }
   }
 
-  // Password handling: hash on create/change, keep existing hash if blank
+  // Password handling: `password` is the cleartext PPPoE/RADIUS secret used for
+  // provisioning; `portal_password` is the bcrypt hash for customer-portal login.
   const rawPassword = has(b, 'password') ? nullableStr(b.password) : null;
   if (rawPassword !== null && rawPassword !== '') {
-    // New password provided - hash it
-    p.password = await hashPassword(rawPassword);
-  } else if (cur?.password) {
-    // No new password - keep existing hash
-    p.password = cur.password;
+    p.password = rawPassword;
+    p.portal_password = await hashPassword(rawPassword);
+  } else if (cur?.password || cur?.portal_password) {
+    p.password = cur.password ?? null;
+    p.portal_password = cur.portal_password ?? null;
   } else {
     p.password = null;
+    p.portal_password = null;
   }
 
   p.phone = nullableStr(get('phone'));
@@ -533,14 +536,15 @@ router.post('/', asyncHandler(async (req, res) => {
       district, thana, upazila, post_office, village, area_name, ward_no, road_no, house_no, notes,
       billing_cycle_day, expiry_date, due_date, next_bill_date, auto_suspend_enabled, auto_pay_enabled,
       provisioning_mode, router_id, reseller_id, price_override, custom_package_note, extended_expiry, branch_name,
-      ${EXTRA_SUBSCRIBER_FIELDS.join(', ')}
+      ${EXTRA_SUBSCRIBER_FIELDS.join(', ')}, portal_password
     ) VALUES (
       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
       CASE WHEN $18::float IS NOT NULL AND $19::float IS NOT NULL THEN ST_SetSRID(ST_MakePoint($19,$18),4326)::geography ELSE NULL END,
       $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,
       $33,$34,$35,$36,$37,$38,
       $39,$40,$41,$42,$43,$44,$45,
-      ${EXTRA_SUBSCRIBER_FIELDS.map((_, i) => `$${46 + i}`).join(',')}
+      ${EXTRA_SUBSCRIBER_FIELDS.map((_, i) => `$${46 + i}`).join(',')},
+      $${46 + EXTRA_FIELD_COUNT}
     ) RETURNING *`;
   const values = [
     clientCode, p.full_name, p.subscriber_type, p.connection_type, p.username, p.password, p.phone, p.email, p.nid_number,
@@ -550,6 +554,7 @@ router.post('/', asyncHandler(async (req, res) => {
     p.billing_cycle_day, p.expiry_date, p.due_date, p.next_bill_date, p.auto_suspend_enabled, p.auto_pay_enabled,
     p.provisioning_mode, p.router_id, p.reseller_id, p.price_override, p.custom_package_note, p.extended_expiry, p.branch_name,
     ...EXTRA_SUBSCRIBER_FIELDS.map((key) => p[key] ?? null),
+    p.portal_password ?? null,
   ];
 
   let created: any = null;
@@ -622,6 +627,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
       provisioning_mode=$38, router_id=$39, reseller_id=$40,
       price_override=$41, custom_package_note=$42, extended_expiry=$43, branch_name=$44,
       ${EXTRA_SUBSCRIBER_FIELDS.map((key, i) => `${key}=$${46 + i}`).join(',\n      ')},
+      portal_password=$${46 + EXTRA_FIELD_COUNT},
       updated_at=now()
     WHERE id=$45 RETURNING *`;
   const updated = (await pool.query(updateSql, [
@@ -634,6 +640,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
     p.price_override, p.custom_package_note, p.extended_expiry, p.branch_name,
     req.params.id,
     ...EXTRA_SUBSCRIBER_FIELDS.map((key) => p[key] ?? null),
+    p.portal_password ?? null,
   ])).rows[0];
 
   // Clean up stale network artifacts when the username or router binding changes.
@@ -1145,9 +1152,10 @@ router.post('/import/execute', importUpload.single('file'), asyncHandler(async (
       else if (provMode === 'ROUTER') { if (!p.router_id) throw new ValidationError('router_id required for ROUTER mode'); }
       p.provisioning_mode = provMode;
 
-      // Hash password
+      // Cleartext NAS secret + separate bcrypt hash for portal login.
       const rawPass = nullableStr(row.password || row['Password']);
-      p.password = rawPass ? await hashPassword(rawPass) : null;
+      p.password = rawPass;
+      p.portal_password = rawPass ? await hashPassword(rawPass) : null;
 
       // Client code
       let clientCode = nullableStr(row.client_code || row['Client Code']);
@@ -1163,13 +1171,13 @@ router.post('/import/execute', importUpload.single('file'), asyncHandler(async (
           latitude, longitude, location, ip_address, mac_address, installation_date,
           district, thana, upazila, post_office, village, area_name, ward_no, road_no, house_no, notes,
           billing_cycle_day, expiry_date, due_date, next_bill_date, auto_suspend_enabled, auto_pay_enabled,
-          provisioning_mode, router_id, reseller_id
+          provisioning_mode, router_id, reseller_id, portal_password
         ) VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
           CASE WHEN $18::float IS NOT NULL AND $19::float IS NOT NULL THEN ST_SetSRID(ST_MakePoint($19,$18),4326)::geography ELSE NULL END,
           $20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,
           $33,$34,$35,$36,$37,$38,
-          $39,$40,$41
+          $39,$40,$41,$42
         ) RETURNING *`;
       const values = [
         clientCode, p.full_name, p.subscriber_type, p.connection_type, p.username, p.password, p.phone, p.email, p.nid_number,
@@ -1178,6 +1186,7 @@ router.post('/import/execute', importUpload.single('file'), asyncHandler(async (
         p.district, p.thana, p.upazila, p.post_office, p.village, p.area_name, p.ward_no, p.road_no, p.house_no, p.notes,
         p.billing_cycle_day, p.expiry_date, p.due_date, p.next_bill_date, p.auto_suspend_enabled, p.auto_pay_enabled,
         p.provisioning_mode, p.router_id, p.reseller_id,
+        p.portal_password ?? null,
       ];
       const createdRow = (await pool.query(insertSql, values)).rows[0];
 

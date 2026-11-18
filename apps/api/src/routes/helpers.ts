@@ -40,7 +40,7 @@ export function hasGisWrite(req: any): boolean {
 /** Remove sensitive/internal fields before returning a subscriber to clients. */
 export function sanitizeSubscriber<T = any>(row: T): T {
   if (!row || typeof row !== 'object') return row;
-  const { password, ...safe } = row as any;
+  const { password, portal_password, ...safe } = row as any;
   return safe;
 }
 

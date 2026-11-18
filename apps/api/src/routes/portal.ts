@@ -47,8 +47,17 @@ const upload = multer({
 function tokenVersion(password: any) {
   return crypto.createHash('sha256').update(String(password || '')).digest('hex').slice(0, 16);
 }
+/** Check a portal password against the dedicated bcrypt hash, with fallbacks
+ *  for legacy rows that still rely on the cleartext NAS password field. */
+async function verifyPortalPassword(pass: string, row: any): Promise<boolean> {
+  const portalHash = row.portal_password ? String(row.portal_password) : '';
+  if (portalHash) return isHashed(portalHash) ? verifyPassword(pass, portalHash) : portalHash === pass;
+  const legacy = row.password ? String(row.password) : '';
+  if (legacy) return isHashed(legacy) ? verifyPassword(pass, legacy) : legacy === pass;
+  return pass === String(row.client_code || '') || pass === String(row.username || '') || pass === String(row.phone || '');
+}
 function issuePortalToken(sub: any) {
-  return jwt.sign({ type: 'PORTAL_SUBSCRIBER', sub: sub.id, client_code: sub.client_code, ver: tokenVersion(sub.password) }, JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign({ type: 'PORTAL_SUBSCRIBER', sub: sub.id, client_code: sub.client_code, ver: tokenVersion(sub.portal_password || sub.password) }, JWT_SECRET, { expiresIn: '7d' });
 }
 async function portalAuth(req: any, res: any, next: any) {
   const h = req.headers.authorization;
@@ -56,8 +65,8 @@ async function portalAuth(req: any, res: any, next: any) {
   try {
     const p: any = jwt.verify(h.slice(7), JWT_SECRET);
     if (p?.type !== 'PORTAL_SUBSCRIBER' || !p?.sub || !p?.ver) throw new Error('bad');
-    const row = (await pool.query('SELECT password FROM subscribers WHERE id=$1', [p.sub])).rows[0];
-    if (!row || tokenVersion(row.password) !== p.ver) throw new Error('stale');
+    const row = (await pool.query('SELECT password, portal_password FROM subscribers WHERE id=$1', [p.sub])).rows[0];
+    if (!row || tokenVersion(row.portal_password || row.password) !== p.ver) throw new Error('stale');
     req.portal = p; next();
   } catch { return res.status(401).json({ message: 'Invalid or expired portal session' }); }
 }
@@ -86,16 +95,10 @@ router.post('/login', asyncHandler(async (req, res) => {
   if (att && att.lockedUntil > now) {
     return res.status(429).json({ message: `Too many failed attempts. Try again in ${Math.ceil((att.lockedUntil - now) / 60000)} min.` });
   }
-  const r = await pool.query(`SELECT s.id, s.client_code, s.full_name, s.username, s.phone, s.email, s.status, s.package_name, s.bandwidth_mbps, s.monthly_bill, s.current_due, s.expiry_date, s.address, s.connection_type, s.password
+  const r = await pool.query(`SELECT s.id, s.client_code, s.full_name, s.username, s.phone, s.email, s.status, s.package_name, s.bandwidth_mbps, s.monthly_bill, s.current_due, s.expiry_date, s.address, s.connection_type, s.password, s.portal_password
     FROM subscribers s WHERE (lower(s.client_code)=lower($1) OR lower(s.username)=lower($1) OR s.phone=$1) LIMIT 1`, [id]);
   const s = r.rows[0];
-  const stored = s?.password ? String(s.password) : '';
-  let ok = false;
-  if (s) {
-    if (stored && isHashed(stored)) ok = await verifyPassword(pass, stored);
-    else if (stored) ok = stored === pass;
-    else ok = (pass === String(s.client_code || '') || pass === String(s.username || '') || pass === String(s.phone || ''));
-  }
+  const ok = s ? await verifyPortalPassword(pass, s) : false;
   if (!ok) {
     const a = portalLoginAttempts.get(key) || { fails: 0, lockedUntil: 0 };
     a.fails += 1;
@@ -180,15 +183,12 @@ router.post('/change-password', portalAuth, asyncHandler(async (req, res) => {
   const cur = String(b.current_password || '');
   const pwErr = await validatePasswordPolicy(newPass);
   if (pwErr) return res.status(400).json({ message: pwErr });
-  const row = (await pool.query('SELECT password, client_code, username, phone FROM subscribers WHERE id=$1', [id])).rows[0];
+  const row = (await pool.query('SELECT password, portal_password, client_code, username, phone FROM subscribers WHERE id=$1', [id])).rows[0];
   if (!row) return res.status(404).json({ message: 'Subscriber not found' });
-  const stored = row.password ? String(row.password) : '';
-  let okCurrent = false;
-  if (stored && isHashed(stored)) okCurrent = await verifyPassword(cur, stored);
-  else if (stored) okCurrent = stored === cur;
-  else okCurrent = (cur === String(row.client_code||'') || cur === String(row.username||'') || cur === String(row.phone||''));
-  if (!okCurrent) return res.status(401).json({ message: 'Current password is incorrect' });
-  await pool.query('UPDATE subscribers SET password=$1, updated_at=now() WHERE id=$2', [await hashPassword(newPass), id]);
+  if (!(await verifyPortalPassword(cur, row))) return res.status(401).json({ message: 'Current password is incorrect' });
+  // Only the portal credential changes. The PPPoE/RADIUS secret in `password`
+  // must stay intact or the subscriber's broadband session would break.
+  await pool.query('UPDATE subscribers SET portal_password=$1, updated_at=now() WHERE id=$2', [await hashPassword(newPass), id]);
   res.json({ ok: true, message: 'Password updated' });
 }));
 

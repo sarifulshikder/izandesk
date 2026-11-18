@@ -818,8 +818,19 @@ test.describe('portal mutating flows (opt-in)', () => {
       const headers = { Authorization: `Bearer ${portalToken}` };
       expect((await request.get('/api/portal/me', { headers })).ok()).toBeTruthy();
 
+      // An admin password change must also update the portal credential.
+      const adminEdit = await request.put(`/api/subscribers/${subId}`, {
+        headers: adminHeaders, data: { full_name: 'Portal Auth Test', password: 'PortalEdited@123' },
+      });
+      expect(adminEdit.ok()).toBeTruthy();
+      expect((await request.post('/api/portal/login', { data: { client_code: code, password: 'PortalTest@123' } })).status()).toBe(401);
+      const editedLogin = await request.post('/api/portal/login', { data: { client_code: code, password: 'PortalEdited@123' } });
+      expect(editedLogin.ok()).toBeTruthy();
+      portalToken = (await editedLogin.json()).token;
+
       const change = await request.post('/api/portal/change-password', {
-        headers, data: { current_password: 'PortalTest@123', new_password: 'PortalTest@456' },
+        headers: { Authorization: `Bearer ${portalToken}` },
+        data: { current_password: 'PortalEdited@123', new_password: 'PortalTest@456' },
       });
       expect(change.ok()).toBeTruthy();
       // The previously issued token is now stale.
