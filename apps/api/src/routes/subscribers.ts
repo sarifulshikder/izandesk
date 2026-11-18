@@ -913,6 +913,130 @@ const IMPORT_FIELDS = [
   'provisioning_mode', 'router_id', 'reseller_id',
 ];
 
+type ImportRefs = {
+  areaMap: Map<string, string>; zoneMap: Map<string, string>; boxMap: Map<string, string>;
+  routerMap: Map<string, string>; resellerMap: Map<string, string>; packageSet: Set<string>;
+};
+
+async function loadImportRefs(): Promise<ImportRefs> {
+  const [areas, zones, boxes, routers, resellers, packages] = await Promise.all([
+    pool.query('SELECT id, name FROM areas'),
+    pool.query('SELECT id, name, area_id FROM zones'),
+    pool.query('SELECT id, name, zone_id FROM distribution_boxes'),
+    pool.query("SELECT id, name, integration_mode FROM network_routers WHERE is_enabled=true"),
+    pool.query("SELECT id, name FROM resellers WHERE status='ACTIVE'"),
+    pool.query('SELECT name FROM bandwidth_packages WHERE is_active=true'),
+  ]);
+  return {
+    areaMap: new Map(areas.rows.map((a: any) => [a.name.toLowerCase(), a.id])),
+    zoneMap: new Map(zones.rows.map((z: any) => [z.name.toLowerCase(), z.id])),
+    boxMap: new Map(boxes.rows.map((b: any) => [b.name.toLowerCase(), b.id])),
+    routerMap: new Map(routers.rows.map((r: any) => [r.name.toLowerCase(), r.id])),
+    resellerMap: new Map(resellers.rows.map((r: any) => [r.name.toLowerCase(), r.id])),
+    packageSet: new Set(packages.rows.map((p: any) => p.name.toLowerCase())),
+  };
+}
+
+/** Single source of truth for import row validation and normalization, used by
+ *  both /import/preview and /import/execute so the two can never diverge. */
+function buildImportRow(row: any, rowNum: number, refs: ImportRefs, scope: { restricted: boolean; uuid: string | null }) {
+  const errors: string[] = [];
+  const err = (msg: string) => errors.push(`Row ${rowNum}: ${msg}`);
+  const pick = (...keys: string[]) => {
+    for (const k of keys) { const v = row?.[k]; if (v !== undefined && v !== null && String(v).trim() !== '') return v; }
+    return '';
+  };
+  const checked = <T>(fn: () => T, fallback: T): T => { try { return fn(); } catch (e: any) { err(e.message); return fallback; } };
+
+  const fullName = str(pick('full_name', 'Full Name'));
+  if (!fullName) err('full_name is required');
+  const subType = enumValSafe(pick('subscriber_type', 'Subscriber Type'), SUBSCRIBER_TYPES, 'HOME');
+  const connType = enumValSafe(pick('connection_type', 'Connection Type'), CONNECTION_TYPES, 'PPPOE');
+  const status = enumValSafe(pick('status', 'Status'), STATUSES, 'PENDING');
+  const provMode = enumValSafe(pick('provisioning_mode', 'Provisioning Mode'), ['ROUTER', 'RADIUS'], 'RADIUS');
+
+  const username = nullableStr(pick('username', 'Username'));
+  if (username && !/^[A-Za-z0-9._@:-]{3,64}$/.test(username)) err('invalid username format');
+  const phone = nullableStr(pick('phone', 'Phone'));
+  if (phone && !/^\+?[0-9\s\-()]{7,20}$/.test(phone)) err('invalid phone');
+  const email = nullableStr(pick('email', 'Email'));
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) err('invalid email');
+
+  const resolveRef = (value: string, map: Map<string, string>, label: string): string | null => {
+    if (!value) return null;
+    const id = map.get(value.toLowerCase()) || null;
+    if (!id) err(`${label} "${value}" not found`);
+    return id;
+  };
+  const areaName = str(pick('area_id', 'Area', 'Area Name'));
+  const areaId = resolveRef(areaName, refs.areaMap, 'area');
+  const zoneName = str(pick('zone_id', 'Zone'));
+  const zoneId = resolveRef(zoneName, refs.zoneMap, 'zone');
+  const boxName = str(pick('distribution_box_id', 'Distribution Box'));
+  const boxId = resolveRef(boxName, refs.boxMap, 'distribution box');
+  const routerName = str(pick('router_id', 'Router'));
+  let routerId = resolveRef(routerName, refs.routerMap, 'router');
+  const resellerName = str(pick('reseller_id', 'Reseller'));
+  let resellerId = scope.restricted ? scope.uuid : resolveRef(resellerName, refs.resellerMap, 'reseller');
+  if (provMode === 'RADIUS') routerId = null;
+  else if (provMode === 'ROUTER' && !routerId) err('router_id required for ROUTER mode');
+
+  const pkgName = str(pick('package_name', 'Package'));
+  if (pkgName && !refs.packageSet.has(pkgName.toLowerCase())) err(`package "${pkgName}" not found in catalog`);
+
+  const latRaw = pick('latitude', 'Latitude'), lngRaw = pick('longitude', 'Longitude');
+  const latitude = latRaw === '' ? null : checked(() => Number(latRaw), NaN);
+  const longitude = lngRaw === '' ? null : checked(() => Number(lngRaw), NaN);
+  if ((latitude !== null && !Number.isFinite(latitude)) || (longitude !== null && !Number.isFinite(longitude))) {
+    err('invalid latitude/longitude');
+  }
+
+  const bwRaw = pick('bandwidth_mbps', 'Bandwidth');
+  const billRaw = pick('monthly_bill', 'Monthly Bill');
+  const cycleRaw = pick('billing_cycle_day', 'Billing Cycle Day');
+  const data = {
+    client_code: nullableStr(pick('client_code', 'Client Code')),
+    full_name: fullName,
+    subscriber_type: subType,
+    connection_type: connType,
+    status,
+    username,
+    password: nullableStr(pick('password', 'Password')),
+    phone, email,
+    nid_number: nullableStr(pick('nid_number', 'NID')),
+    package_name: pkgName || null,
+    bandwidth_mbps: bwRaw === '' ? null : checked(() => intVal(bwRaw, 'bandwidth_mbps', { min: 0, max: 100000 }), null),
+    monthly_bill: billRaw === '' ? 0 : checked(() => moneyVal(billRaw, 'monthly_bill'), 0),
+    area_id: areaId, zone_id: zoneId, distribution_box_id: boxId,
+    address: nullableStr(pick('address', 'Address')),
+    latitude: Number.isFinite(latitude as any) ? Number(latitude) : null,
+    longitude: Number.isFinite(longitude as any) ? Number(longitude) : null,
+    ip_address: nullableStr(pick('ip_address', 'IP')),
+    mac_address: nullableStr(pick('mac_address', 'MAC')),
+    installation_date: checked(() => dateVal(pick('installation_date', 'Installation Date'), 'installation_date'), null),
+    district: nullableStr(pick('district', 'District')),
+    thana: nullableStr(pick('thana', 'Thana')),
+    upazila: nullableStr(pick('upazila', 'Upazila')),
+    post_office: nullableStr(pick('post_office', 'Post Office')),
+    village: nullableStr(pick('village', 'Village')),
+    area_name: nullableStr(pick('area_name', 'Area Name')),
+    ward_no: nullableStr(pick('ward_no', 'Ward')),
+    road_no: nullableStr(pick('road_no', 'Road')),
+    house_no: nullableStr(pick('house_no', 'House')),
+    notes: nullableStr(pick('notes', 'Notes')),
+    billing_cycle_day: cycleRaw === '' ? 1 : (checked(() => intVal(cycleRaw, 'billing_cycle_day', { min: 1, max: 31 }), null) ?? 1),
+    expiry_date: checked(() => dateVal(pick('expiry_date', 'Expiry Date'), 'expiry_date'), null),
+    due_date: checked(() => dateVal(pick('due_date', 'Due Date'), 'due_date'), null),
+    next_bill_date: checked(() => dateVal(pick('next_bill_date', 'Next Bill Date'), 'next_bill_date'), null),
+    auto_suspend_enabled: boolVal(pick('auto_suspend_enabled', 'Auto Suspend'), true),
+    auto_pay_enabled: boolVal(pick('auto_pay_enabled', 'Auto Pay'), false),
+    provisioning_mode: provMode, router_id: routerId, reseller_id: resellerId,
+  };
+
+  const display = { full_name: fullName, username, package_name: data.package_name, area_id: areaName, provisioning_mode: provMode };
+  return { row: rowNum, valid: errors.length === 0, errors, data: errors.length === 0 ? data : { ...row, ...display } };
+}
+
 router.post('/import/preview', importUpload.single('file'), asyncHandler(async (req, res) => {
   const importScope = await resellerScope(req);
   if (importScope.restricted && !importScope.uuid) return res.status(403).json({ message: 'No reseller account linked to this login' });
@@ -931,121 +1055,12 @@ router.post('/import/preview', importUpload.single('file'), asyncHandler(async (
 
   if (rows.length === 0) return res.json({ ok: true, preview: [], errors: ['No data rows found'], valid: 0, invalid: 0 });
 
-  const errors: string[] = [];
-  const preview: any[] = [];
-  let valid = 0, invalid = 0;
+  const refs = await loadImportRefs();
+  const preview = rows.map((row, i) => buildImportRow(row, i + 2, refs, importScope));
+  const errors = preview.flatMap((p: any) => p.errors);
+  const valid = preview.filter((p: any) => p.valid).length;
 
-  // Pre-fetch reference data for validation
-  const [areas, zones, boxes, routers, resellers, packages] = await Promise.all([
-    pool.query('SELECT id, name FROM areas'),
-    pool.query('SELECT id, name, area_id FROM zones'),
-    pool.query('SELECT id, name, zone_id FROM distribution_boxes'),
-    pool.query("SELECT id, name, integration_mode FROM network_routers WHERE is_enabled=true"),
-    pool.query('SELECT id, name FROM resellers WHERE status=\'ACTIVE\''),
-    pool.query('SELECT name FROM bandwidth_packages WHERE is_active=true'),
-  ]);
-  const areaMap = new Map(areas.rows.map(a => [a.name.toLowerCase(), a.id]));
-  const zoneMap = new Map(zones.rows.map(z => [z.name.toLowerCase(), z.id]));
-  const boxMap = new Map(boxes.rows.map(b => [b.name.toLowerCase(), b.id]));
-  const routerMap = new Map(routers.rows.map(r => [r.name.toLowerCase(), r.id]));
-  const resellerMap = new Map(resellers.rows.map(r => [r.name.toLowerCase(), r.id]));
-  const packageSet = new Set(packages.rows.map(p => p.name.toLowerCase()));
-
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const rowErrors: string[] = [];
-    const rowNum = i + 2; // 1-indexed + header
-
-    // Required fields
-    const fullName = str(row.full_name || row['Full Name'] || '');
-    if (!fullName) rowErrors.push(`Row ${rowNum}: full_name is required`);
-
-    // Validate enum fields
-    const subType = enumValSafe(row.subscriber_type || row['Subscriber Type'], SUBSCRIBER_TYPES, 'HOME');
-    const connType = enumValSafe(row.connection_type || row['Connection Type'], CONNECTION_TYPES, 'PPPOE');
-    const status = enumValSafe(row.status || row['Status'], STATUSES, 'PENDING');
-    const provMode = enumValSafe(row.provisioning_mode || row['Provisioning Mode'], ['ROUTER', 'RADIUS'], 'RADIUS');
-
-    // Username validation
-    const username = nullableStr(row.username || row['Username']);
-    if (username && !/^[A-Za-z0-9._@:-]{3,64}$/.test(username)) {
-      rowErrors.push(`Row ${rowNum}: invalid username format`);
-    }
-
-    // Phone/Email validation
-    const phone = nullableStr(row.phone || row['Phone']);
-    if (phone && !/^\+?[0-9\s\-()]{7,20}$/.test(phone)) rowErrors.push(`Row ${rowNum}: invalid phone`);
-    const email = nullableStr(row.email || row['Email']);
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) rowErrors.push(`Row ${rowNum}: invalid email`);
-
-    // References
-    const areaName = str(row.area_id || row['Area'] || row['Area Name'] || '');
-    const areaId = areaName ? areaMap.get(areaName.toLowerCase()) : null;
-    if (areaName && !areaId) rowErrors.push(`Row ${rowNum}: area "${areaName}" not found`);
-
-    const zoneName = str(row.zone_id || row['Zone'] || '');
-    const zoneId = zoneName ? zoneMap.get(zoneName.toLowerCase()) : null;
-    if (zoneName && !zoneId) rowErrors.push(`Row ${rowNum}: zone "${zoneName}" not found`);
-
-    const boxName = str(row.distribution_box_id || row['Distribution Box'] || '');
-    const boxId = boxName ? boxMap.get(boxName.toLowerCase()) : null;
-    if (boxName && !boxId) rowErrors.push(`Row ${rowNum}: distribution box "${boxName}" not found`);
-
-    const routerName = str(row.router_id || row['Router'] || '');
-    const routerId = routerName ? routerMap.get(routerName.toLowerCase()) : null;
-    if (provMode === 'ROUTER' && !routerId && routerName) rowErrors.push(`Row ${rowNum}: router "${routerName}" not found or not API/REST`);
-
-    const resellerName = str(row.reseller_id || row['Reseller'] || '');
-    const resellerId = importScope.restricted ? importScope.uuid : (resellerName ? resellerMap.get(resellerName.toLowerCase()) : null);
-    if (resellerName && !resellerId) rowErrors.push(`Row ${rowNum}: reseller "${resellerName}" not found`);
-
-    const pkgName = str(row.package_name || row['Package'] || '');
-    if (pkgName && !packageSet.has(pkgName.toLowerCase())) rowErrors.push(`Row ${rowNum}: package "${pkgName}" not found in catalog`);
-
-    // Coordinates
-    const lat = row.latitude || row['Latitude'];
-    const lng = row.longitude || row['Longitude'];
-    if ((lat !== '' && lat !== null && lat !== undefined) || (lng !== '' && lng !== null && lng !== undefined)) {
-      const laN = Number(lat);
-      const loN = Number(lng);
-      if (!Number.isFinite(laN) || !Number.isFinite(loN)) rowErrors.push(`Row ${rowNum}: invalid latitude/longitude`);
-    }
-
-    if (rowErrors.length > 0) {
-      invalid++;
-      errors.push(...rowErrors);
-      preview.push({ row: rowNum, valid: false, errors: rowErrors, data: row });
-    } else {
-      valid++;
-      preview.push({
-        row: rowNum, valid: true,
-        data: {
-          full_name: fullName, subscriber_type: subType, connection_type: connType, username,
-          password: nullableStr(row.password || row['Password']), phone, email,
-          nid_number: nullableStr(row.nid_number || row['NID']), package_name: pkgName || null,
-          bandwidth_mbps: row.bandwidth_mbps || row['Bandwidth'] ? Number(row.bandwidth_mbps || row['Bandwidth']) : null,
-          monthly_bill: row.monthly_bill || row['Monthly Bill'] ? Number(row.monthly_bill || row['Monthly Bill']) : 0,
-          status, area_id: areaId, zone_id: zoneId, distribution_box_id: boxId,
-          address: nullableStr(row.address || row['Address']), latitude: lat ? Number(lat) : null,
-          longitude: lng ? Number(lng) : null, ip_address: nullableStr(row.ip_address || row['IP']),
-          mac_address: nullableStr(row.mac_address || row['MAC']), installation_date: nullableStr(row.installation_date || row['Installation Date']),
-          district: nullableStr(row.district || row['District']), thana: nullableStr(row.thana || row['Thana']),
-          upazila: nullableStr(row.upazila || row['Upazila']), post_office: nullableStr(row.post_office || row['Post Office']),
-          village: nullableStr(row.village || row['Village']), area_name: nullableStr(row.area_name || row['Area Name']),
-          ward_no: nullableStr(row.ward_no || row['Ward']), road_no: nullableStr(row.road_no || row['Road']),
-          house_no: nullableStr(row.house_no || row['House']), notes: nullableStr(row.notes || row['Notes']),
-          billing_cycle_day: row.billing_cycle_day || row['Billing Cycle Day'] ? Number(row.billing_cycle_day || row['Billing Cycle Day']) : 1,
-          expiry_date: nullableStr(row.expiry_date || row['Expiry Date']), due_date: nullableStr(row.due_date || row['Due Date']),
-          next_bill_date: nullableStr(row.next_bill_date || row['Next Bill Date']),
-          auto_suspend_enabled: boolVal(row.auto_suspend_enabled || row['Auto Suspend'], true),
-          auto_pay_enabled: boolVal(row.auto_pay_enabled || row['Auto Pay'], false),
-          provisioning_mode: provMode, router_id: routerId, reseller_id: resellerId,
-        }
-      });
-    }
-  }
-
-  res.json({ ok: true, total: rows.length, valid, invalid, errors: errors.slice(0, 50), preview: preview.slice(0, 100) });
+  res.json({ ok: true, total: rows.length, valid, invalid: rows.length - valid, errors: errors.slice(0, 50), preview: preview.slice(0, 100) });
 }));
 
 /* ------------------------------------------------------------------ */
@@ -1068,97 +1083,31 @@ router.post('/import/execute', importUpload.single('file'), asyncHandler(async (
   const sheet = workbook.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as any[];
 
-  // Reuse validation logic from preview
-  const [areas, zones, boxes, routers, resellers, packages] = await Promise.all([
-    pool.query('SELECT id, name FROM areas'),
-    pool.query('SELECT id, name, area_id FROM zones'),
-    pool.query('SELECT id, name, zone_id FROM distribution_boxes'),
-    pool.query("SELECT id, name, integration_mode FROM network_routers WHERE is_enabled=true"),
-    pool.query('SELECT id, name FROM resellers WHERE status=\'ACTIVE\''),
-    pool.query('SELECT name FROM bandwidth_packages WHERE is_active=true'),
-  ]);
-  const areaMap = new Map(areas.rows.map(a => [a.name.toLowerCase(), a.id]));
-  const zoneMap = new Map(zones.rows.map(z => [z.name.toLowerCase(), z.id]));
-  const boxMap = new Map(boxes.rows.map(b => [b.name.toLowerCase(), b.id]));
-  const routerMap = new Map(routers.rows.map(r => [r.name.toLowerCase(), r.id]));
-  const resellerMap = new Map(resellers.rows.map(r => [r.name.toLowerCase(), r.id]));
-  const packageSet = new Set(packages.rows.map(p => p.name.toLowerCase()));
+  // Same validator as the preview endpoint — the two can no longer diverge.
+  const refs = await loadImportRefs();
+  const prepared = rows.map((row, i) => buildImportRow(row, i + 2, refs, importScope));
 
   const results: any[] = [];
   let created = 0, failed = 0, skipped = 0;
 
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const rowNum = i + 2;
-
+  for (const item of prepared) {
+    const rowNum = item.row;
+    if (!item.valid) {
+      failed++;
+      results.push({ row: rowNum, ok: false, error: item.errors.join('; ') });
+      if (!force) break;
+      continue;
+    }
     try {
-      // Build payload (reuse buildPayload logic but inline for import)
-      const fullName = str(row.full_name || row['Full Name'] || '');
-      if (!fullName) throw new ValidationError(`Row ${rowNum}: full_name required`);
-
-      const p: any = {
-        full_name: fullName,
-        subscriber_type: enumValSafe(row.subscriber_type || row['Subscriber Type'], SUBSCRIBER_TYPES, 'HOME'),
-        connection_type: enumValSafe(row.connection_type || row['Connection Type'], CONNECTION_TYPES, 'PPPOE'),
-        status: enumValSafe(row.status || row['Status'], STATUSES, 'PENDING'),
-        username: nullableStr(row.username || row['Username']),
-        phone: nullableStr(row.phone || row['Phone']),
-        email: nullableStr(row.email || row['Email']),
-        nid_number: nullableStr(row.nid_number || row['NID']),
-        package_name: nullableStr(row.package_name || row['Package']),
-        bandwidth_mbps: row.bandwidth_mbps || row['Bandwidth'] ? intVal(row.bandwidth_mbps || row['Bandwidth'], 'bandwidth') : null,
-        monthly_bill: row.monthly_bill || row['Monthly Bill'] ? moneyVal(row.monthly_bill || row['Monthly Bill'], 'monthly_bill') : 0,
-        area_id: nullableStr(row.area_id || row['Area'] || row['Area Name']),
-        zone_id: nullableStr(row.zone_id || row['Zone']),
-        distribution_box_id: nullableStr(row.distribution_box_id || row['Distribution Box']),
-        address: nullableStr(row.address || row['Address']),
-        latitude: row.latitude || row['Latitude'] ? Number(row.latitude || row['Latitude']) : null,
-        longitude: row.longitude || row['Longitude'] ? Number(row.longitude || row['Longitude']) : null,
-        ip_address: nullableStr(row.ip_address || row['IP']),
-        mac_address: nullableStr(row.mac_address || row['MAC']),
-        installation_date: dateVal(row.installation_date || row['Installation Date'], 'installation_date'),
-        district: nullableStr(row.district || row['District']),
-        thana: nullableStr(row.thana || row['Thana']),
-        upazila: nullableStr(row.upazila || row['Upazila']),
-        post_office: nullableStr(row.post_office || row['Post Office']),
-        village: nullableStr(row.village || row['Village']),
-        area_name: nullableStr(row.area_name || row['Area Name']),
-        ward_no: nullableStr(row.ward_no || row['Ward']),
-        road_no: nullableStr(row.road_no || row['Road']),
-        house_no: nullableStr(row.house_no || row['House']),
-        notes: nullableStr(row.notes || row['Notes']),
-        billing_cycle_day: row.billing_cycle_day || row['Billing Cycle Day'] ? intVal(row.billing_cycle_day || row['Billing Cycle Day'], 'billing_cycle_day', {min:1,max:31}) ?? 1 : 1,
-        expiry_date: dateVal(row.expiry_date || row['Expiry Date'], 'expiry_date'),
-        due_date: dateVal(row.due_date || row['Due Date'], 'due_date'),
-        next_bill_date: dateVal(row.next_bill_date || row['Next Bill Date'], 'next_bill_date'),
-        auto_suspend_enabled: boolVal(row.auto_suspend_enabled || row['Auto Suspend'], true),
-        auto_pay_enabled: boolVal(row.auto_pay_enabled || row['Auto Pay'], false),
-        provisioning_mode: enumValSafe(row.provisioning_mode || row['Provisioning Mode'], ['ROUTER', 'RADIUS'], 'RADIUS'),
-        router_id: nullableStr(row.router_id || row['Router']),
-        reseller_id: importScope.restricted ? importScope.uuid : nullableStr(row.reseller_id || row['Reseller']),
-      };
-
-      // Validate references
-      if (p.area_id) { const a = areaMap.get(p.area_id.toLowerCase()); if (!a) throw new ValidationError(`Area not found: ${p.area_id}`); p.area_id = a; }
-      if (p.zone_id) { const z = zoneMap.get(p.zone_id.toLowerCase()); if (!z) throw new ValidationError(`Zone not found: ${p.zone_id}`); p.zone_id = z; }
-      if (p.distribution_box_id) { const b = boxMap.get(p.distribution_box_id.toLowerCase()); if (!b) throw new ValidationError(`Box not found: ${p.distribution_box_id}`); p.distribution_box_id = b; }
-      if (p.router_id) { const r = routerMap.get(p.router_id.toLowerCase()); if (!r) throw new ValidationError(`Router not found: ${p.router_id}`); p.router_id = r; }
-      if (p.reseller_id && !importScope.restricted) { const r = resellerMap.get(p.reseller_id.toLowerCase()); if (!r) throw new ValidationError(`Reseller not found: ${p.reseller_id}`); p.reseller_id = r; }
-      if (p.package_name && !packageSet.has(p.package_name.toLowerCase())) throw new ValidationError(`Package not found: ${p.package_name}`);
-
-      // Provisioning normalization
-      const provMode = String(p.provisioning_mode || 'RADIUS').toUpperCase();
-      if (provMode === 'RADIUS') p.router_id = null;
-      else if (provMode === 'ROUTER') { if (!p.router_id) throw new ValidationError('router_id required for ROUTER mode'); }
-      p.provisioning_mode = provMode;
+      const p: any = { ...item.data };
 
       // Cleartext NAS secret + separate bcrypt hash for portal login.
-      const rawPass = nullableStr(row.password || row['Password']);
+      const rawPass = p.password;
       p.password = rawPass;
       p.portal_password = rawPass ? await hashPassword(rawPass) : null;
 
       // Client code
-      let clientCode = nullableStr(row.client_code || row['Client Code']);
+      let clientCode = p.client_code;
       if (!clientCode) clientCode = await nextClientCode(p.area_id);
       const dup = await pool.query('SELECT id FROM subscribers WHERE client_code=$1', [clientCode]);
       if (dup.rows[0]) throw new ConflictError(`Client code exists: ${clientCode}`);

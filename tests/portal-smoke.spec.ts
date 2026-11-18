@@ -956,3 +956,33 @@ test.describe('CRM mutating flows (opt-in)', () => {
     }
   });
 });
+
+test.describe('import mutating flows (opt-in)', () => {
+  test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
+
+  test('preview and execute share the same row validation', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const username = `dedupe${Date.now().toString().slice(-7)}`;
+    const csv = 'Full Name,Username,Password,Monthly Bill,Provisioning Mode,Email\n' +
+      `Dedupe Valid,${username},Test@12345,500,RADIUS,valid@example.com\n` +
+      'Dedupe Invalid,dedupeinvalid,Test@12345,not-a-number,RADIUS,bad-email\n';
+    const file = { name: 'import.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) };
+
+    const preview = await (await request.post('/api/subscribers/import/preview', { headers, multipart: { file } })).json();
+    expect(preview.valid).toBe(1);
+    expect(preview.invalid).toBe(1);
+    expect(preview.errors.join(' ')).toContain('monthly_bill');
+
+    const executed = await (await request.post('/api/subscribers/import/execute', {
+      headers, multipart: { file, force: 'true' },
+    })).json();
+    expect(executed.created).toBe(1);
+    expect(executed.failed).toBe(1);
+    expect(executed.results.find((r: any) => !r.ok).error).toContain('monthly_bill');
+
+    const listed = await (await request.get(`/api/subscribers?q=${username}`, { headers })).json();
+    const created = (listed.data || []).find((s: any) => s.username === username);
+    if (created) await request.delete(`/api/subscribers/${created.id}`, { headers });
+  });
+});
