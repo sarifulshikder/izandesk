@@ -12,7 +12,10 @@ export type AiMessageAction =
   | { type: 'create_subscriber'; payload: {
       full_name: string; username: string; password: string;
       subscriber_type: string; connection_type: string; status: string;
-    } };
+    } }
+  | { type: 'set_subscriber_status'; payload: { identifier: string; status: 'ACTIVE' | 'SUSPENDED' } }
+  | { type: 'topup_reseller_wallet'; payload: { identifier: string; amount: number } }
+  | { type: 'create_ticket'; payload: { subject: string; priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; identifier?: string } };
 
 export type AiMessage = {
   role: 'user' | 'assistant';
@@ -57,7 +60,7 @@ export default function ChatMessage({
     if (a.type === 'set_theme') {
       if (a.value === 'toggle') setTheme(theme === 'dark' ? 'light' : 'dark');
       else setTheme(a.value);
-    } else if (a.type === 'create_subscriber') {
+    } else {
       onAction?.(a);
     }
   }, [msg.action, msg.role, theme, setTheme, onAction]);

@@ -22,7 +22,10 @@ export type AIAction =
   | { type: 'create_subscriber'; payload: {
       full_name: string; username: string; password: string;
       subscriber_type: string; connection_type: string; status: string;
-    } };
+    } }
+  | { type: 'set_subscriber_status'; payload: { identifier: string; status: 'ACTIVE' | 'SUSPENDED' } }
+  | { type: 'topup_reseller_wallet'; payload: { identifier: string; amount: number } }
+  | { type: 'create_ticket'; payload: { subject: string; priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; identifier?: string } };
 export type AIResult = {
   reply: string;
   provider: 'local' | 'gemini' | 'openai' | 'nim';
@@ -90,6 +93,11 @@ function detectThemeCommand(text: string): 'dark' | 'light' | 'toggle' | undefin
   // that happens to mention a theme ("did dark mode affect collections?").
   if (text.length > 80 || text.includes('?')) return undefined;
   if (!/\b(theme|mode|dark|light|night|day)\b|থিম|মোড|ডার্ক|লাইট|অন্ধকার|রাত|দিন|কালো|সাদা/i.test(text)) return undefined;
+  // "theme" or "mode" alone is not a command; require an imperative verb or an
+  // explicit "<dark|light> mode/theme" phrase so topic questions stay untouched.
+  const commandVerb = /\b(turn|switch|set|change|enable|disable|make|toggle|put)\b|চালু|বন্ধ|বদলা|করুন/i.test(text);
+  const explicitMode = /\b(dark|light|night)\s+(mode|theme)\b|\b(theme|mode)\s+(on|off)\b|ডার্ক|লাইট|থিম|মোড/i.test(text);
+  if (!commandVerb && !explicitMode) return undefined;
   const off = /(turn|switch|put)\s+off|disable|remove|\boff\b|বন্ধ|না/i.test(text);
   if (/\b(dark|night)\b|ডার্ক|অন্ধকার|রাতের|কালো/i.test(text)) return off ? 'light' : 'dark';
   if (/\b(light|day)\b|লাইট|দিনের|সাদা|হালকা/i.test(text)) return off ? 'dark' : 'light';
@@ -135,6 +143,53 @@ function extractEntity(text: string): string | undefined {
   return code ? code[0] : undefined;
 }
 
+/** Best-effort target of a short command — never free-form prose. */
+function commandTarget(text: string, stopWords: string[] = []): string | undefined {
+  const direct = extractEntity(text);
+  if (direct && !stopWords.includes(direct.toLowerCase())) return direct;
+  const forMatch = text.match(/\b(?:for|of|user)\s+([a-z0-9][a-z0-9._@-]{1,63})\b/i);
+  if (forMatch && !NOT_A_NAME.test(forMatch[1]) && !stopWords.includes(forMatch[1].toLowerCase())) return forMatch[1];
+  const words = text.replace(/[^a-z0-9._@:\-\s]/gi, ' ').trim().split(/\s+/)
+    .filter((w) => w && !NOT_A_NAME.test(w) && !stopWords.includes(w.toLowerCase()));
+  const last = words[words.length - 1];
+  return last && (last.length >= 2 || /^\d+$/.test(last)) ? last : undefined;
+}
+
+function statusCommand(text: string): AIAction | undefined {
+  if (text.includes('?')) return undefined;
+  const verb = text.match(/\b(suspend|activate|enable|disable|deactivate|restore)\b|বন্ধ|চালু/i)?.[0];
+  if (!verb) return undefined;
+  const status: 'ACTIVE' | 'SUSPENDED' = /suspend|disable|deactivate|বন্ধ/i.test(verb) ? 'SUSPENDED' : 'ACTIVE';
+  const identifier = commandTarget(text, [verb, 'subscriber', 'customer', 'client', 'connection', 'account', 'user', 'please', 'করুন', 'গ্রাহক', 'সংযোগ']);
+  return identifier ? { type: 'set_subscriber_status', payload: { identifier, status } } : undefined;
+}
+
+function topupCommand(text: string): AIAction | undefined {
+  if (text.includes('?')) return undefined;
+  if (!/\b(top[\s-]?up|recharge|credit)\b/i.test(text)) return undefined;
+  if (!/\b(reseller|wallet|partner)\b|রিসেলার|ওয়ালেট/i.test(text)) return undefined;
+  const raw = text.match(/(?<![\w-])(\d+(?:\.\d{1,2})?)(?![\w-])/g) || [];
+  const amount = raw.map(Number).filter((n) => Number.isFinite(n)).pop();
+  // Cap AI-initiated credits; larger recharges stay in the wallet UI.
+  if (!amount || !(amount > 0) || amount > 100000) return undefined;
+  const identifier = commandTarget(text, ['top', 'up', 'recharge', 'credit', 'reseller', 'wallet', 'partner', 'with', 'by', 'of', 'taka', 'bdt', 'tk', '৳', 'রিসেলার', 'ওয়ালেট', String(amount)]);
+  return identifier ? { type: 'topup_reseller_wallet', payload: { identifier, amount } } : undefined;
+}
+
+function ticketCommand(text: string): AIAction | undefined {
+  if (text.includes('?')) return undefined;
+  if (!/\b(create|open|raise|file|log)\b.{0,30}\b(ticket|complaint)\b/i.test(text)) return undefined;
+  const quoted = text.match(/["']([^"']{3,120})["']/);
+  const about = text.match(/\b(?:about|regarding)\s+(.{3,120})$/i);
+  const raw = about?.[1] || quoted?.[1] || 'AI Copilot support request';
+  const subject = raw.replace(/^[\s\-:.,]+|[\s\-:.,]+$/g, '').slice(0, 120) || 'AI Copilot support request';
+  const priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = /critical|urgent|জরুরি/i.test(text)
+    ? 'CRITICAL' : /\bhigh\b/i.test(text) ? 'HIGH' : /\blow\b/i.test(text) ? 'LOW' : 'MEDIUM';
+  const explicit = extractEntity(text) || text.match(/\bfor\s+([a-z0-9][a-z0-9._@-]{1,63})\b/i)?.[1];
+  const identifier = explicit && !NOT_A_NAME.test(explicit) ? explicit : undefined;
+  return { type: 'create_ticket', payload: { subject, priority, ...(identifier ? { identifier } : {}) } };
+}
+
 function detectIntent(message: string): Detection {
   const lang = detectLang(message);
   const text = message.trim().toLowerCase();
@@ -147,6 +202,12 @@ function detectIntent(message: string): Detection {
   if (!text.includes('?') && createVerb && subscriberNoun) {
     return { intent: 'create_subscriber', lang, action: { type: 'create_subscriber', payload: randomSubscriberDraft() } };
   }
+  const status = statusCommand(text);
+  if (status) return { intent: 'set_subscriber_status', lang, action: status };
+  const topup = topupCommand(text);
+  if (topup) return { intent: 'topup_reseller_wallet', lang, action: topup };
+  const ticket = ticketCommand(text);
+  if (ticket) return { intent: 'create_ticket', lang, action: ticket };
   // A named subscriber takes priority over topic keywords: "isa's ONU info"
   // must not be answered with the generic OLT health table.
   const entity = extractEntity(text);
@@ -683,6 +744,32 @@ function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows:
       cards.push({ title: bn ? 'গ্রাহক তালিকা' : 'Subscriber list', url: '/clients' });
       break;
     }
+    case 'set_subscriber_status': {
+      const p = action?.type === 'set_subscriber_status' ? action.payload : null;
+      body = `### ${bn ? '👤 গ্রাহকের স্ট্যাটাস' : '👤 Subscriber status'}\n\n` + (p
+        ? `> ${bn ? `\`${esc(p.identifier)}\` খুঁজে **${p.status}** স্ট্যাটাস সেট করা হচ্ছে…` : `Looking up \`${esc(p.identifier)}\` and setting status to **${p.status}**…`}`
+        : `> ${bn ? 'স্ট্যাটাস পরিবর্তন করা যায়নি।' : 'Could not prepare a status change.'}`);
+      cards.push({ title: bn ? 'গ্রাহক তালিকা' : 'Subscriber list', url: '/clients' });
+      break;
+    }
+    case 'topup_reseller_wallet': {
+      const p = action?.type === 'topup_reseller_wallet' ? action.payload : null;
+      body = `### ${bn ? '🤝 রিসেলার ওয়ালেট রিচার্জ' : '🤝 Reseller wallet recharge'}\n\n` + (p
+        ? `> ${bn ? `\`${esc(p.identifier)}\` রিসেলারের ওয়ালেটে **${money(p.amount)}** জমা করা হচ্ছে…` : `Crediting **${money(p.amount)}** to reseller \`${esc(p.identifier)}\`…`}`
+        : `> ${bn ? 'রিচার্জ করা যায়নি।' : 'Could not prepare a wallet recharge.'}`);
+      cards.push({ title: bn ? 'রিসেলাররা' : 'Resellers', url: '/resellers' });
+      break;
+    }
+    case 'create_ticket': {
+      const p = action?.type === 'create_ticket' ? action.payload : null;
+      body = `### ${bn ? '🎫 নতুন টিকেট' : '🎫 Create ticket'}\n\n` + (p
+        ? `**${esc(p.subject)}**\n\n- ${bn ? 'অগ্রাধিকার' : 'Priority'}: ${p.priority}\n` +
+          (p.identifier ? `- ${bn ? 'গ্রাহক' : 'Subscriber'}: \`${esc(p.identifier)}\`\n` : '') +
+          `\n> ${bn ? 'টিকেটটি তৈরি করা হচ্ছে…' : 'Creating the ticket now…'}`
+        : `> ${bn ? 'টিকেট তৈরি করা যায়নি।' : 'Could not prepare a ticket.'}`);
+      cards.push({ title: bn ? 'টিকেট' : 'Tickets', url: '/tickets' });
+      break;
+    }
     default: {
       body = `### ${T.help}\n\n` + (bn
         ? 'আমি আপনার লাইভ ISP ডেটা থেকে প্রশ্নের উত্তর দিই: কালেকশন, গ্রাহক সংখ্যা, বকেয়া, মেয়াদ, রাউটার হেলথ, OLT, টিকেট, লিড, হটস্পট, ইনভেন্টরি ও প্যাকেজ রেট।\n\nকোনো গ্রাহকের নাম, কাস্টমার আইডি বা ফোন নম্বর দিতে পারেন। নেটওয়ার্ক ভূমিকায় “isa-র ONU তথ্য” বললে তার ONU-র বিবরণ দেখাব।'
@@ -711,6 +798,9 @@ const INTENT_ROLES: Record<string, string[]> = {
   subscriber_onu: [...NETWORK_ROLES, 'TECHNICIAN'],
   // Creating records is a SUPER_ADMIN-only AI action; others get the standard notice.
   create_subscriber: ['SUPER_ADMIN'],
+  set_subscriber_status: ['SUPER_ADMIN'],
+  topup_reseller_wallet: ['SUPER_ADMIN'],
+  create_ticket: ['SUPER_ADMIN'],
   leads: CRM_ROLES,
   kyc: CRM_ROLES,
   gis_sites: [...NETWORK_ROLES, 'BILLING_OPERATOR', 'TECHNICIAN'],
@@ -733,7 +823,9 @@ const TITLE_KEYS: Record<string, string> = {
   online_users: 'online', expiring: 'expiring', router_health: 'router', olt_health: 'olt', subscriber_onu: 'olt', tickets: 'ticket',
   new_connections: 'newconn', reseller_wallet: 'reseller', hotspot: 'hotspot', inventory: 'stock',
   packages: 'package', payment_gateways: 'gateway', staff_collection: 'staff', leads: 'lead', kyc: 'kyc',
-  gis_sites: 'gis', customer_lookup: 'customer', ui_theme: 'theme', create_subscriber: 'customer', greeting: 'help', help: 'help', free_form: 'help', sms_templates: 'help',
+  gis_sites: 'gis', customer_lookup: 'customer', ui_theme: 'theme', create_subscriber: 'customer',
+  set_subscriber_status: 'customer', topup_reseller_wallet: 'reseller', create_ticket: 'ticket',
+  greeting: 'help', help: 'help', free_form: 'help', sms_templates: 'help',
 };
 function pct(part: number, total: number) {
   return total > 0 ? `${Math.round((part / total) * 100)}%` : '—';
@@ -767,7 +859,10 @@ async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn'
     `asking one of the supported topics. For interface/theme requests, tell the user to say "dark mode" or "light mode" ` +
     `and the app will switch it (or use the top-bar theme button) — never claim you cannot control the interface. ` +
     `For subscriber creation, tell a super admin to say "create a subscriber with random credentials" and the app will ` +
-    `create it through the normal validated API; otherwise point them to the Add Subscriber form. ` +
+    `create it through the normal validated API; otherwise point them to the Add Subscriber form. Status changes, ` +
+    `reseller wallet recharges and ticket creation are also available as direct commands to a super admin — suggest ` +
+    `the exact phrasing ("suspend <client code>", "top up <reseller> wallet <amount>", "create a ticket about …") ` +
+    `instead of claiming you cannot perform them. ` +
     `Keep it short and practical. Context: ${context}`;
 
   try {

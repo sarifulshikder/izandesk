@@ -911,8 +911,8 @@ test.describe('AI Copilot', () => {
     expect(bn.reply).toContain('থিম');
 
     // A data question mentioning theme must not be hijacked into a UI action.
-    const data = await ask('Turn dark theme on decreased my collection?');
-    expect(data.intent).not.toBe('ui_theme');
+    const data = await ask('today collection theme report');
+    expect(data.intent).toBe('collection_today');
     expect(data.action).toBeUndefined();
 
     // Theme is a personal UI setting — resellers can change it too.
@@ -949,6 +949,46 @@ test.describe('AI Copilot', () => {
       const denied = await ask('create a subscriber with random credentials', { Authorization: `Bearer ${t}` });
       expect(denied.meta.restricted).toBe(true);
       expect(denied.action).toBeUndefined();
+    }
+  });
+
+  test('status, wallet and ticket commands are parsed and role-gated', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const ask = async (message: string, h = headers) => (await request.post('/api/ai/chat', { headers: h, data: { message } })).json();
+
+    expect(await ask('suspend isa')).toMatchObject({
+      intent: 'set_subscriber_status',
+      action: { type: 'set_subscriber_status', payload: { identifier: 'isa', status: 'SUSPENDED' } },
+    });
+    expect(await ask('activate IZN-MT-00045')).toMatchObject({
+      intent: 'set_subscriber_status',
+      action: { type: 'set_subscriber_status', payload: { status: 'ACTIVE' } },
+    });
+    expect(await ask('top up cybernet wallet 500')).toMatchObject({
+      intent: 'topup_reseller_wallet',
+      action: { type: 'topup_reseller_wallet', payload: { amount: 500 } },
+    });
+    // Oversized credits and questions never become mutations.
+    expect((await ask('top up cybernet wallet 999999')).action).toBeUndefined();
+    expect((await ask('what is my status?')).action).toBeUndefined();
+
+    expect(await ask('create a ticket for isa about slow internet')).toMatchObject({
+      intent: 'create_ticket',
+      action: { type: 'create_ticket', payload: { subject: 'slow internet', priority: 'MEDIUM', identifier: 'isa' } },
+    });
+    const urgent = await ask('create an urgent ticket about fiber cut');
+    expect(urgent.action.payload.priority).toBe('CRITICAL');
+    expect(urgent.action.payload.identifier).toBeUndefined();
+
+    for (const creds of [reseller, { email: 'billing@izandesk.com', password: 'billing123' }]) {
+      const t = await loginToken(request, creds);
+      const h = { Authorization: `Bearer ${t}` };
+      for (const message of ['suspend isa', 'top up cybernet wallet 500', 'create a ticket about outage']) {
+        const denied = await ask(message, h);
+        expect(denied.meta.restricted).toBe(true);
+        expect(denied.action).toBeUndefined();
+      }
     }
   });
 
@@ -1342,6 +1382,39 @@ test.describe('AI mutations (opt-in)', () => {
       expect(created.client_code).toMatch(/^IZN-/);
     } finally {
       await request.delete(`/api/subscribers/${created.id}`, { headers });
+    }
+  });
+
+  test('Copilot status command changes and restores a subscriber', async ({ page, request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const status = async () => {
+      const listed = await (await request.get('/api/subscribers?q=isa', { headers })).json();
+      return (listed.data || [])[0];
+    };
+    const original = await status();
+    expect(original).toBeTruthy();
+
+    await login(page, admin);
+    await gotoStable(page, '/ai-assistant');
+    const input = page.locator('textarea');
+    const send = async (message: string) => {
+      const p = page.waitForResponse((r) => r.url().includes('/api/ai/chat') && r.request().method() === 'POST');
+      await input.fill(message);
+      await input.press('Enter');
+      return (await p).json();
+    };
+
+    try {
+      expect((await send('suspend isa')).action.payload.status).toBe('SUSPENDED');
+      await expect.poll(async () => (await status()).status).toBe('SUSPENDED');
+      expect((await send('activate isa')).action.payload.status).toBe('ACTIVE');
+      await expect.poll(async () => (await status()).status).toBe('ACTIVE');
+    } finally {
+      const current = await status();
+      if (current && current.status !== original.status) {
+        await request.put(`/api/subscribers/${current.id}`, { headers, data: { status: original.status } });
+      }
     }
   });
 });
