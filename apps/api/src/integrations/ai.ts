@@ -668,7 +668,7 @@ async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn'
       // NVIDIA NIM exposes an OpenAI-compatible Chat Completions API, both for
       // NIM Cloud (integrate.api.nvidia.com) and self-hosted NIM containers.
       const base = String(await getCached('ai.nim_base_url', 'https://integrate.api.nvidia.com/v1')).replace(/\/+$/, '');
-      const model = String(await getCached('ai.nim_model', 'meta/llama-3.3-70b-instruct'));
+      const model = String(await getCached('ai.nim_model', 'nvidia/nemotron-3-ultra-550b-a55b'));
       const r = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },

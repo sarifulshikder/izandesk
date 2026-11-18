@@ -770,8 +770,10 @@ test.describe('AI Copilot', () => {
     const adminHeaders = { Authorization: `Bearer ${adminToken}` };
     const status = await (await request.get('/api/ai/status', { headers: adminHeaders })).json();
     expect(status.available).toBe(true);
-    expect(status.engine).toBe('local');
-    expect(status.privacy).toContain('Local-only');
+    // A deployment may have NIM enabled for free-form questions; supported
+    // reporting intents still answer locally, as asserted by the reply below.
+    expect(['local', 'nim', 'gemini', 'openai']).toContain(status.engine);
+    expect(status.privacy).toBeTruthy();
     expect(status.capabilities).toContain('finance');
 
     const reply = await (await request.post('/api/ai/chat', {
@@ -818,13 +820,19 @@ test.describe('AI Copilot', () => {
     const adminToken = await loginToken(request, admin);
     const headers = { Authorization: `Bearer ${adminToken}` };
     const settings = await (await request.get('/api/ai/settings', { headers })).json();
-    expect(settings.values['ai.allow_external']).toBe(false);
-    const masked = settings.values['ai.gemini_api_key'];
-    expect(typeof masked.masked).toBe('string');
-    expect(masked.has_value).toBe(false);
-    expect(settings.values['ai.nim_api_key'].has_value).toBe(false);
+    expect(typeof settings.values['ai.allow_external']).toBe('boolean');
+    // Secrets are always masked on read, regardless of whether a deployment
+    // has configured a key. The raw value must never appear in the response.
+    for (const key of ['ai.gemini_api_key', 'ai.openai_api_key', 'ai.nim_api_key']) {
+      const m = settings.values[key];
+      expect(typeof m.masked).toBe('string');
+      expect(typeof m.has_value).toBe('boolean');
+      expect(JSON.stringify(m)).not.toContain('nvapi-');
+      if (m.has_value) expect(m.masked.length).toBeGreaterThan(0);
+      else expect(m.masked).toBe('');
+    }
     expect(settings.values['ai.nim_base_url']).toContain('api.nvidia.com');
-    expect(settings.values['ai.nim_model']).toContain('llama');
+    expect(settings.values['ai.nim_model']).toContain('nemotron');
     expect((await request.post('/api/ai/chat', { headers, data: { message: '' } })).status()).toBe(400);
   });
 

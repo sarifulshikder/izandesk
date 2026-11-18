@@ -116,7 +116,7 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { key: 'ai.openai_model', category: 'ai', label: 'OpenAI Model', type: 'string', default: 'gpt-4o-mini' },
   { key: 'ai.nim_api_key', category: 'ai', label: 'NVIDIA NIM API Key', type: 'password', default: '', secret: true, description: 'NVIDIA API key (nvapi-…) for NIM / NVIDIA Cloud APIs.' },
   { key: 'ai.nim_base_url', category: 'ai', label: 'NIM Base URL', type: 'string', default: 'https://integrate.api.nvidia.com/v1', description: 'OpenAI-compatible base URL. Use your self-hosted NIM endpoint if applicable (e.g. http://nim-host:8000/v1).' },
-  { key: 'ai.nim_model', category: 'ai', label: 'NIM Model', type: 'string', default: 'meta/llama-3.3-70b-instruct', description: 'NIM model id, e.g. meta/llama-3.3-70b-instruct or nvidia/llama-3.3-nemotron-super-49b-v1.' },
+  { key: 'ai.nim_model', category: 'ai', label: 'NIM Model', type: 'string', default: 'nvidia/nemotron-3-ultra-550b-a55b', description: 'NIM chat model id, e.g. nvidia/nemotron-3-ultra-550b-a55b or meta/llama-3.3-70b-instruct.' },
   { key: 'ai.rate_limit_per_min', category: 'ai', label: 'Requests per minute per user', type: 'number', min: 1, max: 300, default: 30 },
   { key: 'ai.max_history', category: 'ai', label: 'Max conversation turns sent', type: 'number', min: 0, max: 100, default: 20 },
 ];
