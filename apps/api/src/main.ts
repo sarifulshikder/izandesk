@@ -3,7 +3,6 @@ import express = require('express');
 import cors = require('cors');
 import jwt = require('jsonwebtoken');
 import bcrypt = require('bcrypt');
-import path = require('path');
 import http = require('http');
 import { WebSocketServer } from 'ws';
 import { PluginKernel } from './kernel/plugin-manager';
@@ -44,6 +43,9 @@ import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
 
 const PORT = Number(process.env.API_PORT || 4000);
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set in production');
+}
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
 const WEB_ORIGIN = process.env.WEB_ORIGIN || '';
 const ALLOW_LAN_ORIGINS = (process.env.ALLOW_LAN_ORIGINS || 'true').toLowerCase() !== 'false';
@@ -282,7 +284,8 @@ async function bootstrap() {
   });
 
   // Phase 2: BSS core
-  app.use('/uploads/kyc', authMiddleware, express.static(path.resolve(__dirname, '../uploads/kyc')));
+  // KYC files are served through the ownership-checked route in subscribers.ts
+  // (GET /api/subscribers/:id/kyc/:docId/file), never as public static files.
   app.use('/api/subscribers', authMiddleware, subscribersRouter);
   app.use('/api/topology', authMiddleware, topologyRouter);
   app.use('/api/inventory', authMiddleware, inventoryRouter);

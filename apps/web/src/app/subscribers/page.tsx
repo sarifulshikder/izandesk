@@ -36,6 +36,7 @@ export default function SubscribersPage() {
   const [history, setHistory] = useState<any[]>([]);
   const [showImport, setShowImport] = useState(false);
   const [importPreview, setImportPreview] = useState<any | null>(null);
+  const [importFile, setImportFile] = useState<File | null>(null);
   const [importLoading, setImportLoading] = useState(false);
   // MikroTik import (subscribers/users)
   const [importMode, setImportMode] = useState<'file' | 'mikrotik'>('file');
@@ -92,9 +93,12 @@ export default function SubscribersPage() {
 
   const remove = async (id: string) => {
     if (!token || !confirm('Delete this subscriber?')) return;
-    await apiFetch(`/api/subscribers/${id}`, { method: 'DELETE' }, token);
-    if (detail?.id === id) setDetail(null);
-    await load();
+    setError(null);
+    try {
+      await apiFetch(`/api/subscribers/${id}`, { method: 'DELETE' }, token);
+      if (detail?.id === id) setDetail(null);
+      await load();
+    } catch (e: any) { setError(e.message); }
   };
 
   const openDetail = async (id: string) => {
@@ -132,6 +136,17 @@ export default function SubscribersPage() {
     } catch (e: any) { setError(e.message); }
   };
 
+  const viewKyc = async (docId: string) => {
+    if (!token || !detail) return;
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/api/subscribers/${detail.id}/kyc/${docId}/file`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error('Unable to open document');
+      const url = window.URL.createObjectURL(await res.blob());
+      window.open(url, '_blank', 'noopener');
+      setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+    } catch (e: any) { setError(e.message); }
+  };
+
   const uploadKyc = async (file: File, docType: string) => {
     if (!token || !detail) return;
     setKycUploading(true);
@@ -149,7 +164,7 @@ export default function SubscribersPage() {
 
   const handleImportPreview = async (file: File) => {
     if (!token) return;
-    setImportLoading(true); setImportPreview(null);
+    setImportLoading(true); setImportPreview(null); setImportFile(null);
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -157,16 +172,17 @@ export default function SubscribersPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || 'Preview failed');
       setImportPreview(data);
+      setImportFile(file);
     } catch (e: any) { setError(e.message); }
     finally { setImportLoading(false); }
   };
 
-  const handleImportExecute = async (file: File) => {
-    if (!token || !importPreview) return;
+  const handleImportExecute = async () => {
+    if (!token || !importPreview || !importFile) return;
     setImportLoading(true);
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('file', importFile);
       formData.append('force', 'false');
       const res = await fetch(`${getApiBaseUrl()}/api/subscribers/import/execute`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData });
       const data = await res.json();
@@ -290,8 +306,11 @@ export default function SubscribersPage() {
 
   const removeEquip = async (id: string) => {
     if (!token || !confirm('Remove this equipment assignment?')) return;
-    await apiFetch(`/api/subscriber-equipment/${id}`, { method: 'DELETE' }, token);
-    await loadEquipment();
+    setError(null);
+    try {
+      await apiFetch(`/api/subscriber-equipment/${id}`, { method: 'DELETE' }, token);
+      await loadEquipment();
+    } catch (e: any) { setError(e.message); }
   };
 
   const logComm = async (channel: string) => {
@@ -348,6 +367,7 @@ export default function SubscribersPage() {
   const closeImportModal = () => {
     setShowImport(false);
     setImportPreview(null);
+    setImportFile(null);
     setImportMode('file');
     resetMtImport();
   };
@@ -597,9 +617,9 @@ export default function SubscribersPage() {
                     <div className="space-y-2">
                       {(detail.kyc_documents || []).length === 0 ? <div className="text-xs text-muted-foreground">No KYC documents uploaded.</div> :
                         detail.kyc_documents.map((d: any) => (
-                          <a key={d.id} href={`${getApiBaseUrl()}/uploads/kyc/${d.file_path}`} target="_blank" rel="noreferrer" className="flex items-center justify-between p-2 rounded-lg border border-border hover:bg-muted/40 text-xs">
+                          <button key={d.id} onClick={() => viewKyc(d.id)} className="w-full flex items-center justify-between p-2 rounded-lg border border-border hover:bg-muted/40 text-xs text-left">
                             <span><span className="font-medium">{d.doc_type}</span> — {d.file_name}</span><span className="text-muted-foreground">View</span>
-                          </a>
+                          </button>
                         ))}
                     </div>
                     <div className="mt-3 p-3 rounded-xl bg-muted/30 border border-border space-y-2">
@@ -772,7 +792,7 @@ export default function SubscribersPage() {
                           <div className="text-xl font-black text-red-400">{importPreview.invalid}</div>
                         </div>
                       </div>
-                      <button onClick={()=>setImportPreview(null)} className="px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-muted">Change File</button>
+                      <button onClick={()=>{ setImportPreview(null); setImportFile(null); }} className="px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-muted">Change File</button>
                     </div>
 
                     {importPreview.errors?.length > 0 && (
@@ -819,31 +839,8 @@ export default function SubscribersPage() {
                     </div>
 
                     <div className="flex justify-end gap-2 pt-2">
-                      <button onClick={()=>setImportPreview(null)} className="px-4 py-2 rounded-xl border border-border">Back</button>
-                      <button onClick={async () => {
-                        const input = document.createElement('input');
-                        input.type = 'file';
-                        input.accept = '.xlsx,.xls,.csv';
-                        input.onchange = async (e) => {
-                          const file = (e.target as HTMLInputElement).files?.[0];
-                          if (file) {
-                            const formData = new FormData();
-                            formData.append('file', file);
-                            formData.append('force', 'false');
-                            setImportLoading(true);
-                            try {
-                              const res = await fetch(`${getApiBaseUrl()}/api/subscribers/import/execute`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData });
-                              const data = await res.json();
-                              if (!res.ok) throw new Error(data?.message || 'Import failed');
-                              closeImportModal();
-                              await load();
-                              alert(`Import complete: ${data.created} created, ${data.failed} failed`);
-                            } catch (e: any) { setError(e.message); }
-                            finally { setImportLoading(false); }
-                          }
-                        };
-                        input.click();
-                      }} disabled={importLoading} className="btn btn-primary disabled:opacity-50">
+                      <button onClick={()=>{ setImportPreview(null); setImportFile(null); }} className="px-4 py-2 rounded-xl border border-border">Back</button>
+                      <button onClick={handleImportExecute} disabled={importLoading || !importFile} className="btn btn-primary disabled:opacity-50">
                         {importLoading ? 'Importing...' : 'Execute Import'}
                       </button>
                     </div>

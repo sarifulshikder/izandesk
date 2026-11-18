@@ -437,6 +437,40 @@ test.describe('subscriber scoping', () => {
     expect(reassigned.ok(), 'PUT with a foreign reseller_id must be rejected or overridden').toBeTruthy();
     const after = await request.get(`/api/subscribers/${mine.id}`, { headers: auth(resellerToken) });
     expect((await after.json()).reseller_id).toBe(mine.reseller_id);
+
+    // L1: KYC files are no longer publicly served; the checked route denies foreign subscribers.
+    const oldKyc = await request.get('/uploads/kyc/nonexistent.pdf', { headers: auth(resellerToken) });
+    expect(oldKyc.status()).toBe(404);
+    const kycFile = await request.get(`/api/subscribers/${target.id}/kyc/00000000-0000-0000-0000-000000000000/file`, { headers: auth(resellerToken) });
+    expect(kycFile.status()).toBe(404);
+
+    // M3: raw provision is admin-only, and packages must exist in the catalog.
+    const provision = await request.post('/api/subscribers/batch', {
+      headers: auth(resellerToken), data: { action: 'provision', ids: [mine.id], params: { status: 'ACTIVE' } },
+    });
+    expect(provision.status()).toBe(400);
+    const badPackage = await request.post('/api/subscribers/batch', {
+      headers: auth(resellerToken), data: { action: 'set_package', ids: [mine.id], params: { package_name: 'no-such-package' } },
+    });
+    expect(badPackage.status()).toBe(400);
+  });
+
+  test('location picker uses MapLibre with no CDN marker icons', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await login(page, admin);
+    await gotoStable(page, '/subscribers?new=1');
+    const modal = page.locator('div.fixed.inset-0.z-50').last();
+    await expect(modal).toContainText('Add Subscriber — Wizard');
+    await modal.locator('input').first().fill('Picker Test Subscriber');
+    await modal.getByRole('button', { name: 'Next' }).click();
+    await modal.getByRole('button', { name: 'Next' }).click();
+    await expect(modal.getByText('Map Pin Picker')).toBeVisible();
+    await expect(page.locator('canvas.maplibregl-canvas').first()).toBeVisible({ timeout: 20000 });
+    expect(await page.locator('img[src*="unpkg.com"]').count()).toBe(0);
+    await expect(page.getByRole('button', { name: 'Satellite' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Streets' })).toBeVisible();
+    expect(errors, `page errors: ${errors.join('; ')}`).toEqual([]);
   });
 });
 

@@ -11,6 +11,7 @@ import {
 import multer = require('multer');
 import path = require('path');
 import fs = require('fs');
+import crypto = require('crypto');
 import XLSX = require('xlsx');
 import PDFDocument = require('pdfkit');
 import { hashPassword, verifyPassword, generateNtPasswordHash, isHashed, sanitizePassword } from '../utils/password';
@@ -43,6 +44,7 @@ if (!fs.existsSync(importUploadDir)) fs.mkdirSync(importUploadDir, { recursive: 
 const SUBSCRIBER_TYPES = ['HOME', 'CORPORATE', 'HOTSPOT'];
 const CONNECTION_TYPES = ['PPPOE', 'STATIC_IP', 'DHCP', 'HOTSPOT', 'LEASED_LINE_CIR'];
 const STATUSES = ['PENDING', 'ACTIVE', 'SUSPENDED', 'EXPIRED', 'TERMINATED'];
+const SUSPENSION_STAGES = ['NONE', 'WARNING', 'GRACE', 'ISOLATED', 'WALLED_GARDEN', 'SUSPENDED'];
 const KYC_DOC_TYPES = ['NID', 'PASSPORT', 'CONTRACT', 'PHOTO', 'OTHER'];
 const MAX_KYC_BYTES = 5 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
@@ -50,7 +52,8 @@ const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
-    const safe = Date.now() + '-' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    // Unguessable name: KYC documents must not be reachable by file enumeration.
+    const safe = crypto.randomUUID() + '-' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
     cb(null, safe);
   },
 });
@@ -68,7 +71,8 @@ const upload = multer({
 const importStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, importUploadDir),
   filename: (_req, file, cb) => {
-    const safe = Date.now() + '-' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    // Unguessable name: KYC documents must not be reachable by file enumeration.
+    const safe = crypto.randomUUID() + '-' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
     cb(null, safe);
   },
 });
@@ -461,10 +465,10 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const r = await pool.query(`${LIST_SELECT} WHERE s.id=$1`, [req.params.id]);
   const sub = r.rows[0];
   if (!sub) return res.status(404).json({ message: 'Subscriber not found' });
-  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
 
   const kyc = await pool.query('SELECT * FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [req.params.id]);
   let quota: any = null;
@@ -558,6 +562,7 @@ router.post('/', asyncHandler(async (req, res) => {
         values[0] = await nextClientCode(p.area_id);
         continue;
       }
+      if (isClientCodeConflict) throw new ConflictError(`Client code "${clientCode}" is already in use`);
       throw e;
     }
   }
@@ -590,9 +595,9 @@ router.post('/', asyncHandler(async (req, res) => {
 
 router.put('/:id', asyncHandler(async (req, res) => {
   const b = req.body || {};
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const existing = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [req.params.id])).rows[0];
   if (!existing) return res.status(404).json({ message: 'Subscriber not found' });
-  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const scope = await resellerScope(req);
 
   // Resellers must never be able to move a subscriber to another partner via PUT.
@@ -680,9 +685,9 @@ router.put('/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const existing = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [req.params.id])).rows[0];
   if (!existing) return res.status(404).json({ message: 'Subscriber not found' });
-  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
 
   const deps = (await pool.query(`SELECT
     (SELECT COUNT(*)::int FROM invoices WHERE subscriber_id=$1) AS invoices,
@@ -739,6 +744,24 @@ router.delete('/:id/kyc/:docId', asyncHandler(async (req, res) => {
     await pool.query('DELETE FROM kyc_documents WHERE id=$1', [req.params.docId]);
   }
   res.json({ ok: true });
+}));
+
+// Ownership-checked KYC download. Replaces public static serving of /uploads/kyc.
+router.get('/:id/kyc/:docId/file', asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
+  const r = await pool.query(
+    'SELECT file_path, file_name, mime_type FROM kyc_documents WHERE id=$1 AND subscriber_id=$2',
+    [req.params.docId, req.params.id],
+  );
+  const doc = r.rows[0];
+  if (!doc) return res.status(404).json({ message: 'Document not found' });
+  const filePath = path.resolve(uploadDir, doc.file_path);
+  if (!filePath.startsWith(uploadDir + path.sep)) return res.status(400).json({ message: 'Invalid document path' });
+  if (!fs.existsSync(filePath)) return res.status(404).json({ message: 'Document file not found' });
+  const safeName = String(doc.file_name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
+  res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+  res.sendFile(filePath);
 }));
 
 /* ------------------------------------------------------------------ */
@@ -888,13 +911,16 @@ router.post('/import/preview', importUpload.single('file'), asyncHandler(async (
   if (importScope.restricted && !importScope.uuid) return res.status(403).json({ message: 'No reseller account linked to this login' });
   if (!req.file) return res.status(400).json({ message: 'file is required' });
 
-  const workbook = XLSX.readFile(req.file.path);
+  let workbook: any;
+  try {
+    workbook = XLSX.readFile(req.file.path);
+  } finally {
+    // Always remove the upload, even when the file cannot be parsed.
+    try { fs.unlinkSync(req.file.path); } catch {}
+  }
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as any[];
-
-  // Clean up temp file
-  fs.unlinkSync(req.file.path);
 
   if (rows.length === 0) return res.json({ ok: true, preview: [], errors: ['No data rows found'], valid: 0, invalid: 0 });
 
@@ -1025,11 +1051,15 @@ router.post('/import/execute', importUpload.single('file'), asyncHandler(async (
   if (!req.file) return res.status(400).json({ message: 'file is required' });
   const force = boolVal(req.body.force, false); // skip validation errors if true
 
-  const workbook = XLSX.readFile(req.file.path);
+  let workbook: any;
+  try {
+    workbook = XLSX.readFile(req.file.path);
+  } finally {
+    try { fs.unlinkSync(req.file.path); } catch {}
+  }
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as any[];
-  fs.unlinkSync(req.file.path);
 
   // Reuse validation logic from preview
   const [areas, zones, boxes, routers, resellers, packages] = await Promise.all([
@@ -1166,6 +1196,8 @@ router.post('/import/execute', importUpload.single('file'), asyncHandler(async (
       created++;
     } catch (e: any) {
       failed++;
+      // Explicit conflicts already raise ConflictError; a concurrent 23505 is
+      // still captured here as a per-row failure rather than a 500.
       results.push({ row: rowNum, ok: false, error: e.message });
       if (!force) {
         // On first error without force, stop and return
@@ -1188,6 +1220,19 @@ router.post('/batch', asyncHandler(async (req, res) => {
   }
   const scope = await resellerScope(req);
   if (scope.restricted && !scope.uuid) return res.status(403).json({ message: 'No reseller account linked' });
+
+  // The raw provision action writes arbitrary status/stage values and can bypass
+  // billing suspension, so it is admin/ops only. Validate its inputs for admins.
+  if (action === 'provision') {
+    if (scope.restricted) throw new ValidationError('Resellers cannot use the provision action');
+    if (params?.status && !STATUSES.includes(String(params.status).toUpperCase())) throw new ValidationError(`status must be one of: ${STATUSES.join(', ')}`);
+    if (params?.stage && !SUSPENSION_STAGES.includes(String(params.stage).toUpperCase())) throw new ValidationError(`stage must be one of: ${SUSPENSION_STAGES.join(', ')}`);
+  }
+  if (action === 'set_package') {
+    if (!params?.package_name) throw new ValidationError('package_name required');
+    const pkg = await pool.query('SELECT name FROM bandwidth_packages WHERE name=$1', [params.package_name]);
+    if (!pkg.rows[0]) throw new ValidationError('Selected package does not exist');
+  }
 
   // Verify all IDs belong to reseller (if restricted)
   let targetIds = ids;
@@ -1214,7 +1259,11 @@ router.post('/batch', asyncHandler(async (req, res) => {
           result = await applyProvisioningState(id, { status: 'ACTIVE', stage: 'WALLED_GARDEN', walled_garden: true, reason: params?.reason || 'Batch walled garden', sendCoa: true });
           break;
         case 'provision':
-          result = await applyProvisioningState(id, { status: params?.status || 'ACTIVE', stage: params?.stage, walled_garden: params?.walled_garden, reason: params?.reason || 'Batch provision', sendCoa: true });
+          result = await applyProvisioningState(id, {
+            status: String(params?.status || 'ACTIVE').toUpperCase(),
+            stage: params?.stage ? String(params.stage).toUpperCase() : undefined,
+            walled_garden: params?.walled_garden, reason: params?.reason || 'Batch provision', sendCoa: true,
+          });
           break;
         case 'delete':
           // Only allow if no invoices/payments

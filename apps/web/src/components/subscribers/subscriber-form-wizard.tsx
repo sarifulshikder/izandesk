@@ -50,6 +50,21 @@ const EXTRA_DETAIL_BOOLS: [string, string][] = [
   ['Parental Control', 'parental_control_enabled'],
 ];
 
+/** Only editable columns are sent back; the API record may contain computed,
+ *  joined or sensitive fields that must never be echoed from the form. */
+const WIZARD_FIELDS = [
+  'full_name', 'subscriber_type', 'connection_type', 'status', 'username', 'password',
+  'phone', 'email', 'nid_number', 'package_name', 'bandwidth_mbps', 'monthly_bill',
+  'area_id', 'zone_id', 'distribution_box_id', 'address', 'latitude', 'longitude',
+  'ip_address', 'mac_address', 'installation_date', 'district', 'thana', 'upazila',
+  'post_office', 'village', 'area_name', 'ward_no', 'road_no', 'house_no', 'notes',
+  'billing_cycle_day', 'expiry_date', 'due_date', 'next_bill_date',
+  'auto_suspend_enabled', 'auto_pay_enabled', 'provisioning_mode', 'router_id',
+  'reseller_id', 'price_override', 'custom_package_note', 'extended_expiry', 'branch_name',
+  ...EXTRA_DETAIL_FIELDS.map(([, key]) => key),
+  ...EXTRA_DETAIL_BOOLS.map(([, key]) => key),
+];
+
 interface SubscriberFormWizardProps {
   /** Existing subscriber to edit; omit/null to create a new one. */
   initial?: any | null;
@@ -199,10 +214,11 @@ export function SubscriberFormWizard({
     if (!String(form.full_name || '').trim()) { setError('Full name is required'); setStep(1); return; }
     setError(null); setSaving(true);
     try {
-      const payload = { ...form };
+      const payload: any = {};
+      for (const key of WIZARD_FIELDS) if (key in form) payload[key] = form[key];
       ['bandwidth_mbps', 'monthly_bill', 'latitude', 'longitude'].forEach(k => { if (payload[k] === '') payload[k] = null; });
       ['area_id', 'zone_id', 'distribution_box_id', 'installation_date', 'router_id', 'reseller_id'].forEach(k => { if (payload[k] === '') payload[k] = null; });
-      if (showExtraFields) EXTRA_DETAIL_FIELDS.forEach(([, key]) => { if (payload[key] === '') payload[key] = null; });
+      EXTRA_DETAIL_FIELDS.forEach(([, key]) => { if (payload[key] === '') payload[key] = null; });
       if (payload.provisioning_mode === 'RADIUS') payload.router_id = null;
       if (lockedResellerId) payload.reseller_id = lockedResellerId;
       if (payload.password === '') delete payload.password;
