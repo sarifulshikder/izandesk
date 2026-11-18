@@ -5,6 +5,17 @@ import { auditLog, reqActor } from '../integrations/audit';
 
 const router: Router = Router();
 
+const LEAD_READ_ROLES = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER', 'TECHNICIAN'];
+const LEAD_WRITE_ROLES = ['SUPER_ADMIN', 'BILLING_OPERATOR'];
+router.use((req: any, res: any, next: any) => {
+  const role = String(req.user?.role || '');
+  if (!LEAD_READ_ROLES.includes(role)) return res.status(403).json({ message: 'Lead pipeline access is restricted to staff accounts' });
+  if (req.method !== 'GET' && req.method !== 'HEAD' && !LEAD_WRITE_ROLES.includes(role)) {
+    return res.status(403).json({ message: 'Insufficient permissions to modify leads' });
+  }
+  return next();
+});
+
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
 /* ------------------------------------------------------------------ */
@@ -29,9 +40,9 @@ const ACTIVITY_TYPES = ['CALL', 'EMAIL', 'MEETING', 'WHATSAPP', 'SITE_VISIT', 'N
 async function nextLeadNo() {
   const now = new Date();
   const ym = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
-  const r = await pool.query(`SELECT COUNT(*)::int as c FROM leads WHERE lead_no LIKE $1`, [`LD-${ym}-%`]);
-  const n = (r.rows[0]?.c || 0) + 1;
-  return `LD-${ym}-${String(n).padStart(5, '0')}`;
+  // COUNT(*)+1 collides under concurrent creates — use a database sequence.
+  const r = await pool.query("SELECT nextval('lead_no_seq') AS n");
+  return `LD-${ym}-${String(r.rows[0].n).padStart(5, '0')}`;
 }
 
 /* ------------------------------------------------------------------ */

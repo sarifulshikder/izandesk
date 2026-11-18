@@ -1618,6 +1618,10 @@ export async function initDb() {
   await pool.query("UPDATE subscribers SET portal_password=password WHERE portal_password IS NULL AND password ~ '^\\$2[aby]\\$'").catch(() => {});
   await pool.query("UPDATE subscribers SET password=NULL WHERE password ~ '^\\$2[aby]\\$'").catch(() => {});
 
+  // Collision-safe numbering for leads (same pattern as ticket_no_seq).
+  await pool.query('CREATE SEQUENCE IF NOT EXISTS lead_no_seq').catch(() => {});
+  await pool.query(`SELECT setval('lead_no_seq', GREATEST(COALESCE((SELECT MAX((substring(lead_no from '-([0-9]+)$'))::int) FROM leads), 0), 1), true)`).catch(() => {});
+
   // Stable client-code sequence (UUID primary keys have no serial sequence).
   // Seed it from the highest numeric suffix already present so new codes never collide.
   await pool.query('CREATE SEQUENCE IF NOT EXISTS subscriber_client_code_seq').catch(() => {});

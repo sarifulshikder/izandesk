@@ -25,7 +25,8 @@ async function canAccessTicket(req:any, ticketId:string){
   if (!t) return false;
   if (u.role === 'TECHNICIAN') {
     const name = String(u.name||'').toLowerCase(); const id = String(u.id||'');
-    return String(t.assigned_technician_id||'') === id || String(t.assigned_technician_name||'').toLowerCase().includes(name) || !t.assigned_technician_id;
+    const byName = !!name && String(t.assigned_technician_name||'').toLowerCase().includes(name);
+    return (!!id && String(t.assigned_technician_id||'') === id) || byName || !t.assigned_technician_id;
   }
   if (u.role === 'RESELLER') {
     const rid = await resolveResellerIdForUser(req);
@@ -44,7 +45,8 @@ router.get('/', asyncHandler(async (req, res) => {
   const where: string[] = [];
   const params: any[] = [];
   if (u.role === 'TECHNICIAN') {
-    params.push(u.name || '', u.id || '');
+    // An empty name must never turn ILIKE '%%' into "all assigned tickets".
+    params.push(u.name ? String(u.name) : '__no_technician_name__', u.id || '');
     where.push(`(t.assigned_technician_id = $${params.length} OR t.assigned_technician_name ILIKE '%' || $${params.length-1} || '%')`);
   }
   if (u.role === 'RESELLER') {
@@ -78,16 +80,20 @@ router.get('/:id', asyncHandler(async (req, res) => {
            r.name as reseller_name
     FROM tickets t LEFT JOIN subscribers s ON s.id=t.subscriber_id LEFT JOIN resellers r ON r.id=t.reseller_id WHERE t.id=$1`, [req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Ticket not found' });
-  const comments = await pool.query('SELECT * FROM ticket_comments WHERE ticket_id=$1 ORDER BY created_at ASC', [req.params.id]);
+  // Internal staff notes are never exposed to partners or field technicians.
+  const staff = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(user(req).role));
+  const comments = await pool.query(`SELECT * FROM ticket_comments WHERE ticket_id=$1 ${staff ? '' : 'AND COALESCE(is_internal,false)=false'} ORDER BY created_at ASC`, [req.params.id]);
   res.json({ data: { ...r.rows[0], comments: comments.rows } });
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
   const b = req.body || {};
   if (!b.subject) return res.status(400).json({ message: 'subject is required' });
-  const priority = b.priority || 'MEDIUM';
+  const priority = String(b.priority || 'MEDIUM').toUpperCase();
+  if (!['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(priority)) return res.status(400).json({ message: 'Invalid priority' });
   const due = slaDue(priority);
-  const ticketNo = b.ticket_no || await nextTicketNo();
+  // Ticket numbers always come from the database sequence, never the client.
+  const ticketNo = await nextTicketNo();
   let siteAddress = b.site_address || null;
   let siteLat = b.site_latitude != null ? Number(b.site_latitude) : null;
   let siteLng = b.site_longitude != null ? Number(b.site_longitude) : null;
@@ -116,7 +122,7 @@ router.post('/', asyncHandler(async (req, res) => {
   const gps = (siteLat != null && siteLng != null) ? `https://www.google.com/maps/search/?api=1&query=${siteLat},${siteLng}` : (siteAddress ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(siteAddress)}` : null);
   const r = await pool.query(`INSERT INTO tickets(ticket_no,subscriber_id,reseller_id,subject,description,category,priority,status,sla_policy,sla_due_at,assigned_technician_id,assigned_technician_name,assigned_technician_phone,dispatch_status,site_latitude,site_longitude,site_address,gps_nav_url,source,created_by)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
-    [ticketNo,b.subscriber_id||null,b.reseller_id||null,b.subject,b.description||null,b.category||'SUPPORT',priority,b.status||'OPEN',b.sla_policy||`${priority} SLA`,due,b.assigned_technician_id||null,b.assigned_technician_name||null,b.assigned_technician_phone||null,b.assigned_technician_id||b.assigned_technician_name?'DISPATCHED':'UNASSIGNED',siteLat,siteLng,siteAddress,gps,b.source||'PORTAL',user(req).email||user(req).id||'system']);
+    [ticketNo,b.subscriber_id||null,b.reseller_id||null,b.subject,b.description||null,b.category||'SUPPORT',priority,'OPEN',`${priority} SLA`,due,b.assigned_technician_id||null,b.assigned_technician_name||null,b.assigned_technician_phone||null,b.assigned_technician_id||b.assigned_technician_name?'DISPATCHED':'UNASSIGNED',siteLat,siteLng,siteAddress,gps,b.source||'PORTAL',user(req).email||user(req).id||'system']);
   try { await dispatchMessage({ provider: 'TELEGRAM_BOT', channel_type: 'TELEGRAM', body: `New ticket ${r.rows[0].ticket_no}: ${r.rows[0].subject}\nPriority: ${r.rows[0].priority} SLA due: ${new Date(r.rows[0].sla_due_at).toLocaleString()}\nSite: ${r.rows[0].site_address || '-'}`, related_type:'TICKET', related_id:String(r.rows[0].id), requireEnabled:false }); } catch {}
   res.status(201).json({ data: r.rows[0] });
 }));
@@ -146,8 +152,13 @@ router.post('/:id/comments', asyncHandler(async (req, res) => {
   if (!(await canAccessTicket(req, req.params.id))) return res.status(403).json({ message: 'Forbidden' });
   const b = req.body || {};
   if (!b.body) return res.status(400).json({ message: 'body is required' });
+  // Author identity always comes from the session; callers cannot impersonate
+  // staff or mark their own comment as an internal note.
+  const u = user(req);
+  const staff = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(u.role));
+  const internal = staff && b.is_internal === true;
   const r = await pool.query(`INSERT INTO ticket_comments(ticket_id,author_name,author_role,body,is_internal) VALUES($1,$2,$3,$4,$5) RETURNING *`,
-    [req.params.id,b.author_name||user(req).name||user(req).email||'User',b.author_role||user(req).role||null,b.body,!!b.is_internal]);
+    [req.params.id, u.name || u.email || u.id || 'User', u.role || null, b.body, internal]);
   await pool.query('UPDATE tickets SET updated_at=now() WHERE id=$1', [req.params.id]);
   res.status(201).json({ data: r.rows[0] });
 }));

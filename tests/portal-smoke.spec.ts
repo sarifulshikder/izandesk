@@ -735,6 +735,19 @@ test.describe('network & OSS access control', () => {
   });
 });
 
+test.describe('CRM access control', () => {
+  test('leads and messaging configuration are staff-only', async ({ request }) => {
+    const token = await loginToken(request, reseller);
+    const headers = { Authorization: `Bearer ${token}` };
+    expect((await request.get('/api/leads', { headers })).status()).toBe(403);
+    expect((await request.post('/api/leads', { headers, data: { full_name: 'x' } })).status()).toBe(403);
+    expect((await request.get('/api/messaging/channels', { headers })).status()).toBe(403);
+    expect((await request.get('/api/messaging/templates', { headers })).status()).toBe(403);
+    const adminToken = await loginToken(request, admin);
+    expect((await request.get('/api/leads', { headers: { Authorization: `Bearer ${adminToken}` } })).ok()).toBeTruthy();
+  });
+});
+
 test.describe('portal auth security', () => {
   test('subscriber portal login is rate-limited and tokens are role-separated', async ({ request }) => {
     // Unknown identifiers cannot be brute-forced: the 5th failure locks briefly.
@@ -881,6 +894,65 @@ test.describe('reseller mutating flows (opt-in)', () => {
       // Best-effort cleanup if the flow is interrupted.
       await request.post(`/api/resellers/${partner.id}/wallet/topups/${tid}/reject`, { headers: adminHeaders }).catch(() => {});
       throw e;
+    }
+  });
+});
+
+test.describe('CRM mutating flows (opt-in)', () => {
+  test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
+
+  test('ticket comments cannot leak internal notes or impersonate staff', async ({ request }) => {
+    const adminToken = await loginToken(request, admin);
+    const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+    const partners = (await (await request.get('/api/resellers', { headers: adminHeaders })).json()).data || [];
+    const partner = partners.find((r: any) => r.email === reseller.email) || partners[0];
+    test.skip(!partner, 'no reseller seeded');
+
+    const created = await request.post('/api/tickets', {
+      headers: adminHeaders,
+      data: { subject: `E2E CRM ${Date.now()}`, reseller_id: partner.id, ticket_no: 'SPOOFED' },
+    });
+    expect(created.ok()).toBeTruthy();
+    const ticket = (await created.json()).data;
+    expect(ticket.ticket_no).not.toBe('SPOOFED');
+    let ticketId = ticket.id;
+    try {
+      await request.post(`/api/tickets/${ticketId}/comments`, {
+        headers: adminHeaders, data: { body: 'internal-only note', is_internal: true },
+      });
+      const resellerToken = await loginToken(request, reseller);
+      const spoof = await request.post(`/api/tickets/${ticketId}/comments`, {
+        headers: { Authorization: `Bearer ${resellerToken}` },
+        data: { body: 'partner note', author_role: 'SUPER_ADMIN', author_name: 'Fake Admin', is_internal: true },
+      });
+      expect(spoof.ok()).toBeTruthy();
+      const spoofed = (await spoof.json()).data;
+      expect(spoofed.author_role).toBe('RESELLER');
+      expect(spoofed.is_internal).toBe(false);
+
+      const resellerView = await (await request.get(`/api/tickets/${ticketId}`, { headers: { Authorization: `Bearer ${resellerToken}` } })).json();
+      const resellerComments = resellerView.data.comments || [];
+      expect(resellerComments.some((c: any) => c.body === 'internal-only note')).toBe(false);
+      expect(resellerComments.some((c: any) => c.body === 'partner note')).toBe(true);
+      const adminView = await (await request.get(`/api/tickets/${ticketId}`, { headers: adminHeaders })).json();
+      expect((adminView.data.comments || []).some((c: any) => c.body === 'internal-only note')).toBe(true);
+    } finally {
+      await request.put(`/api/tickets/${ticketId}`, { headers: adminHeaders, data: { status: 'CLOSED' } }).catch(() => {});
+    }
+  });
+
+  test('lead numbers are unique and sequential', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const ids: string[] = [];
+    try {
+      const a = await (await request.post('/api/leads', { headers, data: { full_name: 'E2E Lead A' } })).json();
+      const b = await (await request.post('/api/leads', { headers, data: { full_name: 'E2E Lead B' } })).json();
+      ids.push(a.lead.id, b.lead.id);
+      expect(a.lead.lead_no).not.toBe(b.lead.lead_no);
+      expect(a.lead.lead_no).toMatch(/^LD-\d{6}-\d{5}$/);
+    } finally {
+      for (const id of ids) await request.delete(`/api/leads/${id}`, { headers }).catch(() => {});
     }
   });
 });

@@ -11,7 +11,8 @@ function requireMessagingRole(req:any,res:any){
   return true;
 }
 
-router.get('/channels', asyncHandler(async (_req, res) => {
+router.get('/channels', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
   const r = await pool.query("SELECT id,name,channel_type,provider,enabled,is_default,config,sender_id,notes,updated_at,(credentials IS NOT NULL AND credentials <> '{}'::jsonb) as has_credentials,(webhook_secret IS NOT NULL AND webhook_secret <> '') as has_webhook_secret FROM messaging_channels ORDER BY channel_type, provider, name");
   res.json({ data: r.rows });
 }));
@@ -37,7 +38,8 @@ router.put('/channels/:id', asyncHandler(async (req, res) => {
   res.json({ data: r.rows[0] });
 }));
 
-router.get('/templates', asyncHandler(async (_req, res) => {
+router.get('/templates', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
   const r = await pool.query('SELECT * FROM message_templates ORDER BY channel_type, name');
   res.json({ data: r.rows });
 }));
