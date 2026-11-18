@@ -679,6 +679,21 @@ test.describe('billing payment security', () => {
   });
 });
 
+test.describe('portal auth security', () => {
+  test('subscriber portal login is rate-limited and tokens are role-separated', async ({ request }) => {
+    // Unknown identifiers cannot be brute-forced: the 5th failure locks briefly.
+    const identifier = `E2E-PORTAL-${Date.now()}`;
+    for (let i = 0; i < 4; i++) {
+      expect((await request.post('/api/portal/login', { data: { client_code: identifier, password: 'wrong' } })).status()).toBe(401);
+    }
+    expect((await request.post('/api/portal/login', { data: { client_code: identifier, password: 'wrong' } })).status()).toBe(429);
+
+    // A staff JWT must not be accepted as a portal subscriber session.
+    const adminToken = await loginToken(request, admin);
+    expect((await request.get('/api/portal/me', { headers: { Authorization: `Bearer ${adminToken}` } })).status()).toBe(401);
+  });
+});
+
 test.describe('billing mutating flows (opt-in)', () => {
   test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
 
@@ -723,5 +738,49 @@ test.describe('billing mutating flows (opt-in)', () => {
     const row = (list.data || []).find((p: any) => p.payment_ref === payment.payment_ref);
     expect(row).toBeTruthy();
     expect(Number(row.amount)).toBe(10);
+  });
+});
+
+test.describe('portal mutating flows (opt-in)', () => {
+  test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
+
+  test('hashed subscriber passwords work and a change invalidates old sessions', async ({ request }) => {
+    const adminToken = await loginToken(request, admin);
+    const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+    const code = `PT-E2E-${Date.now().toString().slice(-6)}`;
+    const created = await request.post('/api/subscribers', {
+      headers: adminHeaders,
+      data: { full_name: 'Portal Auth Test', client_code: code, username: code, password: 'PortalTest@123' },
+    });
+    expect(created.ok()).toBeTruthy();
+    const subId = (await created.json()).id;
+    let portalToken = '';
+    try {
+      const login = await request.post('/api/portal/login', { data: { client_code: code, password: 'PortalTest@123' } });
+      expect(login.ok()).toBeTruthy();
+      portalToken = (await login.json()).token;
+      const headers = { Authorization: `Bearer ${portalToken}` };
+      expect((await request.get('/api/portal/me', { headers })).ok()).toBeTruthy();
+
+      const change = await request.post('/api/portal/change-password', {
+        headers, data: { current_password: 'PortalTest@123', new_password: 'PortalTest@456' },
+      });
+      expect(change.ok()).toBeTruthy();
+      // The previously issued token is now stale.
+      expect((await request.get('/api/portal/me', { headers })).status()).toBe(401);
+      const relogin = await request.post('/api/portal/login', { data: { client_code: code, password: 'PortalTest@456' } });
+      expect(relogin.ok()).toBeTruthy();
+      portalToken = (await relogin.json()).token;
+      expect((await request.get('/api/portal/me', { headers: { Authorization: `Bearer ${portalToken}` } })).ok()).toBeTruthy();
+
+      // KYC uploads reject non-image/non-PDF content instead of storing it.
+      const upload = await request.post('/api/portal/documents', {
+        headers: { Authorization: `Bearer ${portalToken}` },
+        multipart: { file: { name: 'evil.txt', mimeType: 'text/plain', buffer: Buffer.from('not a document') } },
+      });
+      expect(upload.status()).toBe(400);
+    } finally {
+      await request.delete(`/api/subscribers/${subId}`, { headers: adminHeaders });
+    }
   });
 });

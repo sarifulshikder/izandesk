@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import express = require('express');
+import crypto = require('crypto');
 import jwt = require('jsonwebtoken');
 import multer = require('multer');
 import path = require('path');
@@ -10,32 +11,63 @@ import { getInvoiceWithItems } from '../integrations/billing';
 import { getKernel } from '../kernel/kernel-instance';
 import { renderSimpleInvoicePdf } from '../integrations/pdf';
 import { nextTicketNo } from '../utils/ticket-no';
+import { hashPassword, verifyPassword, isHashed } from '../utils/password';
+import { validatePasswordPolicy } from '../integrations/settings';
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
 const uploadDir = path.resolve(__dirname, '../../../uploads/kyc');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+const MAX_KYC_BYTES = 5 * 1024 * 1024;
+const KYC_MIME_RE = /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/i;
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
-    const safe = Date.now() + '-' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    cb(null, safe);
+    // Unguessable, extension-bounded name — no original filename is persisted.
+    const ext = path.extname(file.originalname).toLowerCase();
+    const safeExt = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.pdf'].includes(ext) ? ext : '';
+    cb(null, crypto.randomUUID() + safeExt);
   },
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: MAX_KYC_BYTES, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (!KYC_MIME_RE.test(file.mimetype)) {
+      const err: any = new Error('Only PNG, JPEG, WebP, GIF or PDF files are allowed');
+      err.status = 400;
+      return cb(err);
+    }
+    cb(null, true);
+  },
+});
 
-function issuePortalToken(sub: any) {
-  return jwt.sign({ type: 'PORTAL_SUBSCRIBER', sub: sub.id, client_code: sub.client_code }, JWT_SECRET, { expiresIn: '7d' });
+// Tokens are bound to the subscriber's current password hash, so changing the
+// password invalidates every portal session issued before the change.
+function tokenVersion(password: any) {
+  return crypto.createHash('sha256').update(String(password || '')).digest('hex').slice(0, 16);
 }
-function portalAuth(req: any, res: any, next: any) {
+function issuePortalToken(sub: any) {
+  return jwt.sign({ type: 'PORTAL_SUBSCRIBER', sub: sub.id, client_code: sub.client_code, ver: tokenVersion(sub.password) }, JWT_SECRET, { expiresIn: '7d' });
+}
+async function portalAuth(req: any, res: any, next: any) {
   const h = req.headers.authorization;
   if (!h?.startsWith('Bearer ')) return res.status(401).json({ message: 'Missing portal token' });
   try {
     const p: any = jwt.verify(h.slice(7), JWT_SECRET);
-    if (p?.type !== 'PORTAL_SUBSCRIBER' || !p?.sub) throw new Error('bad');
+    if (p?.type !== 'PORTAL_SUBSCRIBER' || !p?.sub || !p?.ver) throw new Error('bad');
+    const row = (await pool.query('SELECT password FROM subscribers WHERE id=$1', [p.sub])).rows[0];
+    if (!row || tokenVersion(row.password) !== p.ver) throw new Error('stale');
     req.portal = p; next();
   } catch { return res.status(401).json({ message: 'Invalid or expired portal session' }); }
 }
+
+// Portal login attempts are rate-limited per identifier + IP so a subscriber
+// account cannot be brute-forced with guessed client codes/passwords.
+interface PortalAttempt { fails: number; lockedUntil: number }
+const portalLoginAttempts = new Map<string, PortalAttempt>();
+const PORTAL_MAX_ATTEMPTS = 5;
+const PORTAL_LOCK_MINUTES = 15;
 
 async function getSubscriber(id: string) {
   const r = await pool.query(`SELECT id, client_code, full_name, username, phone, email, status, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, address, connection_type, provisioning_mode, suspension_stage, walled_garden, created_at, nid_number, auto_pay_enabled, preferred_gateway, fup_exceeded, fup_applied_at, fup_exempt
@@ -46,15 +78,36 @@ async function getSubscriber(id: string) {
 router.post('/login', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const id = String(b.client_code || b.username || b.phone || '').trim();
-  const pass = String(b.password || '').trim();
+  const pass = String(b.password || '');
   if (!id || !pass) return res.status(400).json({ message: 'client_code/username/phone and password are required' });
+  const key = `${id.toLowerCase()}|${req.ip}`;
+  const now = Date.now();
+  const att = portalLoginAttempts.get(key);
+  if (att && att.lockedUntil > now) {
+    return res.status(429).json({ message: `Too many failed attempts. Try again in ${Math.ceil((att.lockedUntil - now) / 60000)} min.` });
+  }
   const r = await pool.query(`SELECT s.id, s.client_code, s.full_name, s.username, s.phone, s.email, s.status, s.package_name, s.bandwidth_mbps, s.monthly_bill, s.current_due, s.expiry_date, s.address, s.connection_type, s.password
     FROM subscribers s WHERE (lower(s.client_code)=lower($1) OR lower(s.username)=lower($1) OR s.phone=$1) LIMIT 1`, [id]);
   const s = r.rows[0];
-  if (!s) return res.status(401).json({ message: 'Invalid credentials' });
-  const stored = s.password ? String(s.password) : '';
-  const ok = stored ? (stored === pass) : (pass === String(s.client_code || '') || pass === String(s.username || '') || pass === String(s.phone || ''));
-  if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
+  const stored = s?.password ? String(s.password) : '';
+  let ok = false;
+  if (s) {
+    if (stored && isHashed(stored)) ok = await verifyPassword(pass, stored);
+    else if (stored) ok = stored === pass;
+    else ok = (pass === String(s.client_code || '') || pass === String(s.username || '') || pass === String(s.phone || ''));
+  }
+  if (!ok) {
+    const a = portalLoginAttempts.get(key) || { fails: 0, lockedUntil: 0 };
+    a.fails += 1;
+    if (a.fails >= PORTAL_MAX_ATTEMPTS) {
+      a.lockedUntil = now + PORTAL_LOCK_MINUTES * 60000; a.fails = 0;
+      portalLoginAttempts.set(key, a);
+      return res.status(429).json({ message: `Too many failed attempts. Locked for ${PORTAL_LOCK_MINUTES} min.` });
+    }
+    portalLoginAttempts.set(key, a);
+    return res.status(401).json({ message: 'Invalid credentials' });
+  }
+  portalLoginAttempts.delete(key);
   const token = issuePortalToken(s);
   const { password, ...safe } = s;
   res.json({ ok: true, token, subscriber: safe });
@@ -123,15 +176,19 @@ router.put('/profile', portalAuth, asyncHandler(async (req, res) => {
 router.post('/change-password', portalAuth, asyncHandler(async (req, res) => {
   const id = (req as any).portal.sub;
   const b = req.body || {};
-  const newPass = String(b.new_password || b.password || '').trim();
-  const cur = String(b.current_password || '').trim();
-  if (newPass.length < 4) return res.status(400).json({ message: 'New password must be at least 4 characters' });
+  const newPass = String(b.new_password || b.password || '');
+  const cur = String(b.current_password || '');
+  const pwErr = await validatePasswordPolicy(newPass);
+  if (pwErr) return res.status(400).json({ message: pwErr });
   const row = (await pool.query('SELECT password, client_code, username, phone FROM subscribers WHERE id=$1', [id])).rows[0];
   if (!row) return res.status(404).json({ message: 'Subscriber not found' });
   const stored = row.password ? String(row.password) : '';
-  const okCurrent = stored ? (stored === cur) : (cur === String(row.client_code||'') || cur === String(row.username||'') || cur === String(row.phone||''));
+  let okCurrent = false;
+  if (stored && isHashed(stored)) okCurrent = await verifyPassword(cur, stored);
+  else if (stored) okCurrent = stored === cur;
+  else okCurrent = (cur === String(row.client_code||'') || cur === String(row.username||'') || cur === String(row.phone||''));
   if (!okCurrent) return res.status(401).json({ message: 'Current password is incorrect' });
-  await pool.query('UPDATE subscribers SET password=$1, updated_at=now() WHERE id=$2', [newPass, id]);
+  await pool.query('UPDATE subscribers SET password=$1, updated_at=now() WHERE id=$2', [await hashPassword(newPass), id]);
   res.json({ ok: true, message: 'Password updated' });
 }));
 
@@ -308,7 +365,7 @@ router.post('/package-request', portalAuth, asyncHandler(async (req, res) => {
 
 router.get('/documents', portalAuth, asyncHandler(async (req, res) => {
   const id = (req as any).portal.sub;
-  const r = await pool.query('SELECT id, doc_type, file_name, file_path, mime_type, uploaded_at FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [id]);
+  const r = await pool.query('SELECT id, doc_type, file_name, mime_type, uploaded_at FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [id]);
   res.json({ ok: true, data: r.rows });
 }));
 
@@ -317,10 +374,15 @@ router.get('/documents/:docId/download', portalAuth, asyncHandler(async (req, re
   const r = await pool.query('SELECT * FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, id]);
   const doc = r.rows[0];
   if (!doc) return res.status(404).json({ message: 'Document not found' });
-  const fp = path.join(uploadDir, doc.file_path);
+  const fp = path.resolve(uploadDir, String(doc.file_path || ''));
+  if (!fp.startsWith(uploadDir + path.sep)) return res.status(400).json({ message: 'Invalid document path' });
   if (!fs.existsSync(fp)) return res.status(404).json({ message: 'File not found' });
-  res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.file_name || 'document')}"`);
+  const mime = String(doc.mime_type || '');
+  const safeName = String(doc.file_name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
+  res.setHeader('Content-Type', KYC_MIME_RE.test(mime) ? mime : 'application/octet-stream');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', 'sandbox');
+  res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
   fs.createReadStream(fp).pipe(res);
 }));
 
