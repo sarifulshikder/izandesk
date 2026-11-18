@@ -733,6 +733,35 @@ test.describe('network & OSS access control', () => {
       expect((await request.get(`/api/network/routers/${routerId}/mikrotik/import-preview?type=ppp-secrets`, { headers })).status()).toBe(403);
     }
   });
+
+  test('WireGuard hub/peer secrets are hidden from network read roles', async ({ request }) => {
+    const billingToken = await loginToken(request, { email: 'billing@izandesk.com', password: 'billing123' });
+    const readHeaders = { Authorization: `Bearer ${billingToken}` };
+
+    const hubRes = await (await request.get('/api/wireguard/hub', { headers: readHeaders })).json();
+    const hub = hubRes.hub || {};
+    expect('private_key' in hub).toBe(false);
+    expect(hub.has_private_key).toBe(true);
+    expect('raw' in (hubRes.runtime || {})).toBe(false);
+    expect((hubRes.runtime?.peers || []).every((p: any) => !('preshared_key' in p))).toBe(true);
+
+    const peersRes = await (await request.get('/api/wireguard/peers', { headers: readHeaders })).json();
+    const peers: any[] = peersRes.data || [];
+    expect(peers.every((p) => !('private_key' in p) && !('preshared_key' in p))).toBe(true);
+    expect(peers.every((p) => 'public_key' in p)).toBe(true); // still usable for status/config
+
+    const peerId = peers[0]?.id;
+    if (peerId) {
+      // Bootstrap scripts embed the peer private key — key managers only.
+      expect((await request.get(`/api/wireguard/peers/${peerId}/bootstrap`, { headers: readHeaders })).status()).toBe(403);
+      const adminToken = await loginToken(request, admin);
+      const detail = await (await request.get(`/api/wireguard/peers/${peerId}`, { headers: { Authorization: `Bearer ${adminToken}` } })).json();
+      expect('private_key' in (detail.peer || {})).toBe(false);
+      const adminBootstrap = await request.get(`/api/wireguard/peers/${peerId}/bootstrap`, { headers: { Authorization: `Bearer ${adminToken}` } });
+      expect(adminBootstrap.ok()).toBeTruthy();
+      expect((await adminBootstrap.json()).script).toContain('private-key=');
+    }
+  });
 });
 
 test.describe('CRM access control', () => {

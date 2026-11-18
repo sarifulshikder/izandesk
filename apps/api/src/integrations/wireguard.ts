@@ -1,11 +1,10 @@
-import { execFile, exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 
 const execFileAsync = promisify(execFile);
-const execAsync = promisify(exec);
 
 export type WgHubConfig = any;
 export type WgPeer = any;
@@ -17,33 +16,19 @@ function b64urlToBuf(s: string) {
 }
 
 export async function generateWgKeypair(): Promise<{ privateKey: string; publicKey: string }> {
-  // Prefer wg tools if available
-  try {
-    const { stdout: privOut } = await execFileAsync('wg', ['genkey'], { timeout: 5000 });
-    const privateKey = String(privOut || '').trim();
-    const { stdout: pubOut } = await execFileAsync('wg', ['pubkey'], { timeout: 5000, maxBuffer: 1024 * 64 } as any);
-    // need to pipe priv to pubkey
-  } catch {}
-  try {
-    const { stdout } = await execAsync('wg genkey | tee /tmp/.wgpriv | wg pubkey; echo "---SEP---"; cat /tmp/.wgpriv', { timeout: 5000 });
-    const parts = String(stdout || '').split('---SEP---');
-    if (parts.length >= 2) {
-      const publicKey = parts[0].trim();
-      const privateKey = parts[1].trim();
-      if (privateKey && publicKey) {
-        try { await fs.unlink('/tmp/.wgpriv'); } catch {}
-        return { privateKey, publicKey };
-      }
-    }
-  } catch {}
-  // Fallback: Node X25519 (best-effort). Prefer wg tools in production for canonical WireGuard keys.
+  // Generate the X25519 pair in-process. The previous implementation piped the
+  // private key through a shell with a fixed `/tmp/.wgpriv` file — predictable
+  // in a world-writable directory (symlink/overwrite + key disclosure, and a
+  // race between concurrent requests). Node's X25519 pair is a valid WireGuard
+  // keypair: the JWK `d`/`x` values are the raw 32-byte private/public keys and
+  // WireGuard applies the same RFC 7748 clamping on use.
   const { publicKey, privateKey } = crypto.generateKeyPairSync('x25519');
   const privJwk: any = privateKey.export({ format: 'jwk' });
   const pubJwk: any = publicKey.export({ format: 'jwk' });
-  const priv = b64urlToBuf(privJwk.d);
-  const pub = b64urlToBuf(pubJwk.x);
-  // Use the generated keypair as-is (valid X25519). Clamping is handled by WireGuard implementations when applied.
-  return { privateKey: priv.toString('base64'), publicKey: pub.toString('base64') };
+  return {
+    privateKey: b64urlToBuf(privJwk.d).toString('base64'),
+    publicKey: b64urlToBuf(pubJwk.x).toString('base64'),
+  };
 }
 
 export async function generatePresharedKey(): Promise<string> {
@@ -67,6 +52,14 @@ export function intToIp(n: number): string {
   return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
 }
 
+/** Peer/hub fields are operator-supplied and are interpolated into generated
+ *  WireGuard/RouterOS config. Strip line breaks and quoting/shell metacharacters
+ *  so a crafted name or endpoint cannot break out of its line and inject extra
+ *  directives into a config the operator later applies to a router. */
+function scriptSafe(v: any): string {
+  return String(v ?? '').replace(/[\r\n;\\"'`$]/g, '').trim();
+}
+
 export async function allocateTunnelIp(pool: any, overlayCidr: string, hubAddress: string): Promise<string> {
   const used = new Set<string>((await pool.query('SELECT tunnel_ip FROM wg_peers')).rows.map((r: any) => String(r.tunnel_ip || '').split('/')[0]));
   const hubIp = String(hubAddress || '10.77.0.1/16').split('/')[0];
@@ -85,23 +78,23 @@ export async function allocateTunnelIp(pool: any, overlayCidr: string, hubAddres
 export function buildHubWgConfig(hub: WgHubConfig, peers: WgPeer[]): string {
   const lines: string[] = [];
   lines.push('[Interface]');
-  lines.push(`Address = ${hub.hub_address || '10.77.0.1/16'}`);
-  if (hub.listen_port) lines.push(`ListenPort = ${hub.listen_port}`);
-  if (hub.private_key) lines.push(`PrivateKey = ${hub.private_key}`);
-  if (hub.mtu) lines.push(`MTU = ${hub.mtu}`);
+  lines.push(`Address = ${scriptSafe(hub.hub_address || '10.77.0.1/16')}`);
+  if (hub.listen_port) lines.push(`ListenPort = ${scriptSafe(hub.listen_port)}`);
+  if (hub.private_key) lines.push(`PrivateKey = ${scriptSafe(hub.private_key)}`);
+  if (hub.mtu) lines.push(`MTU = ${scriptSafe(hub.mtu)}`);
   // basic forwarding hooks can be added by container; keep config minimal/portable
   for (const p of peers) {
     if (!p.public_key) continue;
     const allowed = new Set<string>();
-    const tip = String(p.tunnel_ip || '').split(',')[0].trim();
+    const tip = scriptSafe(String(p.tunnel_ip || '').split(',')[0].trim());
     if (tip) allowed.add(tip.includes('/') ? tip : `${tip}/32`);
-    for (const a of (p.allowed_ips || [])) if (a) allowed.add(String(a));
-    for (const c of (p.olt_mgmt_cidrs || [])) if (c) allowed.add(String(c));
+    for (const a of (p.allowed_ips || [])) { const v = scriptSafe(a); if (v) allowed.add(v); }
+    for (const c of (p.olt_mgmt_cidrs || [])) { const v = scriptSafe(c); if (v) allowed.add(v); }
     lines.push('');
     lines.push('[Peer]');
-    if (p.name || p.site_name) lines.push(`# ${p.name || ''}${p.site_name ? ' (' + p.site_name + ')' : ''}`);
-    lines.push(`PublicKey = ${p.public_key}`);
-    if (p.preshared_key) lines.push(`PresharedKey = ${p.preshared_key}`);
+    if (p.name || p.site_name) lines.push(`# ${scriptSafe(p.name || '')}${p.site_name ? ' (' + scriptSafe(p.site_name) + ')' : ''}`);
+    lines.push(`PublicKey = ${scriptSafe(p.public_key)}`);
+    if (p.preshared_key) lines.push(`PresharedKey = ${scriptSafe(p.preshared_key)}`);
     if (allowed.size) lines.push(`AllowedIPs = ${Array.from(allowed).join(', ')}`);
   }
   return lines.join('\n') + '\n';
@@ -109,23 +102,22 @@ export function buildHubWgConfig(hub: WgHubConfig, peers: WgPeer[]): string {
 
 export function buildRouterOsScript(hub: WgHubConfig, peer: WgPeer): string {
   const ifName = `wg-${(peer.name || 'izandesk').toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 12) || 'izandesk'}`;
-  const hubEndpoint = String(hub.endpoint_host || '<HUB_PUBLIC_IP_OR_DNS>').trim();
+  const hubEndpoint = scriptSafe(String(hub.endpoint_host || '<HUB_PUBLIC_IP_OR_DNS>').trim());
   const hubPort = Number(hub.endpoint_port || hub.listen_port || 51820);
-  const hubPub = String(hub.public_key || '<HUB_PUBLIC_KEY>').trim();
-  const peerAddr = String(peer.tunnel_ip || '10.77.0.2/32').trim();
+  const hubPub = scriptSafe(String(hub.public_key || '<HUB_PUBLIC_KEY>').trim());
+  const peerAddr = scriptSafe(String(peer.tunnel_ip || '10.77.0.2/32').trim());
   const keepalive = Number(peer.keepalive_sec || 25);
   const allowed = new Set<string>();
   // route overlay and hub tunnel network by default
-  const overlay = String(hub.overlay_cidr || '10.77.0.0/16');
-  allowed.add(overlay);
-  for (const a of (peer.allowed_ips || [])) if (a) allowed.add(String(a));
+  allowed.add(scriptSafe(String(hub.overlay_cidr || '10.77.0.0/16')));
+  for (const a of (peer.allowed_ips || [])) { const v = scriptSafe(a); if (v) allowed.add(v); }
   const allowedStr = Array.from(allowed).join(',');
   const lines: string[] = [];
   lines.push(`# IzanDesk WireGuard bootstrap (RouterOS v7+)`);
-  lines.push(`# Peer: ${peer.name || peer.id}  Site: ${peer.site_name || ''}`);
-  lines.push(`/interface/wireguard add name=${ifName} listen-port=51820 mtu=${hub.mtu || 1420} comment="IzanDesk-WG";`);
+  lines.push(`# Peer: ${scriptSafe(peer.name || peer.id)}  Site: ${scriptSafe(peer.site_name || '')}`);
+  lines.push(`/interface/wireguard add name=${ifName} listen-port=51820 mtu=${scriptSafe(hub.mtu || 1420)} comment="IzanDesk-WG";`);
   if (peer.private_key) {
-    lines.push(`/interface/wireguard set [find name=${ifName}] private-key="${peer.private_key}";`);
+    lines.push(`/interface/wireguard set [find name=${ifName}] private-key="${scriptSafe(peer.private_key)}";`);
   } else {
     lines.push(`# Set private-key if provided, or let RouterOS keep generated key and register its public key in IzanDesk.`);
   }

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler, networkGuard } from './helpers';
+import { asyncHandler, networkGuard, hasNetworkWrite } from './helpers';
 import { allocateTunnelIp, buildHubWgConfig, buildRouterOsScript, generatePresharedKey, generateWgKeypair, readHubRuntimeStatus, writeHubConfigFile } from '../integrations/wireguard';
 import { mikrotikProvisionWireGuard } from '../integrations/mikrotik';
 import * as path from 'path';
@@ -8,6 +8,33 @@ import * as path from 'path';
 const router: Router = Router();
 router.use(networkGuard);
 const WG_CONFIG_DIR = process.env.WG_CONFIG_DIR || path.resolve(__dirname, '../../../../docker/wg-hub/config');
+
+// WireGuard private/preshared keys are live tunnel credentials. The list/detail
+// endpoints are reachable by every network *read* role (BILLING_OPERATOR,
+// TECHNICIAN), so strip secrets before responding — the same boundary already
+// applied to MikroTik secrets in import-preview and RADIUS passwords.
+function sanitizeHub<T = any>(hub: T): T {
+  if (!hub || typeof hub !== 'object') return hub;
+  const { private_key, ...safe } = hub as any;
+  return { ...safe, has_private_key: !!private_key } as T;
+}
+function sanitizePeer<T = any>(peer: T): T {
+  if (!peer || typeof peer !== 'object') return peer;
+  const { private_key, preshared_key, ...safe } = peer as any;
+  return { ...safe, has_private_key: !!private_key, has_preshared_key: !!preshared_key } as T;
+}
+/** `wg show all dump` raw output contains preshared keys — never return it. */
+function sanitizeRuntime<T = any>(runtime: T): T {
+  if (!runtime || typeof runtime !== 'object') return runtime;
+  const { raw, peers, ...safe } = runtime as any;
+  return {
+    ...safe,
+    peers: (peers || []).map((p: any) => {
+      const { preshared_key, ...rest } = p;
+      return { ...rest, has_preshared_key: !!preshared_key };
+    }),
+  } as T;
+}
 
 async function getHub() {
   const r = await pool.query('SELECT * FROM wg_hub_config WHERE id=1');
@@ -17,7 +44,7 @@ async function getHub() {
 router.get('/hub', asyncHandler(async (_req, res) => {
   const hub = await getHub();
   const runtime = await readHubRuntimeStatus(WG_CONFIG_DIR);
-  res.json({ hub, runtime });
+  res.json({ hub: sanitizeHub(hub), runtime: sanitizeRuntime(runtime) });
 }));
 
 router.put('/hub', asyncHandler(async (req, res) => {
@@ -53,7 +80,7 @@ router.put('/hub', asyncHandler(async (req, res) => {
     const peers = (await pool.query('SELECT * FROM wg_peers')).rows;
     await writeHubConfigFile(WG_CONFIG_DIR, hub, peers);
   } catch (e) { /* best-effort */ }
-  res.json({ hub });
+  res.json({ hub: sanitizeHub(hub) });
 }));
 
 router.post('/hub/init', asyncHandler(async (req, res) => {
@@ -67,9 +94,9 @@ router.post('/hub/init', asyncHandler(async (req, res) => {
   try {
     const peers = (await pool.query('SELECT * FROM wg_peers')).rows;
     const file = await writeHubConfigFile(WG_CONFIG_DIR, hub, peers);
-    return res.json({ ok: true, hub, config_file: file, note: 'Hub keys/config ready. Ensure wg-hub container/service applies this config and UDP port is reachable.' });
+    return res.json({ ok: true, hub: sanitizeHub(hub), config_file: file, note: 'Hub keys/config ready. Ensure wg-hub container/service applies this config and UDP port is reachable.' });
   } catch (e: any) {
-    return res.json({ ok: true, hub, warning: `Config file write failed: ${e.message}` });
+    return res.json({ ok: true, hub: sanitizeHub(hub), warning: `Config file write failed: ${e.message}` });
   }
 }));
 
@@ -86,7 +113,7 @@ router.get('/peers', asyncHandler(async (_req, res) => {
       online: rt ? (Date.now()/1000 - Number(rt.latest_handshake || 0) < 180) : false,
     };
   });
-  res.json({ data: enriched, runtime_ok: runtime.ok, runtime_error: runtime.error || null, runtime_source: runtime.source || null });
+  res.json({ data: enriched.map(sanitizePeer), runtime_ok: runtime.ok, runtime_error: runtime.error || null, runtime_source: runtime.source || null });
 }));
 
 router.post('/peers', asyncHandler(async (req, res) => {
@@ -112,15 +139,17 @@ router.post('/peers', asyncHandler(async (req, res) => {
     const peers = (await pool.query('SELECT * FROM wg_peers')).rows;
     await writeHubConfigFile(WG_CONFIG_DIR, hub, peers);
   } catch {}
-  res.status(201).json({ peer, bootstrap_script: buildRouterOsScript(hub, peer) });
+  res.status(201).json({ peer: sanitizePeer(peer), bootstrap_script: buildRouterOsScript(hub, peer) });
 }));
 
 router.get('/peers/:id', asyncHandler(async (req, res) => {
   const r = await pool.query(`SELECT p.*, nr.name as router_name, nr.host as router_host, nr.integration_mode as router_integration_mode, nr.username as router_username
     FROM wg_peers p LEFT JOIN network_routers nr ON nr.id=p.router_id WHERE p.id=$1`, [req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Peer not found' });
-  const hub = await getHub();
-  res.json({ peer: r.rows[0], bootstrap_script: buildRouterOsScript(hub, r.rows[0]) });
+  // The bootstrap script embeds the peer's private key — only key managers
+  // (network write roles) should receive it on a read request.
+  const bootstrap_script = hasNetworkWrite(req) ? buildRouterOsScript(await getHub(), r.rows[0]) : null;
+  res.json({ peer: sanitizePeer(r.rows[0]), bootstrap_script });
 }));
 
 router.put('/peers/:id', asyncHandler(async (req, res) => {
@@ -133,7 +162,7 @@ router.put('/peers/:id', asyncHandler(async (req, res) => {
     [b.router_id ?? cur.router_id, b.name ?? cur.name, b.site_name ?? cur.site_name, b.tunnel_ip ?? cur.tunnel_ip, allowed_ips, Number(b.keepalive_sec ?? cur.keepalive_sec ?? 25), b.provision_mode ?? cur.provision_mode, b.notes ?? cur.notes, olt_mgmt_cidrs, req.params.id]);
   const hub = await getHub();
   try { const peers = (await pool.query('SELECT * FROM wg_peers')).rows; await writeHubConfigFile(WG_CONFIG_DIR, hub, peers); } catch {}
-  res.json({ peer: r.rows[0], bootstrap_script: buildRouterOsScript(hub, r.rows[0]) });
+  res.json({ peer: sanitizePeer(r.rows[0]), bootstrap_script: buildRouterOsScript(hub, r.rows[0]) });
 }));
 
 router.delete('/peers/:id', asyncHandler(async (req, res) => {
@@ -144,11 +173,13 @@ router.delete('/peers/:id', asyncHandler(async (req, res) => {
 }));
 
 router.get('/peers/:id/bootstrap', asyncHandler(async (req, res) => {
+  // The bootstrap script contains the peer private key — key managers only.
+  if (!hasNetworkWrite(req)) return res.status(403).json({ message: 'Insufficient permissions to view router bootstrap credentials' });
   const r = await pool.query('SELECT * FROM wg_peers WHERE id=$1', [req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Peer not found' });
   const hub = await getHub();
   const script = buildRouterOsScript(hub, r.rows[0]);
-  res.json({ script, hub: { endpoint_host: hub.endpoint_host, endpoint_port: hub.endpoint_port, public_key: hub.public_key, overlay_cidr: hub.overlay_cidr }, peer: r.rows[0] });
+  res.json({ script, hub: { endpoint_host: hub.endpoint_host, endpoint_port: hub.endpoint_port, public_key: hub.public_key, overlay_cidr: hub.overlay_cidr }, peer: sanitizePeer(r.rows[0]) });
 }));
 
 router.post('/peers/:id/provision', asyncHandler(async (req, res) => {
