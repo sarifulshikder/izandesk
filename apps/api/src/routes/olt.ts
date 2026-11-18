@@ -10,8 +10,11 @@ router.use(networkGuard);
 
 function opticalStatus(rx: number | null) {
   if (rx == null) return 'UNKNOWN';
-  if (rx >= -8 || rx <= -30) return 'CRITICAL';
-  if (rx <= -27) return 'WARNING';
+  // Over-power (>= -8 dBm) and severe loss (<= -27 dBm) are both critical;
+  // -27..-25 is a warning. The old ordering made -29 "WARNING" but -30
+  // "CRITICAL", which inverted the severity of weaker signals.
+  if (rx >= -8 || rx <= -27) return 'CRITICAL';
+  if (rx <= -25) return 'WARNING';
   return 'NORMAL';
 }
 
@@ -126,8 +129,10 @@ router.post('/olts/:id/discover', asyncHandler(async (req, res) => {
   const olt = (await pool.query('SELECT * FROM olts WHERE id=$1',[req.params.id])).rows[0];
   if (!olt) return res.status(404).json({ message: 'OLT not found' });
   const result = await oltDiscoverOnus(olt);
+  // Simulated fallback data must never be persisted as real topology.
+  const simulated = result.mode === 'simulated';
   const discovered: any[] = [];
-  for (const n of (result.onus || [])) {
+  for (const n of (simulated ? [] : (result.onus || []))) {
     const rx = n.rx_power_dbm != null ? Number(n.rx_power_dbm) : null;
     const tx = n.tx_power_dbm != null ? Number(n.tx_power_dbm) : null;
     const temp = n.temperature_c != null ? Number(n.temperature_c) : null;
@@ -157,10 +162,10 @@ router.post('/olts/:id/discover', asyncHandler(async (req, res) => {
       [olt.id, n.pon_port || '0/1/1', n.onu_id || null, n.serial_number, n.name || `ONU-${n.serial_number}`, status, rx, tx, temp, volt, bias, mac, dist, lastDown]);
     discovered.push({ ...r.rows[0], optical_status: opticalStatus(r.rows[0].rx_power_dbm != null ? Number(r.rows[0].rx_power_dbm) : null) });
   }
-  if (result.ok) await pool.query('UPDATE olts SET status=\'ONLINE\', last_seen_at=now(), updated_at=now() WHERE id=$1',[olt.id]);
+  if (result.ok && !simulated) await pool.query('UPDATE olts SET status=\'ONLINE\', last_seen_at=now(), updated_at=now() WHERE id=$1',[olt.id]);
   let autoLinked: any = null;
   try { autoLinked = await autoLinkOnusBulk({ allowFdb: true, limit: 300 }); } catch {}
-  res.json({ ok: !!result.ok, mode: result.mode, discovered: discovered.length, onus: discovered, auto_linked: autoLinked?.linked?.length || 0, note: result.note || result.error || (result.mode === 'snmp' ? 'Discovered via SNMP (best-effort OID mapping).' : 'SNMP discovery unavailable; simulated ONUs generated. Provide SNMP access/tools and vendor OID mapping for real discovery.') });
+  res.json({ ok: !!result.ok && !simulated, mode: result.mode, discovered: discovered.length, onus: discovered, auto_linked: autoLinked?.linked?.length || 0, note: result.note || result.error || (simulated ? 'SNMP discovery unavailable; no simulated ONUs were written. Provide SNMP access/tools and vendor OID mapping for real discovery.' : 'Discovered via SNMP (best-effort OID mapping).') });
 }));
 
 // Bulk auto-link discovered ONUs to subscribers (name/client_code + MAC/FDB correlation)
@@ -190,6 +195,10 @@ router.post('/onus/:id/authorize', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const onu = (await pool.query('SELECT * FROM onus WHERE id=$1',[req.params.id])).rows[0];
   if (!onu) return res.status(404).json({ message: 'ONU not found' });
+  if (b.subscriber_id) {
+    const sub = await pool.query('SELECT id FROM subscribers WHERE id=$1', [b.subscriber_id]);
+    if (!sub.rows[0]) return res.status(404).json({ message: 'Subscriber not found' });
+  }
   const subId = b.subscriber_id || onu.subscriber_id || null;
   const name = b.name || onu.name || onu.serial_number;
   const r = await pool.query(`UPDATE onus SET status='AUTHORIZED', name=$1, subscriber_id=$2, authorized_at=COALESCE(authorized_at,now()), last_seen_at=now(), updated_at=now() WHERE id=$3 RETURNING *`,
@@ -210,6 +219,8 @@ router.post('/onus/refresh-telemetry', asyncHandler(async (req, res) => {
   for (const o of onus) {
     const resTel = await oltRefreshTelemetry({ host: o.host, snmp_community: o.snmp_community, vendor: o.vendor, model: o.model }, [o]);
     mode = resTel.mode || mode;
+    // Never overwrite real telemetry with simulated/random values.
+    if (resTel.mode === 'simulated') continue;
     const t: any = (resTel.onus || [])[0] || { rx_power_dbm: -(17 + Math.random()*12), tx_power_dbm: +(0.5 + Math.random()*3.5), status: o.status };
     const rx = t.rx_power_dbm == null ? null : (+Number(t.rx_power_dbm).toFixed(2));
     const tx = t.tx_power_dbm == null ? null : (+Number(t.tx_power_dbm).toFixed(2));

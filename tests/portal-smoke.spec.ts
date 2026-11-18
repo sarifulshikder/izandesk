@@ -976,6 +976,31 @@ test.describe('CRM mutating flows (opt-in)', () => {
   });
 });
 
+test.describe('OLT mutating flows (opt-in)', () => {
+  test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
+
+  test('discovery never persists simulated ONUs', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const created = await request.post('/api/olt/olts', {
+      headers, data: { name: `E2E OLT ${Date.now()}`, host: '127.0.0.1', vendor: 'VSOL', snmp_community: 'public' },
+    });
+    expect(created.ok()).toBeTruthy();
+    const oltId = (await created.json()).id;
+    test.setTimeout(180_000); // SNMP discovery performs several best-effort walks
+    try {
+      const result = await (await request.post(`/api/olt/olts/${oltId}/discover`, { headers, timeout: 120_000 })).json();
+      if (result.mode === 'simulated') {
+        expect(result.discovered).toBe(0);
+        const onus = await (await request.get(`/api/olt/onus?olt_id=${oltId}`, { headers })).json();
+        expect(onus.data || []).toHaveLength(0);
+      }
+    } finally {
+      await request.delete(`/api/olt/olts/${oltId}`, { headers });
+    }
+  });
+});
+
 test.describe('import mutating flows (opt-in)', () => {
   test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
 
