@@ -64,6 +64,7 @@ export default function AiAssistantPage() {
       const reply: Msg = {
         role: 'assistant', content: res.reply || 'No reply returned.',
         cards: res.cards || [], provider: res.provider, intent: res.intent, meta: res.meta,
+        action: res.action,
       };
       setMessages((prev) => [...prev, reply]);
       speak(res.reply || '');

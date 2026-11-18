@@ -892,6 +892,55 @@ test.describe('AI Copilot', () => {
     expect(errors).toEqual([]);
   });
 
+  test('theme commands are local UI actions, never NIM questions', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const ask = async (message: string) => (await request.post('/api/ai/chat', { headers, data: { message } })).json();
+
+    const dark = await ask('Turn dark theme on');
+    expect(dark.intent).toBe('ui_theme');
+    expect(dark.provider).toBe('local');
+    expect(dark.action).toEqual({ type: 'set_theme', value: 'dark' });
+    expect(dark.reply).toContain('dark');
+
+    expect((await ask('switch to light mode')).action).toEqual({ type: 'set_theme', value: 'light' });
+    expect((await ask('Turn off dark mode')).action).toEqual({ type: 'set_theme', value: 'light' });
+    expect((await ask('Switch theme')).action).toEqual({ type: 'set_theme', value: 'toggle' });
+    const bn = await ask('ডার্ক মোড চালু করুন');
+    expect(bn.action).toEqual({ type: 'set_theme', value: 'dark' });
+    expect(bn.reply).toContain('থিম');
+
+    // A data question mentioning theme must not be hijacked into a UI action.
+    const data = await ask('Turn dark theme on decreased my collection?');
+    expect(data.intent).not.toBe('ui_theme');
+    expect(data.action).toBeUndefined();
+
+    // Theme is a personal UI setting — resellers can change it too.
+    const rToken = await loginToken(request, reseller);
+    const r = await (await request.post('/api/ai/chat', {
+      headers: { Authorization: `Bearer ${rToken}` }, data: { message: 'dark mode' },
+    })).json();
+    expect(r.action).toEqual({ type: 'set_theme', value: 'dark' });
+  });
+
+  test('a Copilot theme command actually switches the interface', async ({ page }) => {
+    await login(page, admin);
+    await page.evaluate(() => localStorage.setItem('izandesk_theme', 'light'));
+    await gotoStable(page, '/ai-assistant');
+    await expect(page.getByRole('heading', { name: 'AI Copilot' })).toBeVisible();
+    const input = page.locator('textarea');
+
+    await input.fill('turn dark theme on');
+    await input.press('Enter');
+    await page.waitForFunction(() => document.documentElement.classList.contains('dark'), null, { timeout: 20_000 });
+    expect(await page.evaluate(() => localStorage.getItem('izandesk_theme'))).toBe('dark');
+
+    await input.fill('light mode please');
+    await input.press('Enter');
+    await page.waitForFunction(() => document.documentElement.classList.contains('light'), null, { timeout: 20_000 });
+    expect(await page.evaluate(() => localStorage.getItem('izandesk_theme'))).toBe('light');
+  });
+
   test('a named subscriber ONU question resolves to that subscriber', async ({ request }) => {
     const token = await loginToken(request, admin);
     const headers = { Authorization: `Bearer ${token}` };

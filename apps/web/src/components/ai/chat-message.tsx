@@ -1,9 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Bot, User, Copy, Volume2, Check, ExternalLink } from 'lucide-react';
 import Markdown from './markdown';
+import { useAuth } from '@/lib/auth-context';
+
+/** Allowlisted UI actions emitted only by the local intent engine. */
+export type AiMessageAction = { type: 'set_theme'; value: 'dark' | 'light' | 'toggle' };
 
 export type AiMessage = {
   role: 'user' | 'assistant';
@@ -12,6 +16,7 @@ export type AiMessage = {
   provider?: string;
   intent?: string;
   meta?: Record<string, any>;
+  action?: AiMessageAction;
 };
 
 export function speakReply(text: string, enabled: boolean) {
@@ -33,8 +38,20 @@ export default function ChatMessage({
   msg, index, voice = false, compact = false,
 }: { msg: AiMessage; index: number; voice?: boolean; compact?: boolean }) {
   const [copied, setCopied] = useState(false);
+  const appliedAction = useRef(false);
+  const { theme, setTheme } = useAuth();
   const isUser = msg.role === 'user';
   const doCopy = async () => { await copyText(msg.content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+
+  // A Copilot theme command applies once, on the message that carried it.
+  // The action is a closed allowlist from the local engine; never trust arbitrary payloads.
+  useEffect(() => {
+    const a = msg.action;
+    if (msg.role !== 'assistant' || appliedAction.current || !a || a.type !== 'set_theme') return;
+    appliedAction.current = true;
+    if (a.value === 'toggle') setTheme(theme === 'dark' ? 'light' : 'dark');
+    else if (a.value === 'dark' || a.value === 'light') setTheme(a.value);
+  }, [msg.action, msg.role, theme, setTheme]);
 
   return (
     <div className={`flex gap-2 sm:gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>

@@ -14,6 +14,8 @@ import { getCached } from './settings';
 
 export type AIActor = { id: string; name: string; role: string; resellerId?: string | null };
 export type AICard = { title: string; badge?: string; desc?: string; url?: string; prompt?: string };
+/** Frontend actions are a closed allowlist — the model never supplies these. */
+export type AIAction = { type: 'set_theme'; value: 'dark' | 'light' | 'toggle' };
 export type AIResult = {
   reply: string;
   provider: 'local' | 'gemini' | 'openai' | 'nim';
@@ -23,6 +25,7 @@ export type AIResult = {
   quickPrompts: string[];
   stats: Record<string, any>;
   meta: Record<string, any>;
+  action?: AIAction;
 };
 
 const STAFF_ROLES = ['SUPER_ADMIN', 'NOC_ENGINEER', 'BILLING_OPERATOR', 'TECHNICIAN'];
@@ -40,17 +43,17 @@ export function capabilitiesFor(role: string): string[] {
 
 export function quickPromptsFor(role: string, lang: 'bn' | 'en'): string[] {
   if (lang === 'en') {
-    if (role === 'RESELLER') return ['How many customers do I have?', 'My due customers', 'My wallet balance', 'My open tickets'];
-    if (role === 'TECHNICIAN') return ['My open tickets', 'Customers expiring soon', 'Online users now', 'OLT health'];
-    if (role === 'NOC_ENGINEER') return ['Router health', 'Online users now', 'OLT / ONU status', 'Customers expiring soon'];
-    if (role === 'BILLING_OPERATOR') return ["Today's collection", 'Customers with dues', 'Payment gateway breakdown', 'Reseller wallets'];
-    return ["Today's collection", 'Total customers', 'Router health', 'Open tickets', 'Customers with dues'];
+    if (role === 'RESELLER') return ['How many customers do I have?', 'My due customers', 'My wallet balance', 'My open tickets', 'Switch theme'];
+    if (role === 'TECHNICIAN') return ['My open tickets', 'Customers expiring soon', 'Online users now', 'OLT health', 'Switch theme'];
+    if (role === 'NOC_ENGINEER') return ['Router health', 'Online users now', 'OLT / ONU status', 'Customers expiring soon', 'Switch theme'];
+    if (role === 'BILLING_OPERATOR') return ["Today's collection", 'Customers with dues', 'Payment gateway breakdown', 'Reseller wallets', 'Switch theme'];
+    return ["Today's collection", 'Total customers', 'Router health', 'Open tickets', 'Customers with dues', 'Switch theme'];
   }
-  if (role === 'RESELLER') return ['আমার কতজন গ্রাহক আছে?', 'আমার বকেয়া গ্রাহক', 'আমার ওয়ালেট ব্যালেন্স', 'আমার খোলা টিকেট'];
-  if (role === 'TECHNICIAN') return ['আমার খোলা টিকেট', 'শীঘ্রই মেয়াদ শেষ হওয়া গ্রাহক', 'অনলাইন ইউজার', 'OLT স্ট্যাটাস'];
-  if (role === 'NOC_ENGINEER') return ['রাউটার স্ট্যাটাস', 'অনলাইন ইউজার', 'OLT / ONU অবস্থা', 'মেয়াদোত্তীর্ণ গ্রাহক'];
-  if (role === 'BILLING_OPERATOR') return ['আজকের কালেকশন কত?', 'বকেয়া গ্রাহকদের তালিকা', 'পেমেন্ট গেটওয়ে বিশ্লেষণ', 'রিসেলার ওয়ালেট'];
-  return ['আজকের কালেকশন কত?', 'মোট গ্রাহক সংখ্যা', 'রাউটার স্ট্যাটাস', 'খোলা টিকেট', 'বকেয়া গ্রাহকদের তালিকা'];
+  if (role === 'RESELLER') return ['আমার কতজন গ্রাহক আছে?', 'আমার বকেয়া গ্রাহক', 'আমার ওয়ালেট ব্যালেন্স', 'আমার খোলা টিকেট', 'থিম বদলান'];
+  if (role === 'TECHNICIAN') return ['আমার খোলা টিকেট', 'শীঘ্রই মেয়াদ শেষ হওয়া গ্রাহক', 'অনলাইন ইউজার', 'OLT স্ট্যাটাস', 'থিম বদলান'];
+  if (role === 'NOC_ENGINEER') return ['রাউটার স্ট্যাটাস', 'অনলাইন ইউজার', 'OLT / ONU অবস্থা', 'মেয়াদোত্তীর্ণ গ্রাহক', 'থিম বদলান'];
+  if (role === 'BILLING_OPERATOR') return ['আজকের কালেকশন কত?', 'বকেয়া গ্রাহকদের তালিকা', 'পেমেন্ট গেটওয়ে বিশ্লেষণ', 'রিসেলার ওয়ালেট', 'থিম বদলান'];
+  return ['আজকের কালেকশন কত?', 'মোট গ্রাহক সংখ্যা', 'রাউটার স্ট্যাটাস', 'খোলা টিকেট', 'বকেয়া গ্রাহকদের তালিকা', 'থিম বদলান'];
 }
 
 /** Bengali Unicode block detection — replies follow the question's language. */
@@ -58,7 +61,19 @@ function detectLang(message: string): 'bn' | 'en' {
   return /[\u0980-\u09FF]/.test(message) ? 'bn' : 'en';
 }
 
-type Detection = { intent: string; lang: 'bn' | 'en'; entity?: string };
+type Detection = { intent: string; lang: 'bn' | 'en'; entity?: string; value?: AIAction['value'] };
+
+/** UI theme commands stay local — they are a frontend action, never LLM input. */
+function detectThemeCommand(text: string): AIAction['value'] | undefined {
+  // Only short, command-like requests are UI actions — never a data question
+  // that happens to mention a theme ("did dark mode affect collections?").
+  if (text.length > 80 || text.includes('?')) return undefined;
+  if (!/\b(theme|mode|dark|light|night|day)\b|থিম|মোড|ডার্ক|লাইট|অন্ধকার|রাত|দিন|কালো|সাদা/i.test(text)) return undefined;
+  const off = /(turn|switch|put)\s+off|disable|remove|\boff\b|বন্ধ|না/i.test(text);
+  if (/\b(dark|night)\b|ডার্ক|অন্ধকার|রাতের|কালো/i.test(text)) return off ? 'light' : 'dark';
+  if (/\b(light|day)\b|লাইট|দিনের|সাদা|হালকা/i.test(text)) return off ? 'dark' : 'light';
+  return 'toggle'; // "switch theme", "থিম বদলান"…
+}
 
 const RULES: Array<[string, RegExp]> = [
   ['greeting', /^(hi|hello|hey|assalam|who are you|what can you do|help|start|স্বাগতম|নমস্কার|আসসালামু|কে তুমি|কি করতে পার|কী করতে পারো)/i],
@@ -102,6 +117,8 @@ function extractEntity(text: string): string | undefined {
 function detectIntent(message: string): Detection {
   const lang = detectLang(message);
   const text = message.trim().toLowerCase();
+  const theme = detectThemeCommand(text);
+  if (theme) return { intent: 'ui_theme', lang, value: theme };
   // A named subscriber takes priority over topic keywords: "isa's ONU info"
   // must not be answered with the generic OLT health table.
   const entity = extractEntity(text);
@@ -383,10 +400,10 @@ async function intentExtras(pool: any, ctx: Ctx, intent: string, entity?: string
 /* ----------------------------- rendering ----------------------------- */
 
 const BN = {
-  title: { collection: '💰 কালেকশন ও আর্থিক বিবরণী', customers: '👥 গ্রাহক ও সাবস্ক্রাইবার লাইভ পরিসংখ্যান', dues: '💳 গ্রাহক বকেয়া (Due Bill) সামারি', online: '🔌 লাইভ অনলাইন PPPoE সংযোগের অবস্থা', expiring: '⚠️ মেয়াদোত্তীর্ণ গ্রাহকদের তালিকা', router: '🚀 রাউটার ও সার্ভার স্ট্যাটাস', olt: '🛰️ OLT / ONU অবস্থা', ticket: '🎫 টিকেট ও অভিযোগ', newconn: '🌟 নতুন সংযোগ লাইভ রিপোর্ট', reseller: '🤝 রিসেলার ওয়ালেট', hotspot: '📶 হটস্পট ভাউচার', stock: '📦 ইনভেন্টরি স্টক', package: '📋 প্যাকেজ রেট তালিকা', gateway: '💳 পেমেন্ট গেটওয়ে বিশ্লেষণ', staff: '🧾 স্টাফ কালেকশন', lead: '🎯 লিড পাইপলাইন', kyc: '🪪 KYC ভেরিফিকেশন', gis: '🗺️ GIS সাইট', customer: '🧾 গ্রাহক প্রোফাইল', help: '🤖 IzanDesk AI Copilot' },
+  title: { collection: '💰 কালেকশন ও আর্থিক বিবরণী', customers: '👥 গ্রাহক ও সাবস্ক্রাইবার লাইভ পরিসংখ্যান', dues: '💳 গ্রাহক বকেয়া (Due Bill) সামারি', online: '🔌 লাইভ অনলাইন PPPoE সংযোগের অবস্থা', expiring: '⚠️ মেয়াদোত্তীর্ণ গ্রাহকদের তালিকা', router: '🚀 রাউটার ও সার্ভার স্ট্যাটাস', olt: '🛰️ OLT / ONU অবস্থা', ticket: '🎫 টিকেট ও অভিযোগ', newconn: '🌟 নতুন সংযোগ লাইভ রিপোর্ট', reseller: '🤝 রিসেলার ওয়ালেট', hotspot: '📶 হটস্পট ভাউচার', stock: '📦 ইনভেন্টরি স্টক', package: '📋 প্যাকেজ রেট তালিকা', gateway: '💳 পেমেন্ট গেটওয়ে বিশ্লেষণ', staff: '🧾 স্টাফ কালেকশন', lead: '🎯 লিড পাইপলাইন', kyc: '🪪 KYC ভেরিফিকেশন', gis: '🗺️ GIS সাইট', customer: '🧾 গ্রাহক প্রোফাইল', theme: '🎨 থিম ও ইন্টারফেস', help: '🤖 IzanDesk AI Copilot' },
 };
 const EN = {
-  title: { collection: '💰 Collection & finance', customers: '👥 Live subscriber statistics', dues: '💳 Customer dues summary', online: '🔌 Live PPPoE sessions', expiring: '⚠️ Customers expiring soon', router: '🚀 Router & server status', olt: '🛰️ OLT / ONU status', ticket: '🎫 Tickets & complaints', newconn: '🌟 New connections report', reseller: '🤝 Reseller wallets', hotspot: '📶 Hotspot vouchers', stock: '📦 Inventory stock', package: '📋 Package rates', gateway: '💳 Payment gateway breakdown', staff: '🧾 Staff collections', lead: '🎯 Lead pipeline', kyc: '🪪 KYC verification', gis: '🗺️ GIS sites', customer: '🧾 Customer profile', help: '🤖 IzanDesk AI Copilot' },
+  title: { collection: '💰 Collection & finance', customers: '👥 Live subscriber statistics', dues: '💳 Customer dues summary', online: '🔌 Live PPPoE sessions', expiring: '⚠️ Customers expiring soon', router: '🚀 Router & server status', olt: '🛰️ OLT / ONU status', ticket: '🎫 Tickets & complaints', newconn: '🌟 New connections report', reseller: '🤝 Reseller wallets', hotspot: '📶 Hotspot vouchers', stock: '📦 Inventory stock', package: '📋 Package rates', gateway: '💳 Payment gateway breakdown', staff: '🧾 Staff collections', lead: '🎯 Lead pipeline', kyc: '🪪 KYC verification', gis: '🗺️ GIS sites', customer: '🧾 Customer profile', theme: '🎨 Theme & interface', help: '🤖 IzanDesk AI Copilot' },
 };
 
 function table(headers: string[], rows: any[][]) {
@@ -396,7 +413,7 @@ function table(headers: string[], rows: any[][]) {
 }
 const esc = (v: any) => String(v ?? '-').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
-function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows: Row[], ctx: Ctx, entity?: string): { reply: string; cards: AICard[] } {
+function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows: Row[], ctx: Ctx, entity?: string, value?: AIAction['value']): { reply: string; cards: AICard[] } {
   const T = lang === 'bn' ? BN.title : EN.title;
   const bn = lang === 'bn';
   const cards: AICard[] = [];
@@ -619,6 +636,14 @@ function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows:
       cards.push({ title: bn ? 'OLT ম্যানেজার' : 'OLT manager', url: '/olts' });
       break;
     }
+    case 'ui_theme': {
+      const label = value === 'toggle' ? (bn ? 'বদলানো' : 'switched')
+        : value === 'dark' ? (bn ? 'ডার্ক' : 'dark') : (bn ? 'লাইট' : 'light');
+      body = `### ${T.theme}\n\n` + (bn
+        ? `✅ ইন্টারফেসের থিম **${label}** করা হয়েছে। আবার বললে বদলে যাবে, অথবা হেডারের থিম বাটন ব্যবহার করুন।`
+        : `✅ The interface theme has been **${label}**. Ask again to switch, or use the theme button in the top bar.`);
+      break;
+    }
     default: {
       body = `### ${T.help}\n\n` + (bn
         ? 'আমি আপনার লাইভ ISP ডেটা থেকে প্রশ্নের উত্তর দিই: কালেকশন, গ্রাহক সংখ্যা, বকেয়া, মেয়াদ, রাউটার হেলথ, OLT, টিকেট, লিড, হটস্পট, ইনভেন্টরি ও প্যাকেজ রেট।\n\nকোনো গ্রাহকের নাম, কাস্টমার আইডি বা ফোন নম্বর দিতে পারেন। নেটওয়ার্ক ভূমিকায় “isa-র ONU তথ্য” বললে তার ONU-র বিবরণ দেখাব।'
@@ -667,7 +692,7 @@ const TITLE_KEYS: Record<string, string> = {
   online_users: 'online', expiring: 'expiring', router_health: 'router', olt_health: 'olt', subscriber_onu: 'olt', tickets: 'ticket',
   new_connections: 'newconn', reseller_wallet: 'reseller', hotspot: 'hotspot', inventory: 'stock',
   packages: 'package', payment_gateways: 'gateway', staff_collection: 'staff', leads: 'lead', kyc: 'kyc',
-  gis_sites: 'gis', customer_lookup: 'customer', greeting: 'help', help: 'help', free_form: 'help', sms_templates: 'help',
+  gis_sites: 'gis', customer_lookup: 'customer', ui_theme: 'theme', greeting: 'help', help: 'help', free_form: 'help', sms_templates: 'help',
 };
 function pct(part: number, total: number) {
   return total > 0 ? `${Math.round((part / total) * 100)}%` : '—';
@@ -698,7 +723,9 @@ async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn'
   const system = `You are IzanDesk AI Copilot, an ISP operations assistant. Reply in ${lang === 'bn' ? 'Bengali' : 'English'}. ` +
     `Use ONLY the aggregate metrics in the provided context. Never invent numbers, never request or repeat passwords, ` +
     `tokens, phone numbers or personal data. If the answer is not in the context, say you don't have that data and suggest ` +
-    `asking one of the supported topics. Keep it short and practical. Context: ${context}`;
+    `asking one of the supported topics. For interface/theme requests, tell the user to say "dark mode" or "light mode" ` +
+    `and the app will switch it (or use the top-bar theme button) — never claim you cannot control the interface. ` +
+    `Keep it short and practical. Context: ${context}`;
 
   try {
     if (provider === 'openai') {
@@ -759,13 +786,18 @@ export async function askAI(pool: any, actor: AIActor, message: string, _history
   let provider: AIResult['provider'] = 'local';
   let reply: string;
   let cards: AICard[] = [];
+  let action: AIAction | undefined;
   if (!allowed) {
     const T = detected.lang === 'bn' ? BN.title : EN.title;
     reply = `### ${(T as any)[TITLE_KEYS[detected.intent] || 'help']}\n\n${denyText(detected.lang === 'bn')}`;
   } else {
-    const rendered = render(detected.intent, detected.lang, merged, extras.rows, ctx, detected.entity);
+    const rendered = render(detected.intent, detected.lang, merged, extras.rows, ctx, detected.entity, detected.value);
     reply = rendered.reply;
     cards = rendered.cards;
+    // Only the deterministic local engine may emit an action — never the LLM.
+    if (detected.intent === 'ui_theme' && detected.value) {
+      action = { type: 'set_theme', value: detected.value };
+    }
     if (detected.intent === 'free_form') {
       const external = await freeFormExternal(pool, ctx, message, detected.lang, merged);
       if (external) { reply = external.reply; provider = external.provider; }
@@ -781,5 +813,6 @@ export async function askAI(pool: any, actor: AIActor, message: string, _history
     quickPrompts: quickPromptsFor(actor.role, detected.lang),
     stats: filterStatsForRole(merged, actor.role),
     meta: { role: actor.role, restricted: !allowed, latency_ms: Date.now() - start, at: new Date().toISOString() },
+    ...(action ? { action } : {}),
   };
 }

@@ -53,6 +53,7 @@ export default function AiChatBubble() {
       const reply: AiMessage = {
         role: 'assistant', content: res.reply || 'No reply returned.',
         cards: res.cards || [], provider: res.provider, intent: res.intent, meta: res.meta,
+        action: res.action,
       };
       setMessages((prev) => [...prev, reply]);
       speakReply(res.reply || '', voice);

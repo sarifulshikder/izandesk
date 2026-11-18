@@ -12,6 +12,7 @@ interface AuthContextType {
   login: (email: string, password: string, remember?: boolean) => Promise<void>;
   logout: () => void;
   theme: 'dark' | 'light';
+  setTheme: (theme: 'dark' | 'light') => void;
   toggleTheme: () => void;
   isCommandPaletteOpen: boolean;
   setCommandPaletteOpen: (open: boolean) => void;
@@ -140,6 +141,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     login,
     logout,
     theme,
+    setTheme,
     toggleTheme,
     isCommandPaletteOpen,
     setCommandPaletteOpen,
