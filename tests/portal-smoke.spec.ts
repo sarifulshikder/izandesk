@@ -679,6 +679,32 @@ test.describe('billing payment security', () => {
   });
 });
 
+test.describe('reseller module security', () => {
+  test('customer 360 detail hides credentials and staff roles are scoped', async ({ request }) => {
+    const adminToken = await loginToken(request, admin);
+    const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+    const resellers = (await (await request.get('/api/resellers', { headers: adminHeaders })).json()).data || [];
+    const partner = resellers.find((r: any) => r.email === reseller.email) || resellers[0];
+    test.skip(!partner, 'no reseller seeded');
+    const subs = (await (await request.get(`/api/resellers/${partner.id}/subscribers`, { headers: adminHeaders })).json()).data || [];
+    const sub = subs[0];
+    test.skip(!sub, 'reseller has no subscribers');
+
+    const resellerToken = await loginToken(request, reseller);
+    const detail = await request.get(`/api/resellers/${partner.id}/customers/${sub.id}/detail`, { headers: { Authorization: `Bearer ${resellerToken}` } });
+    expect(detail.ok()).toBeTruthy();
+    const basic = (await detail.json()).data.basic;
+    expect(basic).not.toHaveProperty('password');
+    expect(basic).not.toHaveProperty('password_hash');
+
+    // NOC engineers cannot move partner money or submit gateway top-ups.
+    const nocToken = await loginToken(request, { email: process.env.E2E_NOC_EMAIL || 'noc@izandesk.com', password: process.env.E2E_NOC_PASSWORD || 'noc123' });
+    const nocHeaders = { Authorization: `Bearer ${nocToken}` };
+    expect((await request.post(`/api/resellers/${partner.id}/customers/${sub.id}/payment`, { headers: nocHeaders, data: { amount: 10 } })).status()).toBe(403);
+    expect((await request.post(`/api/resellers/${partner.id}/wallet/topups`, { headers: nocHeaders, data: { amount: 100, gateway: 'BKASH', terms_accepted: true } })).status()).toBe(403);
+  });
+});
+
 test.describe('portal auth security', () => {
   test('subscriber portal login is rate-limited and tokens are role-separated', async ({ request }) => {
     // Unknown identifiers cannot be brute-forced: the 5th failure locks briefly.
@@ -781,6 +807,39 @@ test.describe('portal mutating flows (opt-in)', () => {
       expect(upload.status()).toBe(400);
     } finally {
       await request.delete(`/api/subscribers/${subId}`, { headers: adminHeaders });
+    }
+  });
+});
+
+test.describe('reseller mutating flows (opt-in)', () => {
+  test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
+
+  test('wallet top-up decisions are bound to the reseller in the path', async ({ request }) => {
+    const adminToken = await loginToken(request, admin);
+    const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+    const resellers = (await (await request.get('/api/resellers', { headers: adminHeaders })).json()).data || [];
+    const partner = resellers.find((r: any) => r.email === reseller.email) || resellers[0];
+    const other = resellers.find((r: any) => r.id !== partner?.id);
+    test.skip(!partner || !other, 'need two resellers for top-up binding test');
+
+    const token = await loginToken(request, reseller);
+    const submitted = await request.post(`/api/resellers/${partner.id}/wallet/topups`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { amount: 100, gateway: 'BKASH', terms_accepted: true },
+    });
+    expect(submitted.ok()).toBeTruthy();
+    const tid = (await submitted.json()).data.id;
+    try {
+      // A pending request cannot be decided through another reseller's URL.
+      expect((await request.post(`/api/resellers/${other.id}/wallet/topups/${tid}/reject`, { headers: adminHeaders })).status()).toBe(404);
+      // NOC engineers still cannot decide it.
+      const nocToken = await loginToken(request, { email: 'noc@izandesk.com', password: 'noc123' });
+      expect((await request.post(`/api/resellers/${partner.id}/wallet/topups/${tid}/reject`, { headers: { Authorization: `Bearer ${nocToken}` } })).status()).toBe(403);
+      expect((await request.post(`/api/resellers/${partner.id}/wallet/topups/${tid}/reject`, { headers: adminHeaders })).ok()).toBeTruthy();
+    } catch (e) {
+      // Best-effort cleanup if the flow is interrupted.
+      await request.post(`/api/resellers/${partner.id}/wallet/topups/${tid}/reject`, { headers: adminHeaders }).catch(() => {});
+      throw e;
     }
   });
 });

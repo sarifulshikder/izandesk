@@ -12,6 +12,15 @@ function getUser(req: any) { return req.user || {}; }
 function isAdminLike(role: string) { return ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(role); }
 function moneyLike(v: any) { return `৳${Number(v || 0).toFixed(2)}`; }
 
+/** Never echo credentials or gateway secrets in partner-facing responses. */
+function safeSubscriber(sub: any) {
+  const out = { ...sub };
+  for (const key of Object.keys(out)) {
+    if (/password|secret|token|hash|api[_-]?key|private[_-]?key/i.test(key)) delete out[key];
+  }
+  return out;
+}
+
 async function resolveResellerIdForUser(req: any) {
   const user = getUser(req);
   if (user.resellerId) {
@@ -43,7 +52,7 @@ router.get('/', asyncHandler(async (req, res) => {
     const r = await pool.query('SELECT r.*, (SELECT COUNT(*)::int FROM subscribers s WHERE s.reseller_id=r.id) as subscriber_count FROM resellers r WHERE r.id=$1', [rid]);
     return res.json({ data: r.rows });
   }
-  if (!isAdminLike(user.role) && user.role !== 'TECHNICIAN') return res.status(403).json({ message: 'Insufficient permissions' });
+  if (!isAdminLike(user.role)) return res.status(403).json({ message: 'Insufficient permissions' });
   const q = String(req.query.q || '').trim().toLowerCase();
   const params: any[] = [];
   let where = '';
@@ -263,7 +272,7 @@ async function ensureResellerAccess(req: any, res: any, resellerId: string) {
   if (user.role === 'RESELLER') {
     const rid = await resolveResellerIdForUser(req);
     if (rid !== resellerId) { res.status(403).json({ message: 'Forbidden' }); return false; }
-  } else if (!isAdminLike(user.role) && user.role !== 'TECHNICIAN') {
+  } else if (!isAdminLike(user.role)) {
     res.status(403).json({ message: 'Insufficient permissions' }); return false;
   }
   return true;
@@ -1178,10 +1187,10 @@ router.get('/:id/customers/:sid/detail', asyncHandler(async (req, res) => {
   const [online, invoices, payments, sessions, documents, logs, onu] = await Promise.all([
     q(`SELECT * FROM subscriber_sessions WHERE subscriber_id=$1 ORDER BY updated_at DESC LIMIT 20`),
     q(`SELECT * FROM invoices WHERE subscriber_id=$1 ORDER BY created_at DESC LIMIT 50`),
-    q(`SELECT * FROM payments WHERE subscriber_id=$1 ORDER BY created_at DESC LIMIT 50`),
+    q(`SELECT id, payment_ref, payment_type, method, amount, status, trx_id, verified_at, created_at FROM payments WHERE subscriber_id=$1 ORDER BY created_at DESC LIMIT 50`),
     q(`SELECT radacctid AS id, username, acctstarttime, acctstoptime, framedipaddress AS ip, acctinputoctets, acctoutputoctets, acctsessiontime, acctterminatecause, nasipaddress AS nas
        FROM radacct WHERE username=(SELECT username FROM subscribers WHERE id=$1) ORDER BY acctstarttime DESC LIMIT 50`),
-    q(`SELECT * FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC`),
+    q(`SELECT id, doc_type, file_name, mime_type, uploaded_at FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC`),
     q(`SELECT id, created_at, action, actor_name, actor_role, details FROM audit_logs WHERE entity_type='subscriber' AND entity_id=$1 ORDER BY created_at DESC LIMIT 50`),
     q(`SELECT o.*, ol.name AS olt_name FROM onus o LEFT JOIN olts ol ON ol.id=o.olt_id WHERE o.subscriber_id=$1 ORDER BY o.updated_at DESC`),
   ]);
@@ -1195,7 +1204,7 @@ router.get('/:id/customers/:sid/detail', asyncHandler(async (req, res) => {
     upload_bytes: Number((sessions.rows as any[]).filter(r => String(r.acctstarttime || '').startsWith(m)).reduce((a, r) => a + Number(r.acctoutputoctets || 0), 0)),
   }));
   res.json({ data: {
-    basic: sub, online: online.rows, onu: onu.rows, renewal: invoices.rows,
+    basic: safeSubscriber(sub), online: online.rows, onu: onu.rows, renewal: invoices.rows,
     traffic, sessions: sessions.rows,
     finance: { invoices: invoices.rows, payments: payments.rows,
       total_invoiced: (invoices.rows as any[]).reduce((a, r) => a + Number(r.total_amount || 0), 0),
@@ -1219,6 +1228,11 @@ router.get('/:id/customers/:sid/invoices/:iid/pdf', asyncHandler(async (req, res
 // ---- Pay Now / Add Money for an owned subscriber ---------------------------
 router.post('/:id/customers/:sid/payment', asyncHandler(async (req, res) => {
   if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  // Debiting a partner wallet is a money movement: restrict to the partner
+  // themselves (scoped above) or the finance admins.
+  if (!['SUPER_ADMIN', 'BILLING_OPERATOR', 'RESELLER'].includes(String(getUser(req).role || ''))) {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
   const amount = Number(req.body?.amount || 0);
   if (!(amount > 0)) return res.status(400).json({ message: 'amount must be > 0' });
   const mode = String(req.body?.mode || 'PAY').toUpperCase();
@@ -1282,7 +1296,11 @@ router.get('/topups/pending', asyncHandler(async (req, res) => {
 
 // ---- Self-service gateway wallet top-up ------------------------------------
 router.post('/:id/wallet/topups', asyncHandler(async (req, res) => {
-  if (!(await assertOwnPartner(req, res, req.params.id))) return;
+  // Gateway top-ups are self-service: a partner submits, an admin approves.
+  const user = getUser(req);
+  if (user.role !== 'RESELLER') return res.status(403).json({ message: 'Only resellers can submit wallet top-ups' });
+  const rid = await resolveResellerIdForUser(req);
+  if (!rid || rid !== req.params.id) return res.status(403).json({ message: 'Forbidden' });
   const amount = Number(req.body?.amount || 0);
   if (!(amount > 0)) return res.status(400).json({ message: 'amount must be > 0' });
   const gateway = String(req.body?.gateway || '').trim().toUpperCase();
@@ -1301,11 +1319,15 @@ router.get('/:id/wallet/topups', asyncHandler(async (req, res) => {
 }));
 
 async function decideTopup(req: any, res: any, approve: boolean) {
-  if (!isAdminLike(getUser(req).role)) return res.status(403).json({ message: 'Insufficient permissions' });
+  // Credit approval moves real money — NOC engineers must not be able to do it.
+  if (!['SUPER_ADMIN', 'BILLING_OPERATOR'].includes(String(getUser(req).role))) {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const t = (await client.query('SELECT * FROM wallet_topup_requests WHERE id=$1 FOR UPDATE', [req.params.tid])).rows[0];
+    // Bind the request to the reseller in the path, not just to a client-supplied id.
+    const t = (await client.query('SELECT * FROM wallet_topup_requests WHERE id=$1 AND reseller_id=$2 FOR UPDATE', [req.params.tid, req.params.id])).rows[0];
     if (!t) { await client.query('ROLLBACK'); return res.status(404).json({ message: 'Top-up request not found' }); }
     if (String(t.status) !== 'PENDING') { await client.query('ROLLBACK'); return res.status(400).json({ message: 'Request already processed' }); }
     if (approve) {
@@ -1388,6 +1410,7 @@ router.post('/:id/complaints', asyncHandler(async (req, res) => {
     if (siteLng == null) siteLng = sub.longitude;
   }
   const priority = String(req.body?.priority || 'MEDIUM').toUpperCase();
+  if (!['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(priority)) return res.status(400).json({ message: 'Invalid priority' });
   const hours = priority === 'CRITICAL' ? 4 : priority === 'HIGH' ? 8 : priority === 'LOW' ? 48 : 24;
   const slaDueAt = new Date(Date.now() + hours * 3600 * 1000).toISOString();
   const ticketNo = await nextTicketNo();
@@ -1407,7 +1430,10 @@ router.get('/:id/complaints/:tid', asyncHandler(async (req, res) => {
   if (!(await ensureResellerAccess(req, res, req.params.id))) return;
   const t = (await pool.query('SELECT * FROM tickets WHERE id=$1 AND reseller_id=$2', [req.params.tid, req.params.id])).rows[0];
   if (!t) return res.status(404).json({ message: 'Complaint not found' });
-  const comments = (await pool.query('SELECT * FROM ticket_comments WHERE ticket_id=$1 ORDER BY created_at ASC', [req.params.tid])).rows;
+  // Internal staff notes are never shown to resellers.
+  const internalAllowed = isAdminLike(getUser(req).role);
+  const comments = (await pool.query(`SELECT id, ticket_id, author_name, author_role, body, is_internal, created_at
+    FROM ticket_comments WHERE ticket_id=$1 ${internalAllowed ? '' : 'AND COALESCE(is_internal,false)=false'} ORDER BY created_at ASC`, [req.params.tid])).rows;
   const sub = t.subscriber_id ? (await pool.query('SELECT full_name, client_code FROM subscribers WHERE id=$1', [t.subscriber_id])).rows[0] : null;
   res.json({ data: { ...t, comments, subscriber_name: sub?.full_name, client_code: sub?.client_code } });
 }));
@@ -1430,6 +1456,9 @@ router.put('/:id/complaints/:tid', asyncHandler(async (req, res) => {
   const t = (await pool.query('SELECT * FROM tickets WHERE id=$1 AND reseller_id=$2', [req.params.tid, req.params.id])).rows[0];
   if (!t) return res.status(404).json({ message: 'Complaint not found' });
   const status = String(req.body?.status || t.status).toUpperCase();
+  if (!['OPEN', 'IN_PROGRESS', 'PENDING', 'RESOLVED', 'CLOSED'].includes(status)) {
+    return res.status(400).json({ message: 'Invalid complaint status' });
+  }
   const resolution = req.body?.resolution_notes ?? t.resolution_notes;
   const closedAt = ['RESOLVED', 'CLOSED'].includes(status) ? (t.closed_at || new Date().toISOString()) : null;
   const r = (await pool.query(`UPDATE tickets SET status=$2, resolution_notes=$3, closed_at=$4, updated_at=now()
