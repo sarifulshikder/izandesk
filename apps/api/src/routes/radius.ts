@@ -1,13 +1,17 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler } from './helpers';
+import { asyncHandler, networkGuard } from './helpers';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from '../integrations/radius';
 
 const router: Router = Router();
+router.use(networkGuard);
 
 // RADIUS users sync (radcheck/radreply simulation)
 router.get('/users', asyncHandler(async (_req, res) => {
-  const r = await pool.query(`SELECT ru.*, s.full_name, s.client_code, s.status as subscriber_status, s.package_name
+  // Never return the stored PPPoE password — it is a live network credential.
+  const r = await pool.query(`SELECT ru.id, ru.subscriber_id, ru.username, ru.profile, ru.framed_ip_address,
+      ru.status, ru.last_synced_at, ru.last_error, ru.created_at, ru.updated_at,
+      s.full_name, s.client_code, s.status as subscriber_status, s.package_name
     FROM radius_users ru LEFT JOIN subscribers s ON s.id=ru.subscriber_id ORDER BY ru.updated_at DESC`);
   res.json({ data: r.rows });
 }));

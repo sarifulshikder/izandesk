@@ -30,15 +30,18 @@ export default function DashboardPage() {
     // Billing metrics are tenant-wide; skip for roles without billing access
     // instead of firing a 403 (resellers use their own scoped dashboard).
     const canBilling = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(activeRole || user?.role));
+    // Network/OLT inventory is staff-only — resellers have no use for it and
+    // the API now rejects those roles, so skip the calls entirely.
+    const canNetwork = canBilling;
     try {
       const [sum, subs, sessions, billing, routers, olts, onus, health, apiHealth, diag, general] = await Promise.all([
         apiFetch<any>('/api/subscribers/summary', {}, token).catch(() => null),
         apiFetch<any>('/api/subscribers?limit=6', {}, token).catch(() => null),
-        apiFetch<any>('/api/network/sessions', {}, token).catch(() => null),
+        canNetwork ? apiFetch<any>('/api/network/sessions', {}, token).catch(() => null) : Promise.resolve(null),
         canBilling ? apiFetch<any>('/api/billing/metrics', {}, token).catch(() => null) : Promise.resolve(null),
-        apiFetch<any>('/api/network/routers', {}, token).catch(() => null),
-        apiFetch<any>('/api/olt/olts', {}, token).catch(() => null),
-        apiFetch<any>('/api/olt/onus', {}, token).catch(() => null),
+        canNetwork ? apiFetch<any>('/api/network/routers', {}, token).catch(() => null) : Promise.resolve(null),
+        canNetwork ? apiFetch<any>('/api/olt/olts', {}, token).catch(() => null) : Promise.resolve(null),
+        canNetwork ? apiFetch<any>('/api/olt/onus', {}, token).catch(() => null) : Promise.resolve(null),
         fetch(`${getApiBaseUrl()}/api/system/health`).then((r) => r.json()).catch(() => null),
         fetch(`${getApiBaseUrl()}/api/health`).then((r) => r.json()).catch(() => null),
         canDiagnostics ? apiFetch<any>('/api/system/diagnostics', {}, token).catch(() => null) : Promise.resolve(null),

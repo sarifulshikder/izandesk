@@ -49,6 +49,27 @@ export function sanitizeSubscribers<T = any>(rows: T[]): T[] {
   return (rows || []).map((r) => sanitizeSubscriber(r));
 }
 
+/** Network/OSS surfaces expose device credentials and service-control actions.
+ *  They are staff-only; resellers use their own scoped portal APIs. */
+export const NETWORK_READ_ROLES = ['SUPER_ADMIN', 'NOC_ENGINEER', 'BILLING_OPERATOR', 'TECHNICIAN'];
+export const NETWORK_WRITE_ROLES = ['SUPER_ADMIN', 'NOC_ENGINEER'];
+
+export function hasNetworkRead(req: any): boolean {
+  return NETWORK_READ_ROLES.includes(String(req?.user?.role || ''));
+}
+export function hasNetworkWrite(req: any): boolean {
+  return NETWORK_WRITE_ROLES.includes(String(req?.user?.role || ''));
+}
+
+/** Read access for all routes; only network engineers/admins may mutate. */
+export function networkGuard(req: any, res: any, next: any) {
+  if (!hasNetworkRead(req)) return res.status(403).json({ message: 'Network access is restricted to staff accounts' });
+  if (req.method !== 'GET' && req.method !== 'HEAD' && !hasNetworkWrite(req)) {
+    return res.status(403).json({ message: 'Insufficient permissions for network changes' });
+  }
+  return next();
+}
+
 /** Remove sensitive device credentials before returning a router/NAS to clients. */
 export function sanitizeRouter<T = any>(row: T): T {
   if (!row || typeof row !== 'object') return row;

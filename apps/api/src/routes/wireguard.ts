@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler } from './helpers';
+import { asyncHandler, networkGuard } from './helpers';
 import { allocateTunnelIp, buildHubWgConfig, buildRouterOsScript, generatePresharedKey, generateWgKeypair, readHubRuntimeStatus, writeHubConfigFile } from '../integrations/wireguard';
 import { mikrotikProvisionWireGuard } from '../integrations/mikrotik';
 import * as path from 'path';
 
 const router: Router = Router();
+router.use(networkGuard);
 const WG_CONFIG_DIR = process.env.WG_CONFIG_DIR || path.resolve(__dirname, '../../../../docker/wg-hub/config');
 
 async function getHub() {

@@ -34,7 +34,9 @@ async function gotoStable(page: Page, url: string) {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       return;
     } catch (e: any) {
-      if (!String(e.message).includes('ERR_ABORTED') || attempt === 2) throw e;
+      const msg = String(e.message);
+      const race = msg.includes('ERR_ABORTED') || msg.includes('interrupted by another navigation');
+      if (!race || attempt === 2) throw e;
       await page.waitForTimeout(1000);
     }
   }
@@ -702,6 +704,34 @@ test.describe('reseller module security', () => {
     const nocHeaders = { Authorization: `Bearer ${nocToken}` };
     expect((await request.post(`/api/resellers/${partner.id}/customers/${sub.id}/payment`, { headers: nocHeaders, data: { amount: 10 } })).status()).toBe(403);
     expect((await request.post(`/api/resellers/${partner.id}/wallet/topups`, { headers: nocHeaders, data: { amount: 100, gateway: 'BKASH', terms_accepted: true } })).status()).toBe(403);
+  });
+});
+
+test.describe('network & OSS access control', () => {
+  test('resellers are denied routers, OLT, RADIUS, WireGuard and ACS', async ({ request }) => {
+    const token = await loginToken(request, reseller);
+    const headers = { Authorization: `Bearer ${token}` };
+    for (const path of ['/api/network/routers', '/api/olt/olts', '/api/radius/users', '/api/wireguard/peers', '/api/acs/devices']) {
+      expect(await (await request.get(path, { headers })).status(), `${path} should be denied`).toBe(403);
+    }
+  });
+
+  test('RADIUS user listing hides PPPoE passwords and write roles are enforced', async ({ request }) => {
+    const adminToken = await loginToken(request, admin);
+    const users = await (await request.get('/api/radius/users', { headers: { Authorization: `Bearer ${adminToken}` } })).json();
+    expect((users.data || []).every((u: any) => !('password' in u))).toBe(true);
+
+    const billingToken = await loginToken(request, { email: 'billing@izandesk.com', password: 'billing123' });
+    const headers = { Authorization: `Bearer ${billingToken}` };
+    expect((await request.get('/api/network/routers', { headers })).status()).toBe(200);
+    expect((await request.post('/api/network/routers', { headers, data: {} })).status()).toBe(403);
+    expect((await request.post('/api/radius/coa', { headers, data: { username: 'x', action: 'DISCONNECT' } })).status()).toBe(403);
+
+    const routers = await (await request.get('/api/network/routers', { headers: { Authorization: `Bearer ${adminToken}` } })).json();
+    const routerId = (routers.data || [])[0]?.id;
+    if (routerId) {
+      expect((await request.get(`/api/network/routers/${routerId}/mikrotik/import-preview?type=ppp-secrets`, { headers })).status()).toBe(403);
+    }
   });
 });
 

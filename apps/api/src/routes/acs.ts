@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler } from './helpers';
+import { asyncHandler, networkGuard } from './helpers';
 import { getCached } from '../integrations/settings';
 
 const router: Router = Router();
+router.use(networkGuard);
 
 function requireRole(roles: string[]) {
   return (req: any, res: any, next: any) => {

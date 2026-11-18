@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler, sanitizeOlt, sanitizeOlts } from './helpers';
+import { asyncHandler, sanitizeOlt, sanitizeOlts, networkGuard } from './helpers';
 import { oltTest, oltDiscoverOnus, oltRefreshTelemetry } from '../integrations/olt';
 import { autoLinkOnusBulk } from '../integrations/onu-autolink';
 import { syncOnuToInventory, syncAllLinkedOnusToInventory } from '../integrations/onu-inventory-sync';
 
 const router: Router = Router();
+router.use(networkGuard);
 
 function opticalStatus(rx: number | null) {
   if (rx == null) return 'UNKNOWN';

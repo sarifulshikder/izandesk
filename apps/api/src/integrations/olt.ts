@@ -11,9 +11,12 @@ function hasBin(cmd: string): Promise<boolean> {
 
 async function dockerExecSnmp(args: string[], timeoutSec = 6): Promise<string> {
   // Tunnel-aware execution: run inside wg-hub (has WG routes/tools when installed)
-  const hostArg = args.find(a => /^\d+\.\d+\.\d+\.\d+$/.test(a) || (a && !a.startsWith('-') && a.includes('.') && !a.startsWith('.')));
-  // ensure route for target host in wg-hub if provided in args
-  const routeCmd = hostArg ? `ip route replace ${hostArg}/32 dev ${process.env.WG_INTERFACE || 'wg0'} 2>/dev/null || true; ` : '';
+  // Only a strict, validated IPv4 literal may be interpolated into the route
+  // command — a loose "contains a dot" match allowed shell injection via SNMP
+  // arguments (e.g. a crafted host/community value).
+  const hostArg = args.find(a => /^(?:\d{1,3}\.){3}\d{1,3}$/.test(a) && String(a).split('.').every((n) => Number(n) <= 255));
+  const wgIface = String(process.env.WG_INTERFACE || 'wg0').replace(/[^A-Za-z0-9_-]/g, '');
+  const routeCmd = hostArg ? `ip route replace ${hostArg}/32 dev ${wgIface || 'wg0'} 2>/dev/null || true; ` : '';
   const cmd = routeCmd + args.map(a => `'${String(a).replace(/'/g, "'\\''")}'`).join(' ');
   const container = process.env.WG_HUB_CONTAINER || 'izandesk-wg-hub';
   const { stdout } = await execFileAsync('docker', ['exec', container, 'sh', '-lc', cmd], { timeout: (timeoutSec + 4) * 1000, maxBuffer: 4 * 1024 * 1024 });

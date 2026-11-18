@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import { pool } from '../db';
-import { asyncHandler, sanitizeRouter, sanitizeRouters } from './helpers';
+import { asyncHandler, sanitizeRouter, sanitizeRouters, networkGuard, hasNetworkWrite } from './helpers';
 import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret } from '../integrations/mikrotik';
 import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas } from '../integrations/radius';
 import { autoLinkOnusBulk } from '../integrations/onu-autolink';
 
 const router: Router = Router();
+router.use(networkGuard);
 
 // Routers CRUD
 router.get('/routers', asyncHandler(async (req, res) => {
@@ -226,6 +227,8 @@ function mbpsFromRateLimit(rate: any): number {
 }
 
 router.get('/routers/:id/mikrotik/import-preview', asyncHandler(async (req, res) => {
+  // The preview includes PPP secret passwords — restrict to network engineers.
+  if (!hasNetworkWrite(req)) return res.status(403).json({ message: 'Insufficient permissions to view router secrets' });
   const r = await pool.query('SELECT * FROM network_routers WHERE id=$1', [req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Router not found' });
   const row = r.rows[0];
