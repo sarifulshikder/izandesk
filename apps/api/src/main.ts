@@ -4,6 +4,7 @@ import cors = require('cors');
 import jwt = require('jsonwebtoken');
 import bcrypt = require('bcrypt');
 import http = require('http');
+import crypto = require('crypto');
 import { WebSocketServer } from 'ws';
 import { PluginKernel } from './kernel/plugin-manager';
 import { setKernel } from './kernel/kernel-instance';
@@ -280,6 +281,7 @@ async function bootstrap() {
       ON CONFLICT (gateway) DO UPDATE SET enabled=COALESCE($2,payment_gateway_configs.enabled), mode=COALESCE($3,payment_gateway_configs.mode), config=COALESCE($4::jsonb,payment_gateway_configs.config), credentials=COALESCE($5::jsonb,payment_gateway_configs.credentials), webhook_secret=COALESCE($6,payment_gateway_configs.webhook_secret), updated_at=now()
       RETURNING gateway,enabled,mode,config,updated_at,(credentials IS NOT NULL AND credentials <> '{}'::jsonb) as has_credentials,(webhook_secret IS NOT NULL AND webhook_secret <> '') as has_webhook_secret`,
       [gateway, b.enabled, b.mode, b.config ? JSON.stringify(b.config) : null, b.credentials ? JSON.stringify(b.credentials) : null, b.webhook_secret || null]);
+    await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'PAYMENT_GATEWAY_CONFIG', entity_type: 'payment_gateway', entity_id: gateway, details: { enabled: r.rows[0]?.enabled, mode: r.rows[0]?.mode, credentials_changed: !!b.credentials, webhook_secret_changed: !!b.webhook_secret } });
     res.json({ ok: true, gateway: r.rows[0] });
   });
 
@@ -300,8 +302,25 @@ async function bootstrap() {
   // Phase 4: Billing, Invoicing, Payments, Suspension/Reactivation
   // Webhooks, MFS SMS ingest, and shareable invoice links are public (validated in-route/by token)
   app.use('/api/billing', (req, res, next) => {
-    const publicPath = req.path.startsWith('/webhooks/') || req.path === '/payments/sms/ingest' || req.path === '/payments/bkash/callback' || /^\/invoices\/[^/]+\/(pdf|html|share)$/.test(req.path);
-    return publicPath ? next() : authMiddleware(req, res, next);
+    // Webhooks are verified in-route (HMAC + pending-payment binding), bKash's
+    // redirect is verified by executing the payment with the gateway, and
+    // invoice PDF/HTML links carry a signed expiring token.
+    if (req.path.startsWith('/webhooks/') || req.path === '/payments/bkash/callback' || /^\/invoices\/[^/]+\/(pdf|html)$/.test(req.path)) return next();
+    // SMS forwarding is public only with a configured shared token; otherwise
+    // the JWT must be verified by the normal auth middleware (never trust a
+    // raw `Bearer <anything>` header).
+    if (req.path === '/payments/sms/ingest') {
+      const expected = process.env.MFS_SMS_INGEST_TOKEN || process.env.SMS_INGEST_TOKEN || '';
+      const token = String(req.headers['x-sms-token'] || req.query.token || '');
+      if (expected && token) {
+        const a = Buffer.from(token), b = Buffer.from(expected);
+        if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+          (req as any).smsIngestAuthorized = true;
+          return next();
+        }
+      }
+    }
+    return authMiddleware(req, res, next);
   }, billingRouter);
 
   // Phase 5: Resellers, CRM/Tickets, Messaging

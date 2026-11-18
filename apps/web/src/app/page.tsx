@@ -27,12 +27,15 @@ export default function DashboardPage() {
     if (!token) return;
     // Diagnostics is admin-only — skip it for reseller/technician roles instead of firing a 403.
     const canDiagnostics = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(activeRole || user?.role));
+    // Billing metrics are tenant-wide; skip for roles without billing access
+    // instead of firing a 403 (resellers use their own scoped dashboard).
+    const canBilling = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(activeRole || user?.role));
     try {
       const [sum, subs, sessions, billing, routers, olts, onus, health, apiHealth, diag, general] = await Promise.all([
         apiFetch<any>('/api/subscribers/summary', {}, token).catch(() => null),
         apiFetch<any>('/api/subscribers?limit=6', {}, token).catch(() => null),
         apiFetch<any>('/api/network/sessions', {}, token).catch(() => null),
-        apiFetch<any>('/api/billing/metrics', {}, token).catch(() => null),
+        canBilling ? apiFetch<any>('/api/billing/metrics', {}, token).catch(() => null) : Promise.resolve(null),
         apiFetch<any>('/api/network/routers', {}, token).catch(() => null),
         apiFetch<any>('/api/olt/olts', {}, token).catch(() => null),
         apiFetch<any>('/api/olt/onus', {}, token).catch(() => null),

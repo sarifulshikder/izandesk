@@ -1,20 +1,35 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
-import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses, ingestMfsSmsEvent, runFupEnforcementSweep, evaluateFupForSubscriber } from '../integrations/billing';
+import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses, ingestMfsSmsEvent, runFupEnforcementSweep, evaluateFupForSubscriber, signInvoiceToken, verifyInvoiceToken } from '../integrations/billing';
 import { getKernel } from '../kernel/kernel-instance';
 import { mikrotikProvisionWalledGardenRedirect } from '../integrations/mikrotik';
-import crypto from 'crypto';
+import crypto = require('crypto');
 import { dispatchMessage, trySendTemplateToSubscriber } from '../integrations/messaging';
 import { renderInvoiceHtml, renderSimpleInvoicePdf } from '../integrations/pdf';
 import { auditLog, reqActor } from '../integrations/audit';
 
 const router: Router = Router();
 
+const BILLING_READ_ROLES = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'];
+const BILLING_WRITE_ROLES = ['SUPER_ADMIN', 'BILLING_OPERATOR'];
+
+// Billing is tenant-wide: resellers must use the partner-scoped APIs under
+// /api/resellers instead. Unauthenticated requests belong to public routes
+// (webhooks, callbacks, signed invoice links) and are validated in-route.
+router.use((req: any, res: any, next: any) => {
+  const role = String(req.user?.role || '');
+  if (!role) return next();
+  if (!BILLING_READ_ROLES.includes(role)) {
+    return res.status(403).json({ message: 'Billing access is restricted to staff accounts' });
+  }
+  return next();
+});
+
 function requireBillingRole(req: any, res: any) {
   const role = (req as any).user?.role;
   if (!role) { res.status(401).json({ message: 'Unauthorized' }); return false; }
-  if (!['SUPER_ADMIN','BILLING_OPERATOR','RESELLER'].includes(role)) { res.status(403).json({ message: 'Insufficient permissions for billing operations' }); return false; }
+  if (!BILLING_WRITE_ROLES.includes(role)) { res.status(403).json({ message: 'Insufficient permissions for billing operations' }); return false; }
   return true;
 }
 
@@ -43,7 +58,7 @@ router.post('/invoices/generate', asyncHandler(async (req, res) => {
     if (!s) return res.status(404).json({ message: 'Subscriber not found' });
     const result = await generateInvoiceForSubscriber(s, { cycleDate: b.cycle_date ? new Date(b.cycle_date) : new Date(), force: !!b.force });
     if (result?.ok && result.invoice?.id) {
-      const pdfUrl = `${base}/api/billing/invoices/${result.invoice.id}/pdf?token=${result.invoice.id}`;
+      const pdfUrl = `${base}/api/billing/invoices/${result.invoice.id}/pdf?token=${encodeURIComponent(signInvoiceToken(result.invoice.id))}`;
       try { await trySendTemplateToSubscriber(s.id, 'invoice_delivery_whatsapp', { invoice_number: result.invoice.invoice_number, amount: result.invoice.total_amount, due: result.invoice.due_amount, pdf_url: pdfUrl }, { channel_type: 'WHATSAPP' }); } catch {}
       try { await trySendTemplateToSubscriber(s.id, 'invoice_due_reminder_sms', { invoice_number: result.invoice.invoice_number, amount: result.invoice.total_amount, due: result.invoice.due_amount, due_date: result.invoice.due_date }, { channel_type: 'SMS' }); } catch {}
       (result as any).pdf_url = pdfUrl;
@@ -146,17 +161,13 @@ router.post('/subscribers/:id/suspend', asyncHandler(async (req, res) => {
 }));
 
 router.post('/payments/sms/ingest', asyncHandler(async (req, res) => {
-  // allow either authenticated billing/admin user or shared SMS ingest token
-  const auth = String(req.headers.authorization || '');
-  const smsToken = String(req.headers['x-sms-token'] || req.query.token || req.body?.token || '');
-  const expected = process.env.MFS_SMS_INGEST_TOKEN || process.env.SMS_INGEST_TOKEN || '';
-  let authorized = !!(auth.startsWith('Bearer ') || (req as any).user);
-  if (!authorized && expected && smsToken && smsToken === expected) authorized = true;
-  if (!authorized && !expected) {
-    // no token configured: only allow from trusted/authenticated context; reject anonymous to be safe
+  // main.ts verifies the JWT (or the configured shared forwarder token)
+  // before this public path reaches the router. A raw Authorization header is
+  // never trusted here — the old `Bearer <anything>` check allowed anonymous
+  // callers to record arbitrary MFS payments.
+  if (!(req as any).user && !(req as any).smsIngestAuthorized) {
     return res.status(401).json({ ok: false, message: 'Unauthorized SMS ingest (configure MFS_SMS_INGEST_TOKEN or authenticate)' });
   }
-  if (!authorized) return res.status(401).json({ ok: false, message: 'Invalid SMS ingest token' });
 
   const b = req.body || {};
   const gateway = String(b.gateway || 'bkash').toLowerCase();
@@ -202,6 +213,7 @@ router.post('/gateways/:gateway', asyncHandler(async (req, res) => {
     VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,now())
     ON CONFLICT (gateway) DO UPDATE SET enabled=COALESCE($2,payment_gateway_configs.enabled), mode=COALESCE($3,payment_gateway_configs.mode), config=COALESCE($4::jsonb,payment_gateway_configs.config), credentials=COALESCE($5::jsonb,payment_gateway_configs.credentials), webhook_secret=COALESCE($6,payment_gateway_configs.webhook_secret), updated_at=now() RETURNING gateway,enabled,mode,config,updated_at`,
     [req.params.gateway, b.enabled, b.mode, b.config ? JSON.stringify(b.config) : null, b.credentials ? JSON.stringify(b.credentials) : null, b.webhook_secret || null]);
+  await auditLog({ ...reqActor(req), action: 'PAYMENT_GATEWAY_CONFIG', entity_type: 'payment_gateway', entity_id: String(req.params.gateway), details: { enabled: r.rows[0]?.enabled, mode: r.rows[0]?.mode, credentials_changed: !!b.credentials, webhook_secret_changed: !!b.webhook_secret } });
   res.json({ ok: true, gateway: r.rows[0] });
 }));
 
@@ -366,7 +378,9 @@ router.post('/payments/checkout', asyncHandler(async (req, res) => {
   const invoice = b.invoice_id ? (await pool.query('SELECT * FROM invoices WHERE id=$1', [b.invoice_id])).rows[0] : null;
   if (b.invoice_id && !invoice) return res.status(404).json({ message: 'Invoice not found' });
   const subscriber = invoice?.subscriber_id ? (await pool.query('SELECT * FROM subscribers WHERE id=$1', [invoice.subscriber_id])).rows[0] : (b.subscriber_id ? (await pool.query('SELECT * FROM subscribers WHERE id=$1', [b.subscriber_id])).rows[0] : null);
-  const amount = Number(b.amount || invoice?.due_amount || invoice?.total_amount || 0);
+  // Invoice checkouts are always for the outstanding amount — an explicit
+  // amount must never let a small payment settle a large invoice.
+  const amount = invoice ? Number(invoice.due_amount || invoice.total_amount || 0) : Number(b.amount || 0);
   if (!(amount > 0)) return res.status(400).json({ message: 'amount must be > 0' });
   const cfg = await getGatewayConfig(gateway);
   const kernel = getKernel();
@@ -401,7 +415,12 @@ router.post('/payments/:paymentRef/confirm', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const pr = (await pool.query('SELECT * FROM payments WHERE payment_ref=$1', [req.params.paymentRef])).rows[0];
   if (!pr) return res.status(404).json({ message: 'Payment not found' });
-  const result = await recordPaymentAndReactivate({ gateway: pr.gateway, amount: Number(b.amount || pr.amount), invoice_id: pr.invoice_id, subscriber_id: pr.subscriber_id, trx_id: b.trx_id || `SIM-${Date.now()}`, method: b.method || pr.method || 'manual', payer_number: b.payer_number, raw: b, payment_ref: pr.payment_ref, currency: pr.currency, status: 'COMPLETED' });
+  // The amount comes from the stored pending payment, never from the request.
+  // A client-supplied amount here used to be a money-minting primitive.
+  const amount = Number(pr.amount || 0);
+  if (!(amount > 0)) return res.status(400).json({ message: 'Payment has no valid amount' });
+  const result = await recordPaymentAndReactivate({ gateway: pr.gateway, amount, invoice_id: pr.invoice_id, subscriber_id: pr.subscriber_id, trx_id: b.trx_id || `SIM-${Date.now()}`, method: b.method || pr.method || 'manual', payer_number: b.payer_number, raw: b, payment_ref: pr.payment_ref, currency: pr.currency, status: 'COMPLETED' });
+  await auditLog({ ...reqActor(req), action: 'PAYMENT_MANUAL_CONFIRM', entity_type: 'payment', entity_id: String(pr.id), details: { payment_ref: pr.payment_ref, amount, gateway: pr.gateway } });
   res.json(result);
 }));
 
@@ -414,7 +433,9 @@ function timingSafeEq(a: string, b: string) {
 
 function verifyWebhookSignature(gateway: string, req: any, cfg: any) {
   const secret = cfg?.webhook_secret || cfg?.credentials?.webhook_secret || cfg?.config?.webhook_secret;
-  if (!secret) return { ok: true, skipped: true, reason: 'no webhook secret configured' };
+  // Fail closed: an unsigned webhook cannot be trusted, and accepting it let
+  // anyone mint payments by POSTing an arbitrary amount.
+  if (!secret) return { ok: false, error: 'webhook secret not configured' };
   const raw = JSON.stringify(req.body || {});
   const sigHeader = String(req.headers['x-signature'] || req.headers['x-webhook-signature'] || req.headers['stripe-signature'] || req.headers['x-hook-signature'] || '');
   if (!sigHeader) {
@@ -452,9 +473,22 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
     return res.status(401).json({ ok: false, verified: false, message: sig.error || 'Invalid webhook signature' });
   }
 
-  let verification: any = { ok: true, verified: true, status: 'COMPLETED', amount: payload.amount, trxId: payload.trxId || payload.trx_id, paymentRef: payload.paymentRef || payload.payment_ref, invoiceId: payload.invoiceId || payload.invoice_id, raw: payload };
+  let verification: any = null;
   if (plugin && typeof plugin.verifyWebhook === 'function') {
     try { verification = await plugin.verifyWebhook(payload, req.headers as any, cfg); } catch (e:any) { verification = { ok: false, verified: false, status: 'FAILED', message: e.message, raw: payload }; }
+  }
+  if (!verification) {
+    // No provider-specific verifier. A valid HMAC proves the caller knows the
+    // secret, but we still bind the event to a known PENDING payment and cap
+    // the amount at what was actually checked out.
+    const pref = String(payload.paymentRef || payload.payment_ref || '').trim();
+    const pending = pref ? (await pool.query("SELECT * FROM payments WHERE payment_ref=$1 AND status='PENDING'", [pref])).rows[0] : null;
+    const amt = Number(payload.amount || 0);
+    if (!pending || !(amt > 0) || amt > Number(pending.amount || 0) + 0.01) {
+      verification = { ok: false, verified: false, status: 'FAILED', message: 'Webhook does not match a pending payment', raw: payload };
+    } else {
+      verification = { ok: true, verified: true, status: String(payload.status || 'COMPLETED').toUpperCase(), amount: amt, trxId: payload.trxId || payload.trx_id || null, paymentRef: pref, invoiceId: pending.invoice_id, subscriber_id: pending.subscriber_id, raw: payload };
+    }
   }
 
   const eventId = verification.eventId || payload.event_id || payload.id || verification.trxId || payload.trxId || payload.trx_id || null;
@@ -481,7 +515,7 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
   if (verification.verified && (String(verification.status).toUpperCase() === 'COMPLETED' || String(verification.status).toUpperCase() === 'PAID' || String(verification.status).toUpperCase() === 'SUCCESS')) {
     const amount = Number(verification.amount || payload.amount || 0);
     const invoiceId = verification.invoiceId || payload.invoiceId || payload.invoice_id;
-    const result = amount > 0 ? await recordPaymentAndReactivate({ gateway, amount, invoice_id: invoiceId, subscriber_id: payload.subscriber_id, trx_id: trxId || undefined, method: payload.method || 'webhook', payer_number: payload.payer || payload.msisdn || verification.payer?.msisdn, raw: payload, payment_ref: paymentRef || undefined, currency: verification.currency || payload.currency || 'BDT', status: 'COMPLETED', dedupe_key: dedupeKey }) : { ok:false, message:'No amount in webhook' };
+    const result = amount > 0 ? await recordPaymentAndReactivate({ gateway, amount, invoice_id: invoiceId, subscriber_id: verification.subscriber_id || payload.subscriber_id, trx_id: trxId || undefined, method: payload.method || 'webhook', payer_number: payload.payer || payload.msisdn || verification.payer?.msisdn, raw: payload, payment_ref: paymentRef || undefined, currency: verification.currency || payload.currency || 'BDT', status: 'COMPLETED', dedupe_key: dedupeKey }) : { ok:false, message:'No amount in webhook' };
     await pool.query('UPDATE payment_webhook_events SET processed=true, processed_at=now(), result=$2::jsonb WHERE id=$1', [eventRow?.id, JSON.stringify({ verification, result })]);
     return res.json({ ok: true, verified: true, processed: true, result });
   }
@@ -519,6 +553,7 @@ router.post('/walled-garden/provision-router', asyncHandler(async (req, res) => 
 
 
 router.get('/invoices/:id/html', asyncHandler(async (req, res) => {
+  if (!verifyInvoiceToken(req.params.id, String(req.query.token || ''))) return res.status(401).send('Invalid or expired invoice link');
   const inv = await getInvoiceWithItems(req.params.id);
   if (!inv) return res.status(404).send('Invoice not found');
   const base = `${req.protocol}://${req.get('host')}`;
@@ -527,6 +562,7 @@ router.get('/invoices/:id/html', asyncHandler(async (req, res) => {
 }));
 
 router.get('/invoices/:id/pdf', asyncHandler(async (req, res) => {
+  if (!verifyInvoiceToken(req.params.id, String(req.query.token || ''))) return res.status(401).json({ message: 'Invalid or expired invoice link' });
   const inv = await getInvoiceWithItems(req.params.id);
   if (!inv) return res.status(404).json({ message: 'Invoice not found' });
   const pdf = renderSimpleInvoicePdf(inv);
@@ -536,11 +572,15 @@ router.get('/invoices/:id/pdf', asyncHandler(async (req, res) => {
 }));
 
 router.get('/invoices/:id/share', asyncHandler(async (req, res) => {
+  const role = String((req as any).user?.role || '');
+  if (!BILLING_READ_ROLES.includes(role) && !verifyInvoiceToken(req.params.id, String(req.query.token || ''))) {
+    return res.status(401).json({ message: 'Invalid or expired invoice link' });
+  }
   const inv = await getInvoiceWithItems(req.params.id);
   if (!inv) return res.status(404).json({ message: 'Invoice not found' });
   const base = `${req.protocol}://${req.get('host')}`;
-  const pdfUrl = `${base}/api/billing/invoices/${inv.id}/pdf?token=${inv.id}`;
-  const htmlUrl = `${base}/api/billing/invoices/${inv.id}/html?token=${inv.id}`;
+  const pdfUrl = `${base}/api/billing/invoices/${inv.id}/pdf?token=${encodeURIComponent(signInvoiceToken(inv.id))}`;
+  const htmlUrl = `${base}/api/billing/invoices/${inv.id}/html?token=${encodeURIComponent(signInvoiceToken(inv.id))}`;
   const payUrl = `${base}/billing?invoice=${encodeURIComponent(inv.id)}`;
   res.json({ ok: true, invoice_id: inv.id, invoice_number: inv.invoice_number, pdf_url: pdfUrl, html_url: htmlUrl, payment_url: payUrl });
 }));

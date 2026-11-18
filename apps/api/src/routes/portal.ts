@@ -9,6 +9,7 @@ import { asyncHandler } from './helpers';
 import { getInvoiceWithItems } from '../integrations/billing';
 import { getKernel } from '../kernel/kernel-instance';
 import { renderSimpleInvoicePdf } from '../integrations/pdf';
+import { nextTicketNo } from '../utils/ticket-no';
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
@@ -176,7 +177,9 @@ router.post('/payments/checkout', portalAuth, asyncHandler(async (req, res) => {
   const invoice = b.invoice_id ? (await pool.query('SELECT * FROM invoices WHERE id=$1 AND subscriber_id=$2', [b.invoice_id, subId])).rows[0] : null;
   if (b.invoice_id && !invoice) return res.status(404).json({ message: 'Invoice not found' });
   const subscriber = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subId])).rows[0];
-  const amount = Number(b.amount || invoice?.due_amount || invoice?.total_amount || 0);
+  // For invoice payments the amount is fixed by the invoice — never let the
+  // caller pick a smaller amount and still have the invoice marked as paid.
+  const amount = invoice ? Number(invoice.due_amount || invoice.total_amount || 0) : Number(b.amount || 0);
   if (!(amount > 0)) return res.status(400).json({ message: 'amount must be > 0' });
   const cfg = (await pool.query('SELECT * FROM payment_gateway_configs WHERE gateway=$1', [gateway])).rows[0] || null;
   const kernel = getKernel();
@@ -211,8 +214,7 @@ router.post('/tickets', portalAuth, asyncHandler(async (req, res) => {
   const priority = String(b.priority || 'MEDIUM').toUpperCase();
   const hours = priority === 'CRITICAL' ? 4 : priority === 'HIGH' ? 8 : priority === 'LOW' ? 48 : 24;
   const due = new Date(Date.now() + hours*3600*1000);
-  const count = (await pool.query('SELECT COUNT(*)::int AS n FROM tickets')).rows[0]?.n || 0;
-  const ticketNo = `TKT-${String(count+1).padStart(6,'0')}`;
+  const ticketNo = await nextTicketNo();
   const gps = (sub as any).latitude && (sub as any).longitude ? `https://www.google.com/maps/search/?api=1&query=${(sub as any).latitude},${(sub as any).longitude}` : (sub.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(sub.address)}` : null);
   // try to include site coords if present
   const full = (await pool.query('SELECT latitude, longitude, address, reseller_id FROM subscribers WHERE id=$1', [sub.id])).rows[0] || {};
@@ -294,8 +296,7 @@ router.post('/package-request', portalAuth, asyncHandler(async (req, res) => {
   const pkgName = pkg?.name || b.package_name || 'Requested package';
   const priority = 'MEDIUM';
   const hours = 24; const due = new Date(Date.now() + hours*3600*1000);
-  const count = (await pool.query('SELECT COUNT(*)::int AS n FROM tickets')).rows[0]?.n || 0;
-  const ticketNo = `TKT-${String(count+1).padStart(6,'0')}`;
+  const ticketNo = await nextTicketNo();
   const full = (await pool.query('SELECT latitude, longitude, address, reseller_id FROM subscribers WHERE id=$1', [sub.id])).rows[0] || {};
   const desc = `Package change/upgrade request from customer portal.\nCurrent: ${sub.package_name || '-'} (${sub.bandwidth_mbps || '-'} Mbps)\nRequested: ${pkgName}${pkg ? ` (${pkg.download_mbps}/${pkg.upload_mbps} Mbps, ${pkg.price})` : ''}\nNotes: ${b.notes || '-'}`;
   const gpsUrl = (full.latitude!=null && full.longitude!=null) ? `https://www.google.com/maps/search/?api=1&query=${full.latitude},${full.longitude}` : (full.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(full.address)}` : null);

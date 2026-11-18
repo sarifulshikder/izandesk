@@ -1,3 +1,4 @@
+import crypto = require('crypto');
 import { pool } from '../db';
 import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikEnsureParentalProfile, mikrotikDisconnectPppUser, PARENTAL_CONTROL_PROFILE } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
@@ -532,6 +533,27 @@ export async function getBillingMetrics() {
     overdueInvoices: Number(invCounts.rows[0]?.overdue || 0),
     unpaidInvoices: Number(invCounts.rows[0]?.unpaid || 0),
   };
+}
+
+/** Signed, expiring share token for public invoice PDF/HTML links. */
+function shareSecret() {
+  return process.env.INVOICE_SHARE_SECRET || process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
+}
+export function signInvoiceToken(invoiceId: string, ttlSeconds = 7 * 24 * 3600): string {
+  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const payload = `${invoiceId}.${exp}`;
+  const sig = crypto.createHmac('sha256', shareSecret()).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+export function verifyInvoiceToken(invoiceId: string, token?: string | null): boolean {
+  if (!token) return false;
+  const parts = String(token).split('.');
+  if (parts.length !== 3) return false;
+  const [id, exp, sig] = parts;
+  if (id !== invoiceId || !/^\d+$/.test(exp)) return false;
+  if (Number(exp) < Math.floor(Date.now() / 1000)) return false;
+  const expected = crypto.createHmac('sha256', shareSecret()).update(`${id}.${exp}`).digest('base64url');
+  try { return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)); } catch { return false; }
 }
 
 export async function listInvoices(query: any) {

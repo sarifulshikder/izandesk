@@ -641,3 +641,87 @@ test.describe('GIS mutating flows (opt-in)', () => {
     }
   });
 });
+
+test.describe('billing payment security', () => {
+  test('anonymous webhook and raw Bearer SMS ingest cannot record payments', async ({ request }) => {
+    // No signature/secret: the webhook must fail closed instead of auto-trusting the body.
+    const hook = await request.post('/api/billing/webhooks/bkash', {
+      data: { amount: 999999, status: 'COMPLETED', trx_id: 'E2E-FORGE-HOOK' },
+    });
+    expect(hook.status()).toBe(401);
+
+    // A raw Bearer string is not a verified JWT — the public SMS path must reject it.
+    const sms = await request.post('/api/billing/payments/sms/ingest', {
+      headers: { Authorization: 'Bearer definitely-not-a-jwt' },
+      data: { gateway: 'bkash', amount: 999999, trx_id: 'E2E-FORGE-SMS', message: 'fake' },
+    });
+    expect(sms.status()).toBe(401);
+  });
+
+  test('reseller cannot reach tenant-wide billing APIs', async ({ request }) => {
+    const token = await loginToken(request, reseller);
+    const headers = { Authorization: `Bearer ${token}` };
+    expect((await request.get('/api/billing/invoices', { headers })).status()).toBe(403);
+    expect((await request.get('/api/billing/payments', { headers })).status()).toBe(403);
+    expect((await request.post('/api/billing/gateways/bkash', { headers, data: { webhook_secret: 'attacker-secret' } })).status()).toBe(403);
+    expect((await request.post('/api/billing/payments/checkout', { headers, data: { gateway: 'bkash', amount: 100 } })).status()).toBe(403);
+  });
+
+  test('invoice PDF/HTML links require a signed token', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const list = await (await request.get('/api/billing/invoices', { headers })).json();
+    const inv = (list.data || [])[0];
+    test.skip(!inv, 'no invoice seeded for link test');
+    expect((await request.get(`/api/billing/invoices/${inv.id}/pdf`)).status()).toBe(401);
+    // The old scheme used the raw invoice id as the "token" — it must no longer work.
+    expect((await request.get(`/api/billing/invoices/${inv.id}/pdf?token=${inv.id}`)).status()).toBe(401);
+  });
+});
+
+test.describe('billing mutating flows (opt-in)', () => {
+  test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run data-mutating checks');
+
+  test('invoice share links use signed tokens', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const subs = await (await request.get('/api/subscribers?limit=100', { headers })).json();
+    const sub = (subs.data || []).find((s: any) => Number(s.monthly_bill) > 0);
+    test.skip(!sub, 'no billable subscriber seeded for invoice link test');
+    const generated = await request.post('/api/billing/invoices/generate', {
+      headers, data: { subscriber_id: sub.id, force: true },
+    });
+    expect(generated.ok()).toBeTruthy();
+    const invoiceId = (await generated.json()).invoice?.id;
+    test.skip(!invoiceId, 'invoice could not be generated');
+    try {
+      const share = await (await request.get(`/api/billing/invoices/${invoiceId}/share`, { headers })).json();
+      const shareToken = new URL(share.pdf_url).searchParams.get('token');
+      expect(shareToken).toBeTruthy();
+      expect(shareToken).not.toBe(invoiceId);
+      const pdfPath = new URL(share.pdf_url).pathname + new URL(share.pdf_url).search;
+      expect((await request.get(pdfPath)).status()).toBe(200);
+      expect((await request.get(`/api/billing/invoices/${invoiceId}/pdf?token=${invoiceId}`)).status()).toBe(401);
+    } finally {
+      await request.post(`/api/billing/invoices/${invoiceId}/cancel`, { headers });
+    }
+  });
+
+  test('manual payment confirmation cannot inflate the stored amount', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const headers = { Authorization: `Bearer ${token}` };
+    const checkout = await request.post('/api/billing/payments/checkout', {
+      headers, data: { gateway: 'bkash', amount: 10, method: 'e2e' },
+    });
+    expect(checkout.ok()).toBeTruthy();
+    const { payment } = await checkout.json();
+    const confirm = await request.post(`/api/billing/payments/${payment.payment_ref}/confirm`, {
+      headers, data: { amount: 999999, trx_id: `E2E-CONFIRM-${Date.now()}` },
+    });
+    expect(confirm.ok()).toBeTruthy();
+    const list = await (await request.get('/api/billing/payments?status=COMPLETED', { headers })).json();
+    const row = (list.data || []).find((p: any) => p.payment_ref === payment.payment_ref);
+    expect(row).toBeTruthy();
+    expect(Number(row.amount)).toBe(10);
+  });
+});
