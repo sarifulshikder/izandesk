@@ -1,8 +1,10 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-export default function UnpaidAlias() {
+import { RedirectShell } from '@/components/layout/redirect-shell';
+
+export default function BillingUnpaidAliasPage() {
   const router = useRouter();
-  useEffect(()=>{ router.replace('/billing?status=unpaid'); },[router]);
-  return <div className="p-6 text-sm text-muted-foreground">Redirecting to Unpaid Bills...</div>;
+  useEffect(()=>{ router.replace("/billing?status=unpaid"); },[router]);
+  return <RedirectShell label="Unpaid Bills" href="/billing?status=unpaid" />;
 }

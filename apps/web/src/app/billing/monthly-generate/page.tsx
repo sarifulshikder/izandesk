@@ -1,8 +1,10 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-export default function MonthlyGenerateAlias() {
+import { RedirectShell } from '@/components/layout/redirect-shell';
+
+export default function BillingMonthlygenerateAliasPage() {
   const router = useRouter();
-  useEffect(()=>{ router.replace('/billing#billing-invoices'); },[router]);
-  return <div className="p-6 text-sm text-muted-foreground">Redirecting to Billing (Generate Batch Invoices)...</div>;
+  useEffect(()=>{ router.replace("/billing#billing-invoices"); },[router]);
+  return <RedirectShell label="Billing" href="/billing#billing-invoices" />;
 }

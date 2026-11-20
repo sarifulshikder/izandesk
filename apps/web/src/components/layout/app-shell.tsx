@@ -27,7 +27,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <Sidebar />
         <div className="page-wrapper">
           <Header />
-          <main className="page-body">
+          <main className="page-body pb-24 lg:pb-10">
             <div className="container-xl space-y-5">{children}</div>
           </main>
         </div>

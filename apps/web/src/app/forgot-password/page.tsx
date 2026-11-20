@@ -3,7 +3,11 @@ import Link from 'next/link';
 export default function ForgotPasswordPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-4">
-      <div className="card w-full max-w-md p-6 sm:p-8 space-y-4">
+      <div className="card w-full max-w-md overflow-hidden">
+        <div className="px-6 pt-6 sm:px-8 sm:pt-8">
+          <span className="page-eyebrow">IzanDesk · Account recovery</span>
+        </div>
+        <div className="p-6 sm:p-8 pt-4 space-y-4">
         <div>
           <h1 className="text-xl font-bold">Forgot password</h1>
           <p className="text-sm text-muted-foreground mt-1">
@@ -24,6 +28,7 @@ export default function ForgotPasswordPage() {
           <Link href="/portal" className="btn btn-outline">
             Open portal
           </Link>
+        </div>
         </div>
       </div>
     </div>

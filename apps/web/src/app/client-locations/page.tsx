@@ -1,8 +1,10 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-export default function ClientLocationsAlias() {
+import { RedirectShell } from '@/components/layout/redirect-shell';
+
+export default function ClientlocationsAliasPage() {
   const router = useRouter();
-  useEffect(() => { router.replace('/gis'); }, [router]);
-  return <div className="p-6 text-sm text-muted-foreground">Redirecting to Client Locations (GIS)...</div>;
+  useEffect(()=>{ router.replace("/gis"); },[router]);
+  return <RedirectShell label="Client Locations" href="/gis" />;
 }

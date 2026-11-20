@@ -110,6 +110,7 @@ export default function AiAssistantPage() {
         <div className="flex items-center gap-3">
           <div className="page-title-icon"><Sparkles className="w-6 h-6" /></div>
           <div>
+            <span className="page-eyebrow">Intelligence · Workspace assistant</span>
             <h1 className="page-title">AI Copilot</h1>
             <p className="page-subtitle">Bilingual, role-scoped answers from your live ISP data — free local engine, optional AI providers.</p>
           </div>
@@ -143,7 +144,7 @@ export default function AiAssistantPage() {
                 </div>
               </div>
             </div>
-            <span className="badge badge-success shrink-0"><span className="status-dot bg-emerald-500" /> Live</span>
+            <span className="badge badge-success shrink-0"><span className="status-dot bg-success" /> Live</span>
           </div>
 
           <div className="card-body-sm p-0">
@@ -237,7 +238,7 @@ export default function AiAssistantPage() {
                 </div>
               </div>
             </div>
-            <div className="mt-3 flex items-start gap-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-700 dark:text-emerald-300">
+            <div className="alert alert-success mt-3 text-[11px]">
               <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{status?.privacy || 'Local-only by default — data stays in IzanDesk.'}</span>
             </div>

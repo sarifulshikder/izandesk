@@ -155,91 +155,93 @@ export default function InstallationOrdersPage() {
 
   return (
     <div className="space-y-5">
-      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
+          <span className="page-eyebrow">Field operations · Work orders</span>
           <h1 className="page-title">Installation Orders</h1>
-          <p className="text-sm text-muted-foreground">Schedule, dispatch, and track field work — {total} total</p>
+          <p className="page-subtitle">Schedule, dispatch, and track field work — {total} total</p>
         </div>
-        <div className="flex gap-2">
+        <div className="page-actions">
           <button onClick={load} className="btn btn-outline">Refresh</button>
           <button onClick={openCreate} className="btn btn-primary"><Plus className="w-4 h-4"/>Create Order</button>
         </div>
       </div>
 
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
 
       {summary && (
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-          <div className="card p-4"><div className="text-xs text-muted-foreground">Pending</div><div className="text-xl font-black mt-1 text-amber-400">{summary.pending}</div></div>
-          <div className="card p-4 border-info/30"><div className="text-xs text-blue-300/80">In Progress</div><div className="text-xl font-black mt-1 text-blue-400">{summary.in_progress}</div></div>
-          <div className="card p-4 border-success/30"><div className="text-xs text-emerald-300/80">Completed</div><div className="text-xl font-black mt-1 text-emerald-400">{summary.completed}</div></div>
-          <div className="card p-4 border-danger/30"><div className="text-xs text-red-300/80">Overdue</div><div className="text-xl font-black mt-1 text-red-400">{summary.overdue}</div></div>
+        <div className="stat-grid">
+          <div className="dash-stat dash-stat-warning"><span className="dash-stat-icon"><Clock /></span><span className="dash-stat-body"><span className="dash-stat-label">Pending</span><span className="dash-stat-value">{summary.pending}</span><span className="dash-stat-hint">awaiting schedule</span></span></div>
+          <div className="dash-stat dash-stat-info"><span className="dash-stat-icon"><Wrench /></span><span className="dash-stat-body"><span className="dash-stat-label">In Progress</span><span className="dash-stat-value">{summary.in_progress}</span><span className="dash-stat-hint">active field work</span></span></div>
+          <div className="dash-stat dash-stat-success"><span className="dash-stat-icon"><CheckCircle /></span><span className="dash-stat-body"><span className="dash-stat-label">Completed</span><span className="dash-stat-value">{summary.completed}</span><span className="dash-stat-hint">closed orders</span></span></div>
+          <div className="dash-stat dash-stat-danger"><span className="dash-stat-icon"><AlertTriangle /></span><span className="dash-stat-body"><span className="dash-stat-label">Overdue</span><span className="dash-stat-value">{summary.overdue}</span><span className="dash-stat-hint">past SLA</span></span></div>
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
-        <div className="md:col-span-2 relative">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"/>
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by order no, address, contact..." className="form-control w-full pl-9"/>
+      <div className="toolbar-strip">
+        <div className="relative input-icon flex-1 min-w-[240px]">
+          <Search className="w-4 h-4"/>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by order no, address, contact..." className="form-control"/>
         </div>
-        <select value={status} onChange={e=>setStatus(e.target.value)} className="btn btn-outline">
+        <span className="toolbar-divider"/>
+        <select value={status} onChange={e=>setStatus(e.target.value)} className="form-select w-auto">
           <option value="">All Statuses</option>
           {ORDER_STATUSES.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
-        <select value={type} onChange={e=>setType(e.target.value)} className="btn btn-outline">
+        <select value={type} onChange={e=>setType(e.target.value)} className="form-select w-auto">
           <option value="">All Types</option>
           {ORDER_TYPES.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
-        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="btn btn-outline" />
-        <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="btn btn-outline" />
+        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className="form-control w-auto" />
+        <input type="date" value={to} onChange={e=>setTo(e.target.value)} className="form-control w-auto" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="xl:col-span-2 card overflow-hidden">
-          <div className="table-wrap">
-            <table className="table table-hover text-sm">
-              <thead className="bg-muted/40 text-muted-foreground text-xs uppercase">
+          <div className="table-wrap overflow-auto">
+            <table className="table table-hover min-w-[720px]">
+              <thead className="sticky top-0 z-10">
                 <tr>
-                  <th className="text-left px-4 py-3">Order</th>
-                  <th className="text-left px-4 py-3">Type</th>
-                  <th className="text-left px-4 py-3">Subscriber / Site</th>
-                  <th className="text-left px-4 py-3">Schedule</th>
-                  <th className="text-left px-4 py-3">Technician</th>
-                  <th className="text-left px-4 py-3">Status / Priority</th>
-                  <th className="text-right px-4 py-3">Actions</th>
+                  <th className="text-left px-3 py-2.5">Order</th>
+                  <th className="text-left px-3 py-2.5">Type</th>
+                  <th className="text-left px-3 py-2.5">Subscriber / Site</th>
+                  <th className="text-left px-3 py-2.5">Schedule</th>
+                  <th className="text-left px-3 py-2.5">Technician</th>
+                  <th className="text-left px-3 py-2.5">Status / Priority</th>
+                  <th className="text-right px-3 py-2.5">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {loading ? <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">Loading orders...</td></tr> :
-                 rows.length === 0 ? <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No orders found. Create one with the form.</td></tr> :
+                {loading ? <tr><td colSpan={7} className="px-3 py-10 text-center text-muted-foreground text-[11px]">Loading orders...</td></tr> :
+                 rows.length === 0 ? <tr><td colSpan={7} className="px-3 py-10 text-center text-muted-foreground text-[11px]">No orders found. Create one with the form.</td></tr> :
                  rows.map(r => (
                   <tr key={r.id} className="border-t border-border/70 hover:bg-muted/30 cursor-pointer" onClick={()=>openDetail(r.id)}>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <div className="font-semibold text-foreground">{r.order_no}</div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <div className="flex items-center gap-2 text-xs">{typeIcon(r.order_type)}<span>{r.order_type}</span></div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <div className="text-xs font-medium">{r.subscriber_name || r.lead_id ? 'Lead' : 'Direct Order'}</div>
                       <div className="text-xs text-muted-foreground">{r.site_address || '-'}</div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <div className="text-xs flex items-center gap-1"><Calendar className="w-3.5 h-3.5"/> {r.scheduled_date ? new Date(r.scheduled_date).toLocaleDateString() : 'Unscheduled'}</div>
                       {r.scheduled_time_start && <div className="text-xs flex items-center gap-1"><Clock className="w-3.5 h-3.5"/> {r.scheduled_time_start} - {r.scheduled_time_end || ''}</div>}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <div className="text-xs">{r.technician_name_full || r.assigned_technician_name || 'Unassigned'}</div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <div className="flex flex-col gap-1">
                         <span className={`badge ${statusBadge(r.status)}`}>{r.status}</span>
                         <span className={`badge font-semibold ${priorityBadge(r.priority)}`}>{r.priority}</span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right" onClick={e=>e.stopPropagation()}>
-                      <button onClick={()=>openEdit(r)} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button>
-                      <button onClick={()=>remove(r.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400"><Trash2 className="w-4 h-4"/></button>
+                    <td className="px-3 py-2.5 text-[11px] text-right" onClick={e=>e.stopPropagation()}>
+                      <button onClick={()=>openEdit(r)} className="btn btn-ghost btn-icon btn-sm"><Pencil className="w-4 h-4"/></button>
+                      <button onClick={()=>remove(r.id)} className="btn btn-ghost btn-icon btn-sm text-danger"><Trash2 className="w-4 h-4"/></button>
                     </td>
                   </tr>
                 ))}
@@ -250,7 +252,14 @@ export default function InstallationOrdersPage() {
 
         <div className="card p-4 space-y-4">
           {!detail ? (
-            <div className="text-sm text-muted-foreground py-16 text-center border border-dashed border-border rounded-xl">Select an order to view details and manage checklist.</div>
+            <div className="empty-panel">
+              <span className="empty-panel-icon"><Wrench className="w-5 h-5" /></span>
+              <div>
+                <div className="text-sm font-semibold text-foreground">No order selected</div>
+                <p className="text-[11px] text-muted-foreground mt-1 max-w-[270px] leading-relaxed">Open an order to review the site schedule and manage its completion checklist.</p>
+              </div>
+              <button onClick={openCreate} className="btn btn-primary btn-sm"><Plus className="w-3.5 h-3.5"/>Create order</button>
+            </div>
           ) : (
             <>
               <div className="flex items-start justify-between gap-2">
@@ -263,8 +272,8 @@ export default function InstallationOrdersPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <button onClick={()=>openEdit(detail)} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border" title="Edit"><Pencil className="w-4 h-4"/></button>
-                  <button onClick={()=>setDetail(null)} className="p-1.5 rounded-lg hover:bg-muted" title="Close"><X className="w-4 h-4"/></button>
+                  <button onClick={()=>openEdit(detail)} className="btn btn-ghost btn-icon btn-sm" title="Edit"><Pencil className="w-4 h-4"/></button>
+                  <button onClick={()=>setDetail(null)} className="btn btn-ghost btn-icon btn-sm" title="Close"><X className="w-4 h-4"/></button>
                 </div>
               </div>
 
@@ -287,7 +296,7 @@ export default function InstallationOrdersPage() {
                           await apiFetch(`/api/installation-orders/checklist/${item.id}`, { method: 'PUT', body: JSON.stringify({ is_completed: !item.is_completed, completed_by: 'User' }) }, token);
                           loadChecklist(detail.id);
                         }} className="w-4 h-4" />
-                        <span className={item.is_completed ? 'line-through text-muted-foreground' : ''}>{item.item_text} {item.is_required && <span className="text-red-400 text-[10px]">(required)</span>}</span>
+                        <span className={item.is_completed ? 'line-through text-muted-foreground' : ''}>{item.item_text} {item.is_required && <span className="text-danger text-[10px]">(required)</span>}</span>
                         {item.completed_at && <span className="text-[10px] text-muted-foreground ml-auto">✓ {new Date(item.completed_at).toLocaleString()}</span>}
                       </label>
                     ))
@@ -315,7 +324,7 @@ export default function InstallationOrdersPage() {
                 <h2 className="font-bold text-lg">{editing ? 'Edit Order' : 'Create Installation Order'}</h2>
                 <p className="text-xs text-muted-foreground">Fill in all required fields. Checklist can be managed after saving.</p>
               </div>
-              <button onClick={()=>setShowForm(false)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button>
+              <button onClick={()=>setShowForm(false)} className="btn btn-ghost btn-icon"><X className="w-4 h-4"/></button>
             </div>
 
             <div className="p-4 sm:p-5 space-y-6">
@@ -344,7 +353,7 @@ export default function InstallationOrdersPage() {
             </div>
 
             <div className="px-4 sm:px-5 py-4 border-t border-border flex justify-end gap-2">
-              <button onClick={()=>setShowForm(false)} className="px-4 py-2 rounded-xl border border-border">Cancel</button>
+              <button onClick={()=>setShowForm(false)} className="btn btn-outline">Cancel</button>
               <button onClick={save} className="btn btn-primary">{editing ? 'Save Changes' : 'Create Order'}</button>
             </div>
           </div>
@@ -361,7 +370,7 @@ function Input({ label, value, onChange, type='text', placeholder='' }: { label:
   return (
     <label className="block">
       <div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>
-      <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} className="form-control w-full text-foreground outline-none focus:border-primary/50" />
+      <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} className="form-control" />
     </label>
   );
 }
@@ -370,7 +379,7 @@ function Select({ label, value, onChange, options }: { label: string; value: any
   return (
     <label className="block">
       <div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>
-      <select value={value} onChange={e=>onChange(e.target.value)} className="form-control w-full text-foreground outline-none focus:border-primary/50">
+      <select value={value} onChange={e=>onChange(e.target.value)} className="form-select">
         {opts.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}
       </select>
     </label>

@@ -71,17 +71,24 @@ export default function ResellersOverviewPage() {
     if (loading && !resellers.length) return <div className="p-6 text-sm text-muted-foreground">Loading reseller portal...</div>;
     if (err) return <div className="alert alert-danger">{err}</div>;
     if (resellers[0]?.id) return <ResellerPortal resellerId={resellers[0].id} />;
-    return <div className="empty-state">No reseller account is linked to this login. Please contact the administrator.</div>;
+    return <div className="p-4"><div className="empty-panel">
+      <span className="empty-panel-icon"><Building2 className="w-5 h-5" /></span>
+      <div>
+        <div className="text-sm font-semibold text-foreground">No linked reseller account</div>
+        <p className="text-[11px] text-muted-foreground mt-1 max-w-[280px] leading-relaxed">No reseller account is linked to this login. Please contact the administrator.</p>
+      </div>
+    </div></div>;
   }
 
   return (
     <div className="space-y-5">
-      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
+          <span className="page-eyebrow">Partner network · Reseller management</span>
           <h1 className="page-title">Reseller Portal</h1>
-          <p className="text-sm text-muted-foreground">Open a reseller to access the full partner portal: dashboard, users, online sessions, balance/sharing reports, payments, and ONU list.</p>
+          <p className="page-subtitle">Open a reseller to access the full partner portal: dashboard, users, online sessions, balance/sharing reports, payments, and ONU list.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="page-actions">
           {canManage && <Link href="/resellers/add" className="btn btn-primary"><Plus className="w-4 h-4" />Add Reseller</Link>}
           <button onClick={load} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
         </div>
@@ -102,9 +109,9 @@ export default function ResellersOverviewPage() {
               </div>
               <span className="badge badge-secondary shrink-0">{r.tier}</span>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-              <div className="p-2.5 rounded-xl bg-muted/30 border border-border/60"><div className="text-[11px] text-muted-foreground flex items-center gap-1"><Users className="w-3 h-3" />Subscribers</div><div className="font-bold">{r.subscriber_count ?? 0}</div></div>
-              <div className="p-2.5 rounded-xl bg-emerald-500/5 border border-emerald-500/20"><div className="text-[11px] text-emerald-300/80 flex items-center gap-1"><Wallet className="w-3 h-3" />Wallet</div><div className="font-bold text-emerald-400">{money(r.wallet_balance)}</div></div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="dash-stat dash-stat-secondary compact"><span className="dash-stat-icon"><Users className="w-3 h-3" /></span><span className="dash-stat-body"><span className="dash-stat-label">Subscribers</span><span className="dash-stat-value">{r.subscriber_count ?? 0}</span></span></div>
+              <div className="dash-stat dash-stat-success compact"><span className="dash-stat-icon"><Wallet className="w-3 h-3" /></span><span className="dash-stat-body"><span className="dash-stat-label">Wallet</span><span className="dash-stat-value">{money(r.wallet_balance)}</span></span></div>
             </div>
             <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
               <span className="truncate">{r.subdomain ? `${r.subdomain}.` : 'No subdomain'} • {r.status}</span>
@@ -119,14 +126,21 @@ export default function ResellersOverviewPage() {
             )}
           </div>
         ))}
-        {!resellers.length && !loading && <div className="md:col-span-2 xl:col-span-3 empty-state">No resellers found.{canManage ? ' Use “Add Reseller” to create one.' : ''}</div>}
+        {!resellers.length && !loading && <div className="md:col-span-2 xl:col-span-3"><div className="empty-panel">
+          <span className="empty-panel-icon"><Building2 className="w-5 h-5" /></span>
+          <div>
+            <div className="text-sm font-semibold text-foreground">No resellers yet</div>
+            <p className="text-[11px] text-muted-foreground mt-1 max-w-[280px] leading-relaxed">Onboard a partner to open their white-label portal, wallet and subscriber management.</p>
+          </div>
+          {canManage && <Link href="/resellers/add" className="btn btn-primary btn-sm"><Plus className="w-3.5 h-3.5"/>Add Reseller</Link>}
+        </div></div>}
       </div>
 
       {canManage && <div className="card p-4 space-y-3">
-        <div className="flex items-center justify-between"><h2 className="font-bold flex items-center gap-2"><Wallet className="w-4 h-4 text-primary" />Pending Wallet Top-ups <span className="text-xs text-muted-foreground font-normal">({topups.length})</span></h2><button onClick={loadTopups} className="btn btn-outline btn-sm"><RefreshCw className="w-3.5 h-3.5" />Refresh</button></div>
-        <div className="overflow-auto"><table className="w-full text-xs min-w-[800px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Date</th><th className="text-left py-2 px-2">Reseller</th><th className="text-left py-2 px-2">Amount</th><th className="text-left py-2 px-2">Gateway</th><th className="text-left py-2 px-2">Trx ID</th><th className="text-left py-2 px-2">Payer</th><th className="text-left py-2 px-2">Notes</th><th className="text-left py-2 px-2">Action</th></tr></thead><tbody>
-          {topups.map(t => <tr key={t.id} className="border-b border-border/50"><td className="py-2 px-2 whitespace-nowrap text-muted-foreground">{new Date(t.created_at).toLocaleString()}</td><td className="py-2 px-2 font-semibold">{t.reseller_name}</td><td className="py-2 px-2 font-bold text-emerald-400">{money(t.amount)}</td><td className="py-2 px-2">{t.gateway}{t.method ? ` / ${t.method}` : ''}</td><td className="py-2 px-2 font-mono">{t.trx_id || '-'}</td><td className="py-2 px-2">{t.payer_number || '-'}</td><td className="py-2 px-2 max-w-[180px] truncate" title={t.notes || ''}>{t.notes || '-'}</td><td className="py-2 px-2"><div className="flex gap-1.5"><button disabled={!!topupBusy} onClick={()=>decideTopup(t.reseller_id, t.id, true)} className="btn btn-primary btn-sm">{topupBusy===t.id?'…':'Approve'}</button><button disabled={!!topupBusy} onClick={()=>decideTopup(t.reseller_id, t.id, false)} className="btn btn-outline btn-sm">Reject</button></div></td></tr>)}
-          {!topups.length && <tr><td colSpan={8} className="py-8 text-center text-muted-foreground">No pending top-up requests.</td></tr>}
+        <div className="flex items-center justify-between"><h2 className="card-title"><Wallet className="w-4 h-4 text-primary" />Pending Wallet Top-ups <span className="text-xs text-muted-foreground font-normal">({topups.length})</span></h2><button onClick={loadTopups} className="btn btn-outline btn-sm"><RefreshCw className="w-3.5 h-3.5" />Refresh</button></div>
+        <div className="table-wrap overflow-auto"><table className="table table-hover min-w-[720px]"><thead className="sticky top-0 z-10"><tr className="border-b border-border"><th className="px-3 py-2.5">Date</th><th className="px-3 py-2.5">Reseller</th><th className="px-3 py-2.5">Amount</th><th className="px-3 py-2.5">Gateway</th><th className="px-3 py-2.5">Trx ID</th><th className="px-3 py-2.5">Payer</th><th className="px-3 py-2.5">Notes</th><th className="px-3 py-2.5">Action</th></tr></thead><tbody>
+          {topups.map(t => <tr key={t.id} className="border-b border-border/50"><td className="px-3 py-2.5 text-[11px] whitespace-nowrap text-muted-foreground">{new Date(t.created_at).toLocaleString()}</td><td className="px-3 py-2.5 text-[11px] font-semibold">{t.reseller_name}</td><td className="px-3 py-2.5 text-[11px] font-bold tabular-nums text-success">{money(t.amount)}</td><td className="px-3 py-2.5 text-[11px]">{t.gateway}{t.method ? ` / ${t.method}` : ''}</td><td className="px-3 py-2.5 text-[11px] font-mono">{t.trx_id || '-'}</td><td className="px-3 py-2.5 text-[11px]">{t.payer_number || '-'}</td><td className="px-3 py-2.5 text-[11px] max-w-[180px] truncate" title={t.notes || ''}>{t.notes || '-'}</td><td className="px-3 py-2.5 text-[11px]"><div className="flex gap-1.5"><button disabled={!!topupBusy} onClick={()=>decideTopup(t.reseller_id, t.id, true)} className="btn btn-primary btn-sm">{topupBusy===t.id?'…':'Approve'}</button><button disabled={!!topupBusy} onClick={()=>decideTopup(t.reseller_id, t.id, false)} className="btn btn-outline btn-sm">Reject</button></div></td></tr>)}
+          {!topups.length && <tr><td colSpan={8} className="px-3 py-10 text-center text-muted-foreground text-[11px]">No pending top-up requests.</td></tr>}
         </tbody></table></div>
       </div>}
 
@@ -134,7 +148,7 @@ export default function ResellersOverviewPage() {
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setEditing(null)}>
           <div className="w-full max-w-2xl card p-4 space-y-3 max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between">
-              <h2 className="font-bold flex items-center gap-2"><Pencil className="w-4 h-4 text-primary" />Edit Reseller — {editing.name}</h2>
+              <h2 className="card-title"><Pencil className="w-4 h-4 text-primary" />Edit Reseller — {editing.name}</h2>
               <button onClick={() => setEditing(null)} className="btn btn-outline btn-icon" aria-label="Close"><X className="w-4 h-4" /></button>
             </div>
             <p className="text-xs text-muted-foreground">Update partner details, white-label branding, status and commercial terms. Wallet balance is managed from Wallet &amp; Recharge.</p>
@@ -151,13 +165,13 @@ export default function ResellersOverviewPage() {
               ))}
               <label className="block">
                 <span className="form-label">Tier</span>
-                <select className="form-control" value={editForm.tier || 'STANDARD'} onChange={e => setEditForm((v: any) => ({ ...v, tier: e.target.value }))}>
+                <select className="form-select" value={editForm.tier || 'STANDARD'} onChange={e => setEditForm((v: any) => ({ ...v, tier: e.target.value }))}>
                   {['STANDARD', 'SILVER', 'GOLD', 'PLATINUM'].map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </label>
               <label className="block">
                 <span className="form-label">Status</span>
-                <select className="form-control" value={editForm.status || 'ACTIVE'} onChange={e => setEditForm((v: any) => ({ ...v, status: e.target.value }))}>
+                <select className="form-select" value={editForm.status || 'ACTIVE'} onChange={e => setEditForm((v: any) => ({ ...v, status: e.target.value }))}>
                   {['ACTIVE', 'SUSPENDED', 'INACTIVE'].map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </label>

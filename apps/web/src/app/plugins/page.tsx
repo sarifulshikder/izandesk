@@ -8,11 +8,11 @@ import { RefreshCw, Plug, CreditCard, MessageSquare, Cpu, Puzzle, RotateCcw, Set
 
 type AnyObj = Record<string, any>;
 
-const TYPE_META: Record<string, { label: string; icon: any; desc: string }> = {
-  PAYMENT_GATEWAY: { label: 'Payment Gateways', icon: CreditCard, desc: 'Checkout, webhooks, verification, and payment collection drivers (bKash, Nagad, Rocket, Stripe, PayPal).' },
-  SMS_GATEWAY: { label: 'SMS Gateways', icon: MessageSquare, desc: 'Outbound/inbound SMS provider drivers and notification channels.' },
-  OLT_DRIVER: { label: 'OLT Drivers', icon: Cpu, desc: 'Vendor-specific FTTH/OLT telemetry and provisioning adapters.' },
-  CUSTOM_HOOK: { label: 'Custom Hooks', icon: Puzzle, desc: 'Custom extension hooks and integrations.' },
+const TYPE_META: Record<string, { label: string; icon: any; desc: string; tone?: string }> = {
+  PAYMENT_GATEWAY: { label: 'Payment Gateways', icon: CreditCard, tone: 'primary', desc: 'Checkout, webhooks, verification, and payment collection drivers (bKash, Nagad, Rocket, Stripe, PayPal).' },
+  SMS_GATEWAY: { label: 'SMS Gateways', icon: MessageSquare, tone: 'info', desc: 'Outbound/inbound SMS provider drivers and notification channels.' },
+  OLT_DRIVER: { label: 'OLT Drivers', icon: Cpu, tone: 'teal', desc: 'Vendor-specific FTTH/OLT telemetry and provisioning adapters.' },
+  CUSTOM_HOOK: { label: 'Custom Hooks', icon: Puzzle, tone: 'purple', desc: 'Custom extension hooks and integrations.' },
 };
 
 function gatewayLabel(id: string) {
@@ -65,12 +65,13 @@ export default function PluginsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="page-header flex flex-col md:flex-row md:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
+          <span className="page-eyebrow">Platform · Extension registry</span>
           <h1 className="page-title">Plugin Manager</h1>
-          <p className="text-sm text-muted-foreground">Hot-reloadable drivers organized by category. Open a plugin to view details and configure it (e.g. Payment Gateways → bKash/Nagad/Rocket/Stripe/PayPal).</p>
+          <p className="page-subtitle">Hot-reloadable drivers organized by category. Open a plugin to view details and configure it (e.g. Payment Gateways → bKash/Nagad/Rocket/Stripe/PayPal).</p>
         </div>
-        <div className="page-actions flex gap-2">
+        <div className="page-actions">
           <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
           {canReload && <button onClick={() => reload()} disabled={!!reloading} className="btn btn-primary"><RotateCcw className="w-4 h-4"/>{reloading==='all'?'Reloading...':'Reload All'}</button>}
         </div>
@@ -78,15 +79,14 @@ export default function PluginsPage() {
       {error && <div className="alert alert-danger">{error}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+      <div className="stat-grid">
         {orderedTypes.map((t) => {
           const meta = TYPE_META[t] || { label: t, icon: Plug, desc: 'Plugin category' };
           const Icon = meta.icon;
           return (
-            <div key={t} className="card p-4">
-              <div className="flex items-center gap-2 text-sm font-bold"><Icon className="w-4 h-4 text-primary"/>{meta.label}</div>
-              <div className="mt-1 text-2xl font-black">{(pluginsByType[t] || []).length}</div>
-              <div className="text-xs text-muted-foreground mt-1">{meta.desc}</div>
+            <div key={t} className={`dash-stat dash-stat-${meta.tone || 'secondary'}`}>
+              <span className="dash-stat-icon"><Icon className="w-4 h-4"/></span>
+              <span className="dash-stat-body"><span className="dash-stat-label">{meta.label}</span><span className="dash-stat-value">{(pluginsByType[t] || []).length}</span><span className="dash-stat-hint" title={meta.desc}>{meta.desc}</span></span>
             </div>
           );
         })}
@@ -128,7 +128,13 @@ export default function PluginsPage() {
               </div>
             );
           })}
-          {!paymentPlugins.length && <div className="text-sm text-muted-foreground">No payment gateway plugins loaded.</div>}
+          {!paymentPlugins.length && <div className="col-span-full p-4"><div className="empty-panel">
+            <span className="empty-panel-icon"><CreditCard className="w-5 h-5"/></span>
+            <div>
+              <div className="text-sm font-semibold">No payment gateways loaded</div>
+              <p className="text-[11px] text-muted-foreground mt-1">Refresh the plugin registry to discover installed gateway drivers.</p>
+            </div>
+          </div></div>}
         </div>
       </div>
 
@@ -158,7 +164,7 @@ export default function PluginsPage() {
                   {canReload && <button onClick={() => reload(p.id)} disabled={!!reloading} className="btn btn-outline btn-sm"><RotateCcw className="w-3 h-3"/>{reloading===p.id?'...':'Reload'}</button>}
                 </div>
               ))}
-              {!items.length && <div className="p-6 text-sm text-muted-foreground">No plugins loaded in this category.</div>}
+              {!items.length && <div className="empty-state">No plugins loaded in this category.</div>}
             </div>
           </div>
         );

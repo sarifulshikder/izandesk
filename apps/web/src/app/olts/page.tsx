@@ -4,16 +4,19 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { Package, Plus, RefreshCw, Pencil, Trash2, Play, Search, Radio, X, Wifi, ExternalLink, Server, Activity } from 'lucide-react';
+import { Package, Plus, RefreshCw, Pencil, Trash2, Play, Search, Radio, X, Wifi, ExternalLink, Server, Activity, AlertTriangle } from 'lucide-react';
 
 
 
-function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
+function Stat({ label, value, sub, tone = 'primary', icon: Icon = Radio }: { label: string; value: React.ReactNode; sub?: string; tone?: string; icon?: any }) {
   return (
-    <div className="card p-3">
-      <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
-      <div className="mt-1 text-lg font-black">{value}</div>
-      {sub ? <div className="text-[11px] text-muted-foreground mt-0.5">{sub}</div> : null}
+    <div className={`dash-stat dash-stat-${tone}`}>
+      <span className="dash-stat-icon"><Icon /></span>
+      <span className="dash-stat-body">
+        <span className="dash-stat-label">{label}</span>
+        <span className="dash-stat-value">{value}</span>
+        {sub ? <span className="dash-stat-hint">{sub}</span> : null}
+      </span>
     </div>
   );
 }
@@ -75,10 +78,11 @@ export default function OltsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
-          <h1 className="page-title"><Package className="w-6 h-6 text-primary" />FTTH & OLTs Overview</h1>
-          <p className="text-sm text-muted-foreground">Monitor OLTs and ONUs, discover/authorize devices, refresh optical telemetry, and jump into each OLT’s dedicated page.</p>
+          <span className="page-eyebrow">Optical operations · Access network</span>
+          <h1 className="page-title"><Package className="w-6 h-6 text-primary" />FTTH &amp; OLTs Overview</h1>
+          <p className="page-subtitle">Monitor OLTs and ONUs, discover and authorize devices, refresh optical telemetry.</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`} />Refresh</button>
@@ -87,17 +91,17 @@ export default function OltsPage() {
           <button onClick={()=>{setForm({name:'',vendor:'HUAWEI',model:'',host:'',ssh_port:23,snmp_port:161,username:'admin',password:'',snmp_community:'public',site:'',wg_peer_id:'',is_enabled:true}); setModal('new');}} className="btn btn-primary"><Plus className="w-4 h-4" />Add OLT</button>
         </div>
       </div>
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
-      {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{msg}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
+      {msg && <div className="alert alert-success">{msg}</div>}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
-        <Stat label="OLTs" value={stats.olts} sub={`${stats.onlineOlts} online`} />
-        <Stat label="ONUs" value={stats.onus} sub={selected ? 'in selected OLT' : 'total loaded'} />
-        <Stat label="Discovered" value={<span className="text-amber-400">{stats.discovered}</span>} sub="pending authorize" />
-        <Stat label="Linked" value={<span className="text-emerald-400">{stats.linked}</span>} sub="to subscribers" />
-        <Stat label="Optical Warning" value={<span className="text-amber-400">{stats.warning}</span>} />
-        <Stat label="Optical Critical" value={<span className="text-red-400">{stats.critical}</span>} />
-        <Stat label="View" value={selected ? <span className="text-sm font-bold truncate block">{selected.name}</span> : <span className="text-sm font-bold">All OLTs</span>} sub={selected ? 'filtered' : 'no filter'} />
+      <div className="stat-grid-7">
+        <Stat label="OLTs" value={stats.olts} sub={`${stats.onlineOlts} online`} tone="primary" icon={Server} />
+        <Stat label="ONUs" value={stats.onus} sub={selected ? 'in selected OLT' : 'total loaded'} tone="teal" icon={Radio} />
+        <Stat label="Discovered" value={stats.discovered} sub="pending authorize" tone="warning" icon={Search} />
+        <Stat label="Linked" value={stats.linked} sub="to subscribers" tone="success" icon={Wifi} />
+        <Stat label="Optical Warning" value={stats.warning} sub="signal degraded" tone="orange" icon={Activity} />
+        <Stat label="Optical Critical" value={stats.critical} sub="immediate action" tone="danger" icon={AlertTriangle} />
+        <Stat label="View" value={selected ? <span className="text-base">{selected.name}</span> : 'All OLTs'} sub={selected ? 'filtered' : 'no filter'} tone="purple" icon={Package} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
@@ -118,16 +122,16 @@ export default function OltsPage() {
                         <Link href={`/olts/${o.id}`} className="font-semibold hover:text-primary inline-flex items-center gap-1.5 group" onClick={e=>e.stopPropagation()}>
                           {o.name} <ExternalLink className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100" />
                         </Link>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${o.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':o.status==='OFFLINE'?'bg-red-500/10 text-red-400 border-red-500/20':'bg-muted text-muted-foreground border-border'}`}>{o.status}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${o.status==='ONLINE'?'bg-success/10 text-success border-success/20':o.status==='OFFLINE'?'bg-danger/10 text-danger border-danger/20':'bg-muted text-muted-foreground border-border'}`}>{o.status}</span>
                       </div>
                       <div className="text-xs text-muted-foreground mt-0.5">{o.vendor} {o.model||''} • <span className="font-mono">{o.host}</span></div>
-                      <div className="text-[11px] mt-1 text-muted-foreground">{o.site || 'No site'}{o.wg_peer_name ? <span className="text-cyan-400"> • WG: {o.wg_peer_name}</span> : ''}</div>
-                      <div className="text-[11px] mt-1 flex gap-2 flex-wrap"><span className="px-1.5 py-0.5 rounded bg-muted border border-border">{selectedOlt===o.id ? onus.length : (count || 0)} ONUs{selectedOlt!==o.id?' (loaded)': ''}</span>{disc>0 && <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">{disc} discovered</span>}</div>
+                      <div className="text-[11px] mt-1 text-muted-foreground">{o.site || 'No site'}{o.wg_peer_name ? <span className="text-teal"> • WG: {o.wg_peer_name}</span> : ''}</div>
+                      <div className="text-[11px] mt-1 flex gap-2 flex-wrap"><span className="px-1.5 py-0.5 rounded bg-muted border border-border">{selectedOlt===o.id ? onus.length : (count || 0)} ONUs{selectedOlt!==o.id?' (loaded)': ''}</span>{disc>0 && <span className="px-1.5 py-0.5 rounded bg-warning/10 text-warning border border-warning/20">{disc} discovered</span>}</div>
                     </div>
                     <div className="flex flex-col gap-1 shrink-0" onClick={e=>e.stopPropagation()}>
                       <button onClick={()=>testOlt(o.id)} className="p-1.5 rounded-lg hover:bg-muted" title="Test"><Play className="w-4 h-4" /></button>
                       <button onClick={()=>{setForm({...o, wg_peer_id:o.wg_peer_id||''}); setModal(o);}} className="p-1.5 rounded-lg hover:bg-muted" title="Edit"><Pencil className="w-4 h-4" /></button>
-                      <button onClick={()=>delOlt(o.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-400" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                      <button onClick={()=>delOlt(o.id)} className="p-1.5 rounded-lg hover:bg-danger/10 text-danger" title="Delete"><Trash2 className="w-4 h-4" /></button>
                     </div>
                   </div>
                   <div className="flex gap-2 mt-2" onClick={e=>e.stopPropagation()}>
@@ -166,25 +170,21 @@ export default function OltsPage() {
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-2xl card my-8">
           <div className="flex items-center justify-between px-5 py-4 border-b border-border"><h2 className="font-bold">{modal==='new'?'Add OLT':'Edit OLT'}</h2><button onClick={()=>setModal(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4" /></button></div>
           <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-            <F label="Name"><input className="inp" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})} /></F>
-            <F label="Vendor"><select className="inp" value={form.vendor||'HUAWEI'} onChange={e=>setForm({...form,vendor:e.target.value})}><option>HUAWEI</option><option>BDCOM</option><option>ZTE</option><option>VSOL</option><option>CDATA</option><option>OTHER</option></select></F>
-            <F label="Model"><input className="inp" value={form.model||''} onChange={e=>setForm({...form,model:e.target.value})} /></F>
-            <F label="Host / IP"><input className="inp" value={form.host||''} onChange={e=>setForm({...form,host:e.target.value})} /></F>
-            <F label="SSH Port"><input className="inp" type="number" value={form.ssh_port||23} onChange={e=>setForm({...form,ssh_port:Number(e.target.value)})} /></F>
-            <F label="SNMP Port"><input className="inp" type="number" value={form.snmp_port||161} onChange={e=>setForm({...form,snmp_port:Number(e.target.value)})} /></F>
-            <F label="Username"><input className="inp" value={form.username||''} onChange={e=>setForm({...form,username:e.target.value})} /></F>
-            <F label="Password"><input className="inp" type="password" value={form.password||''} onChange={e=>setForm({...form,password:e.target.value})} /></F>
-            <F label="SNMP Community"><input className="inp" value={form.snmp_community||''} onChange={e=>setForm({...form,snmp_community:e.target.value})} /></F>
-            <F label="Site"><input className="inp" value={form.site||''} onChange={e=>setForm({...form,site:e.target.value})} /></F>
-            <F label="WireGuard peer (tunnel route)"><select className="inp" value={form.wg_peer_id||''} onChange={e=>setForm({...form,wg_peer_id:e.target.value||''})}><option value="">None (direct/host-routed)</option>{wgPeers.map((p:any)=>(<option key={p.id} value={p.id}>{p.name} {p.site_name?`— ${p.site_name}`:''} ({p.tunnel_ip||'-'})</option>))}</select></F>
+            <F label="Name"><input className="form-control" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})} /></F>
+            <F label="Vendor"><select className="form-select" value={form.vendor||'HUAWEI'} onChange={e=>setForm({...form,vendor:e.target.value})}><option>HUAWEI</option><option>BDCOM</option><option>ZTE</option><option>VSOL</option><option>CDATA</option><option>OTHER</option></select></F>
+            <F label="Model"><input className="form-control" value={form.model||''} onChange={e=>setForm({...form,model:e.target.value})} /></F>
+            <F label="Host / IP"><input className="form-control" value={form.host||''} onChange={e=>setForm({...form,host:e.target.value})} /></F>
+            <F label="SSH Port"><input className="form-control" type="number" value={form.ssh_port||23} onChange={e=>setForm({...form,ssh_port:Number(e.target.value)})} /></F>
+            <F label="SNMP Port"><input className="form-control" type="number" value={form.snmp_port||161} onChange={e=>setForm({...form,snmp_port:Number(e.target.value)})} /></F>
+            <F label="Username"><input className="form-control" value={form.username||''} onChange={e=>setForm({...form,username:e.target.value})} /></F>
+            <F label="Password"><input className="form-control" type="password" value={form.password||''} onChange={e=>setForm({...form,password:e.target.value})} /></F>
+            <F label="SNMP Community"><input className="form-control" value={form.snmp_community||''} onChange={e=>setForm({...form,snmp_community:e.target.value})} /></F>
+            <F label="Site"><input className="form-control" value={form.site||''} onChange={e=>setForm({...form,site:e.target.value})} /></F>
+            <F label="WireGuard peer (tunnel route)"><select className="form-select" value={form.wg_peer_id||''} onChange={e=>setForm({...form,wg_peer_id:e.target.value||''})}><option value="">None (direct/host-routed)</option>{wgPeers.map((p:any)=>(<option key={p.id} value={p.id}>{p.name} {p.site_name?`— ${p.site_name}`:''} ({p.tunnel_ip||'-'})</option>))}</select></F>
           </div>
           <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={saveOlt} className="btn btn-primary">Save</button></div>
         </div></div>
       )}
-
-
-
-      <style jsx>{`.inp{width:100%;padding:.5rem .75rem;border-radius:.75rem;background:var(--card);color:var(--foreground);border:1px solid var(--border);font-size:.875rem}`}</style>
     </div>
   );
 }

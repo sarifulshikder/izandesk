@@ -101,15 +101,16 @@ export default function SubscriberLivePage() {
 
   return (
     <div className="space-y-5">
-      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div className="flex items-start gap-3">
           <Link href="/subscribers" className="btn btn-outline btn-icon mt-0.5" title="Back to subscribers"><ArrowLeft className="w-4 h-4"/></Link>
           <div>
+            <span className="page-eyebrow">Client operations · Live diagnostics</span>
             <h1 className="page-title">Subscriber Live Dashboard</h1>
             <p className="page-subtitle">{sub.full_name || 'Subscriber'} {sub.client_code ? `• ${sub.client_code}` : ''} {sub.username ? `• ${sub.username}` : ''}</p>
           </div>
         </div>
-        <div className="page-actions flex gap-2 flex-wrap">
+        <div className="page-actions">
           <Link href="/subscribers/live" className="btn btn-outline"><Activity className="w-4 h-4"/>All Live Sessions</Link>
           <button onClick={() => load({ ping: true })} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`}/>Refresh</button>
         </div>
@@ -117,28 +118,22 @@ export default function SubscriberLivePage() {
 
       {error && <div className="alert alert-danger">{error}</div>}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className={`card p-4 ${bw.online ? 'border-emerald-500/20 bg-emerald-500/5' : ''}`}>
-          <div className="flex items-center justify-between text-xs text-muted-foreground"><span>Status</span><Wifi className={`w-4 h-4 ${bw.online ? 'text-emerald-400' : ''}`}/></div>
-          <div className={`mt-2 text-lg font-black ${bw.online ? 'text-emerald-400' : 'text-muted-foreground'}`}>{bw.online ? 'ONLINE' : (sub.status || 'OFFLINE')}</div>
-          <div className="text-xs text-muted-foreground mt-1">Uptime: {bw.uptime || '-'}</div>
+      <div className="stat-grid">
+        <div className={`dash-stat ${bw.online ? 'dash-stat-success' : 'dash-stat-secondary'}`}>
+          <span className="dash-stat-icon"><Wifi className="w-4 h-4"/></span>
+          <span className="dash-stat-body"><span className="dash-stat-label">Connection</span><span className="dash-stat-value">{bw.online ? 'ONLINE' : (sub.status || 'OFFLINE')}</span><span className="dash-stat-hint">Uptime: {bw.uptime || '-'}</span></span>
         </div>
-        <div className="card p-4 border-cyan-500/20 bg-cyan-500/5">
-          <div className="flex items-center justify-between text-xs text-cyan-300/80"><span>Live Download (RX)</span><Gauge className="w-4 h-4"/></div>
-          <div className="mt-2 text-lg font-black text-cyan-400">{fmtBps(Number(bw.rx_bps || 0))}</div>
-          <div className="text-xs text-muted-foreground mt-1">Total: {fmtBytes(Number(bw.rx_bytes || 0))}</div>
+        <div className="dash-stat dash-stat-info">
+          <span className="dash-stat-icon"><Gauge className="w-4 h-4"/></span>
+          <span className="dash-stat-body"><span className="dash-stat-label">Live Download (RX)</span><span className="dash-stat-value">{fmtBps(Number(bw.rx_bps || 0))}</span><span className="dash-stat-hint">Total: {fmtBytes(Number(bw.rx_bytes || 0))}</span></span>
         </div>
-        <div className="card p-4 border-indigo-500/20 bg-indigo-500/5">
-          <div className="flex items-center justify-between text-xs text-indigo-300/80"><span>Live Upload (TX)</span><Gauge className="w-4 h-4"/></div>
-          <div className="mt-2 text-lg font-black text-indigo-400">{fmtBps(Number(bw.tx_bps || 0))}</div>
-          <div className="text-xs text-muted-foreground mt-1">Total: {fmtBytes(Number(bw.tx_bytes || 0))}</div>
+        <div className="dash-stat dash-stat-indigo">
+          <span className="dash-stat-icon"><Gauge className="w-4 h-4"/></span>
+          <span className="dash-stat-body"><span className="dash-stat-label">Live Upload (TX)</span><span className="dash-stat-value">{fmtBps(Number(bw.tx_bps || 0))}</span><span className="dash-stat-hint">Total: {fmtBytes(Number(bw.tx_bytes || 0))}</span></span>
         </div>
-        <div className="card p-4">
-          <div className="flex items-center justify-between text-xs text-muted-foreground"><span>Latency (Ping)</span><Signal className="w-4 h-4"/></div>
-          <div className={`mt-2 text-lg font-black ${latency?.ok ? (Number(latency.latency_ms) < 50 ? 'text-emerald-400' : Number(latency.latency_ms) < 120 ? 'text-amber-400' : 'text-red-400') : 'text-muted-foreground'}`}>
-            {latency ? (latency.ok ? `${latency.latency_ms ?? '-'} ms` : 'Unreachable') : (bw.ip_address ? 'Checking...' : '-')}
-          </div>
-          <div className="text-xs text-muted-foreground mt-1">Target: {bw.ip_address || sub.ip_address || 'No IP'}</div>
+        <div className={`dash-stat ${latency?.ok ? (Number(latency.latency_ms) < 50 ? 'dash-stat-success' : Number(latency.latency_ms) < 120 ? 'dash-stat-warning' : 'dash-stat-danger') : 'dash-stat-secondary'}`}>
+          <span className="dash-stat-icon"><Signal className="w-4 h-4"/></span>
+          <span className="dash-stat-body"><span className="dash-stat-label">Latency (Ping)</span><span className="dash-stat-value">{latency ? (latency.ok ? `${latency.latency_ms ?? '-'} ms` : 'Unreachable') : (bw.ip_address ? 'Checking...' : '-')}</span><span className="dash-stat-hint">Target: {bw.ip_address || sub.ip_address || 'No IP'}</span></span>
         </div>
       </div>
 
@@ -165,7 +160,7 @@ export default function SubscriberLivePage() {
             <polyline fill="none" stroke="#06B6D4" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" points={chart.rxPts} />
           </svg>
           <div className="absolute bottom-2 left-3 text-[10px] font-mono text-muted-foreground flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
             <span>Updating every 1s • Peak scale {fmtBps(chart.max)} • RX cyan / TX indigo</span>
           </div>
         </div>
@@ -182,7 +177,7 @@ export default function SubscriberLivePage() {
                 <button onClick={()=>setShowPass(s=>!s)} className="btn btn-outline btn-sm">{showPass ? <><EyeOff className="w-3 h-3"/>Hide</> : <><Eye className="w-3 h-3"/>Show</>}</button>
               </div>
               <div className="font-mono text-xs p-2 rounded-lg bg-muted/30 border border-border break-all">{showPass ? (passwordValue || '-') : (passwordValue ? '••••••••••••' : '-')}</div>
-              {isHashed && showPass && <div className="text-[11px] text-amber-400 mt-1">Stored as hash (plain text not available). PPPoE provisioning may require re-setting a known password.</div>}
+              {isHashed && showPass && <div className="text-[11px] text-warning mt-1">Stored as hash (plain text not available). PPPoE provisioning may require re-setting a known password.</div>}
             </div>
             <Info label="IP Address" value={bw.ip_address || sub.ip_address || '-'} mono />
             <Info label="MAC Address" value={bw.mac_address || sub.mac_address || '-'} mono />
@@ -211,7 +206,7 @@ export default function SubscriberLivePage() {
               <Info label="Ping Target" value={bw.ip_address || 'No IP to ping'} mono />
             </div>
           ) : (
-            <div className="alert">No live/session record found for this subscriber yet. If the subscriber is online, ensure they are provisioned in IzanDesk (username matched), connected via the monitored router/NAS, and accounting/active-session data is available.</div>
+            <div className="alert alert-warning">No live/session record found for this subscriber yet. If the subscriber is online, ensure they are provisioned in IzanDesk (username matched), connected via the monitored router/NAS, and accounting/active-session data is available.</div>
           )}
         </div>
       </div>
@@ -222,7 +217,7 @@ export default function SubscriberLivePage() {
           {onus.length > 0 && <div className="text-xs text-muted-foreground">{onus.length} linked ONU{onus.length > 1 ? 's' : ''}</div>}
         </div>
         {!onus.length && !equipment.length ? (
-          <div className="alert space-y-1">
+          <div className="alert alert-warning space-y-1">
             <div>No ONU/OLT info linked to this subscriber.</div>
             <div>ONU details are auto-discovered/linked when possible (by PPPoE session MAC/FDB or username/client-code match). You can also link an ONU from FTTH &amp; OLTs.</div>
           </div>
@@ -237,7 +232,7 @@ export default function SubscriberLivePage() {
                   const tx = o.tx_power_dbm != null ? Number(o.tx_power_dbm) : null;
                   const optState = rx == null ? 'Unknown' : rx >= -24 ? 'Good' : rx >= -27 ? 'Warn' : 'Critical';
                   return (
-                    <div key={o.id || i} className={`card p-4 space-y-4 ${online ? 'border-emerald-500/20 bg-gradient-to-br from-emerald-500/5 to-card' : ''}`}>
+                    <div key={o.id || i} className={`card p-4 space-y-4 ${online ? 'border-success/30' : ''}`}>
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="text-xs text-muted-foreground">Linked ONU (from OLT)</div>
@@ -314,7 +309,7 @@ export default function SubscriberLivePage() {
             )}
           </div>
         )}
-        <div className="text-xs text-muted-foreground flex items-start gap-2"><AlertTriangle className="w-4 h-4 mt-0.5 text-amber-400"/>Optical/ONU telemetry is polled from the OLT (via SNMP over the tunnel). Refresh or run OLT discovery/telemetry if values look stale.</div>
+        <div className="text-xs text-muted-foreground flex items-start gap-2"><AlertTriangle className="w-4 h-4 mt-0.5 text-warning"/>Optical/ONU telemetry is polled from the OLT (via SNMP over the tunnel). Refresh or run OLT discovery/telemetry if values look stale.</div>
       </div>
 
       <div className="text-xs text-muted-foreground">Live bandwidth updates every 1s (latency refreshed periodically, ping skipped on fast polls). Last fetched: {data?.fetched_at ? new Date(data.fetched_at).toLocaleString() : '-'}</div>
@@ -333,7 +328,7 @@ function Info({ label, value, mono }: { label: string; value: any; mono?: boolea
 function rxClass(v: any) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 'text-muted-foreground';
-  if (n >= -24) return 'text-emerald-400';
-  if (n >= -27) return 'text-amber-400';
-  return 'text-red-400';
+  if (n >= -24) return 'text-success';
+  if (n >= -27) return 'text-warning';
+  return 'text-danger';
 }

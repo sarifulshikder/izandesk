@@ -358,38 +358,45 @@ export default function GisPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
+          <span className="page-eyebrow">Geospatial operations · Fiber topology</span>
           <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="page-title">Fiber GIS Map &amp; Topology</h1>
-            {!canWrite && <span className="text-[11px] font-semibold px-2 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30">Read-only</span>}
+            <h1 className="page-title">Fiber GIS Map</h1>
+            {!canWrite && <span className="badge badge-warning">Read-only</span>}
           </div>
-          <p className="text-sm text-muted-foreground">PostGIS-backed subscriber pins, distribution boxes and fiber route tracing — {subCount} mapped subscribers • {boxCount} boxes • {routeCount} routes</p>
+          <p className="page-subtitle">PostGIS subscriber pins, distribution boxes and fiber route tracing · {subCount} mapped subscribers · {boxCount} boxes · {routeCount} routes</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button onClick={() => { load(); setFitKey(k => k + 1); }} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
-          <button onClick={() => setFitKey(k => k + 1)} className="btn btn-outline inline-flex items-center gap-2"><Maximize2 className="w-4 h-4" />Zoom to fit</button>
-          <button onClick={locate} className="btn btn-outline inline-flex items-center gap-2"><LocateFixed className="w-4 h-4" />Locate me</button>
-          <button onClick={exportGeoJson} className="btn btn-outline inline-flex items-center gap-2"><Download className="w-4 h-4" />Export GeoJSON</button>
-          {canWrite && <>
-            <button onClick={openNewBox} className="btn btn-primary inline-flex items-center gap-2"><Plus className="w-4 h-4" />Add Box</button>
-            <button onClick={openNewRoute} className="px-3 py-2 rounded-xl border border-primary/40 text-primary text-sm font-semibold inline-flex items-center gap-2"><Route className="w-4 h-4" />Draw Route</button>
-            <button onClick={() => { setForm({ name: '', from_box_id: '', subscriber_id: '' }); setDraftPoints([]); setMode('trace'); }} className="px-3 py-2 rounded-xl border border-cyan-500/40 text-cyan-400 text-sm font-semibold inline-flex items-center gap-2"><LocateFixed className="w-4 h-4" />Trace to Subscriber</button>
-            <button onClick={() => { setMode('manage'); setNotice(null); }} className="btn btn-outline inline-flex items-center gap-2"><Building2 className="w-4 h-4" />Areas & Zones</button>
-            <button onClick={openImport} className="btn btn-outline inline-flex items-center gap-2"><Upload className="w-4 h-4" />Import</button>
-          </>}
-          <button onClick={() => { setMode('audit'); loadAudit(); setNotice(null); }} className="btn btn-outline inline-flex items-center gap-2"><Info className="w-4 h-4" />Audit log</button>
-          <button onClick={() => { setMode('trash'); loadTrash(); setNotice(null); }} className="btn btn-outline inline-flex items-center gap-2"><Trash2 className="w-4 h-4" />Trash</button>
+        <div className="page-actions">
+          <button onClick={() => { load(); setFitKey(k => k + 1); }} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
+          {canWrite && <button onClick={openNewBox} className="btn btn-primary"><Plus className="w-4 h-4" />Add Box</button>}
         </div>
       </div>
 
+      <div className="page-tabbar">
+        {canWrite && <>
+          <button onClick={openNewRoute} className="page-tab"><Route className="w-3.5 h-3.5" />Draw Route</button>
+          <button onClick={() => { setForm({ name: '', from_box_id: '', subscriber_id: '' }); setDraftPoints([]); setMode('trace'); }} className="page-tab"><LocateFixed className="w-3.5 h-3.5" />Trace to Subscriber</button>
+          <span className="toolbar-divider" />
+        </>}
+        <button onClick={() => setFitKey(k => k + 1)} className="page-tab"><Maximize2 className="w-3.5 h-3.5" />Zoom to fit</button>
+        <button onClick={locate} className="page-tab"><LocateFixed className="w-3.5 h-3.5" />Locate me</button>
+        <button onClick={exportGeoJson} className="page-tab"><Download className="w-3.5 h-3.5" />Export GeoJSON</button>
+        {canWrite && <>
+          <button onClick={() => { setMode('manage'); setNotice(null); }} className="page-tab"><Building2 className="w-3.5 h-3.5" />Areas &amp; Zones</button>
+          <button onClick={openImport} className="page-tab"><Upload className="w-3.5 h-3.5" />Import</button>
+        </>}
+        <button onClick={() => { setMode('audit'); loadAudit(); setNotice(null); }} className="page-tab"><Info className="w-3.5 h-3.5" />Audit log</button>
+        <button onClick={() => { setMode('trash'); loadTrash(); setNotice(null); }} className="page-tab"><Trash2 className="w-3.5 h-3.5" />Trash</button>
+      </div>
+
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        <Kpi icon={<Users className="w-4 h-4" />} label="Subscribers" value={summary.subscribers_total ?? '—'} hint={`${summary.subscribers_geocoded ?? 0} mapped`} />
-        <Kpi icon={<MapPin className="w-4 h-4" />} label="Geo coverage" value={`${summary.geocoded_coverage_pct ?? 0}%`} hint="pins / subscribers" />
-        <Kpi icon={<Box className="w-4 h-4" />} label="Boxes" value={summary.boxes_total ?? 0} hint={`${summary.boxes_mapped ?? 0} mapped • ${summary.boxes_in_use ?? 0} in use`} />
-        <Kpi icon={<Network className="w-4 h-4" />} label="Port capacity" value={summary.capacity_ports ?? 0} hint="total ports" />
-        <Kpi icon={<Route className="w-4 h-4" />} label="Fiber routes" value={summary.routes_total ?? 0} hint="drawn / traced" />
-        <Kpi icon={<Info className="w-4 h-4" />} label="Mapped fiber" value={`${((summary.route_length_m ?? 0) / 1000).toFixed(2)} km`} hint="total length" />
+        <Kpi icon={<Users />} label="Subscribers" value={summary.subscribers_total ?? '—'} hint={`${summary.subscribers_geocoded ?? 0} mapped`} tone="primary" />
+        <Kpi icon={<MapPin />} label="Geo coverage" value={`${summary.geocoded_coverage_pct ?? 0}%`} hint="pins / subscribers" tone="success" />
+        <Kpi icon={<Box />} label="Boxes" value={summary.boxes_total ?? 0} hint={`${summary.boxes_mapped ?? 0} mapped · ${summary.boxes_in_use ?? 0} in use`} tone="info" />
+        <Kpi icon={<Network />} label="Port capacity" value={summary.capacity_ports ?? 0} hint="total ports" tone="teal" />
+        <Kpi icon={<Route />} label="Fiber routes" value={summary.routes_total ?? 0} hint="drawn / traced" tone="purple" />
+        <Kpi icon={<Info />} label="Mapped fiber" value={`${((summary.route_length_m ?? 0) / 1000).toFixed(2)} km`} hint="total length" tone="orange" />
       </div>
 
       {bbox && (
@@ -399,9 +406,9 @@ export default function GisPage() {
         </div>
       )}
 
-      {notice && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm flex items-center gap-2"><CheckCircle2 className="w-4 h-4" />{notice}</div>}
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
-      {summary.truncated && <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-300 text-sm">Map pin limit reached — showing the first {subCount} geocoded subscribers. Raise “Max pins” to load more.</div>}
+      {notice && <div className="alert alert-success"><CheckCircle2 className="w-4 h-4" />{notice}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
+      {summary.truncated && <div className="alert alert-warning">Map pin limit reached — showing the first {subCount} geocoded subscribers. Raise “Max pins” to load more.</div>}
       {picked && ['add-box', 'edit-box', 'add-route', 'edit-route', 'trace'].includes(mode) && (
         <div className="text-xs text-muted-foreground">Last map pick: {picked.lat.toFixed(5)}, {picked.lng.toFixed(5)}</div>
       )}
@@ -448,7 +455,7 @@ export default function GisPage() {
           <div className="card p-4">
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3 top-3 text-muted-foreground" />
-              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search boxes, subscribers, routes…" className="w-full btn btn-outline pl-9 text-foreground" />
+              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search boxes, subscribers, routes…" className="form-control w-full pl-9" />
             </div>
             {query.trim() && (
               <div className="mt-2 max-h-56 overflow-auto space-y-1">
@@ -470,18 +477,18 @@ export default function GisPage() {
             </button>
             {layers._open !== false && (
               <div className="grid grid-cols-2 gap-2 text-sm">
-                <Chk label="Boxes" checked={layers.boxes} onChange={v => setLayers(l => ({ ...l, boxes: v }))} color="bg-blue-500" />
-                <Chk label="Routes" checked={layers.routes} onChange={v => setLayers(l => ({ ...l, routes: v }))} color="bg-cyan-400" />
-                <Chk label="Active subs" checked={layers.status_active} onChange={v => setLayers(l => ({ ...l, status_active: v }))} color="bg-emerald-500" />
-                <Chk label="Suspended" checked={layers.status_suspended} onChange={v => setLayers(l => ({ ...l, status_suspended: v }))} color="bg-red-500" />
-                <Chk label="Other subs" checked={layers.status_other} onChange={v => setLayers(l => ({ ...l, status_other: v }))} color="bg-amber-500" />
-                <Chk label="Heatmap" checked={layers.heat} onChange={v => setLayers(l => ({ ...l, heat: v }))} color="bg-orange-500" />
-                <Chk label="Live sessions" checked={layers.live} onChange={v => { setLayers(l => ({ ...l, live: v })); setShowLive(v); }} color="bg-cyan-400" />
+                <Chk label="Boxes" checked={layers.boxes} onChange={v => setLayers(l => ({ ...l, boxes: v }))} color="bg-info" />
+                <Chk label="Routes" checked={layers.routes} onChange={v => setLayers(l => ({ ...l, routes: v }))} color="bg-teal" />
+                <Chk label="Active subs" checked={layers.status_active} onChange={v => setLayers(l => ({ ...l, status_active: v }))} color="bg-success" />
+                <Chk label="Suspended" checked={layers.status_suspended} onChange={v => setLayers(l => ({ ...l, status_suspended: v }))} color="bg-danger" />
+                <Chk label="Other subs" checked={layers.status_other} onChange={v => setLayers(l => ({ ...l, status_other: v }))} color="bg-warning" />
+                <Chk label="Heatmap" checked={layers.heat} onChange={v => setLayers(l => ({ ...l, heat: v }))} color="bg-orange" />
+                <Chk label="Live sessions" checked={layers.live} onChange={v => { setLayers(l => ({ ...l, live: v })); setShowLive(v); }} color="bg-teal" />
               </div>
             )}
             <div className="flex items-center justify-between gap-2 pt-3 mt-3 border-t border-border text-xs">
               <span className="text-muted-foreground">Max pins</span>
-              <select value={mapLimit} onChange={e => setMapLimit(Number(e.target.value))} className="btn btn-outline text-foreground py-1">
+              <select value={mapLimit} onChange={e => setMapLimit(Number(e.target.value))} className="form-select !w-auto !h-8 !text-[11px]">
                 <option value={1000}>1,000</option><option value={5000}>5,000</option><option value={10000}>10,000</option>
               </select>
             </div>
@@ -527,7 +534,7 @@ export default function GisPage() {
             <Panel title="Delete Distribution Box" onClose={endMode}>
               <p className="text-sm text-muted-foreground">Delete <b>{form.name}</b>? Subscribers attached to it will be unlinked.</p>
               <div className="flex gap-2 mt-3">
-                <button onClick={() => removeBox(form.id)} className="flex-1 py-2 rounded-xl bg-red-600 text-white font-semibold">Delete</button>
+                <button onClick={() => removeBox(form.id)} className="btn btn-danger flex-1">Delete</button>
                 <button onClick={endMode} className="flex-1 py-2 rounded-xl border border-border font-semibold">Cancel</button>
               </div>
             </Panel>
@@ -555,7 +562,7 @@ export default function GisPage() {
             <Panel title="Delete Fiber Route" onClose={endMode}>
               <p className="text-sm text-muted-foreground">Delete <b>{form.name}</b>?</p>
               <div className="flex gap-2 mt-3">
-                <button onClick={() => removeRoute(form.id)} className="flex-1 py-2 rounded-xl bg-red-600 text-white font-semibold">Delete</button>
+                <button onClick={() => removeRoute(form.id)} className="btn btn-danger flex-1">Delete</button>
                 <button onClick={endMode} className="flex-1 py-2 rounded-xl border border-border font-semibold">Cancel</button>
               </div>
             </Panel>
@@ -569,7 +576,7 @@ export default function GisPage() {
                 <Sel label="From Distribution Box" value={form.from_box_id || ''} onChange={v => setForm({ ...form, from_box_id: v })} options={[{ v: '', l: 'Select box' }, ...boxesList.map(b => ({ v: b.id, l: b.name }))]} />
                 <Sel label="Subscriber" value={form.subscriber_id || ''} onChange={v => setForm({ ...form, subscriber_id: v })} options={[{ v: '', l: 'Select subscriber' }, ...subscribers.map(s => ({ v: s.id, l: `${s.full_name} (${s.client_code})` }))]} />
                 <div className="flex gap-2"><button onClick={() => setDraftPoints(p => p.slice(0, -1))} className="px-3 py-2 rounded-xl border border-border text-xs">Undo</button><button onClick={() => setDraftPoints([])} className="px-3 py-2 rounded-xl border border-border text-xs">Clear</button></div>
-                <button onClick={traceToSubscriber} className="w-full mt-2 px-4 py-2 rounded-xl bg-cyan-600 text-white font-semibold">Create Trace</button>
+                <button onClick={traceToSubscriber} className="btn btn-primary w-full mt-2">Create Trace</button>
               </div>
             </Panel>
           )}
@@ -581,8 +588,8 @@ export default function GisPage() {
                 <div className="text-muted-foreground">{details.box.box_type} • {details.box.capacity_ports} ports • {details.box.zone_name || ''} {details.box.area_name ? `, ${details.box.area_name}` : ''}</div>
                 <div className="text-muted-foreground">{details.box.address || 'No address'} • {Number(details.box.latitude).toFixed(5)}, {Number(details.box.longitude).toFixed(5)}</div>
                 {canWrite && <div className="flex gap-2 pt-2">
-                  <button onClick={() => handleBoxAction(details.box.id, 'edit')} className="px-3 py-1.5 rounded-lg bg-violet-600 text-white text-xs font-semibold inline-flex items-center gap-1"><Pencil className="w-3 h-3" />Edit</button>
-                  <button onClick={() => handleBoxAction(details.box.id, 'delete')} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold inline-flex items-center gap-1"><Trash2 className="w-3 h-3" />Delete</button>
+                  <button onClick={() => handleBoxAction(details.box.id, 'edit')} className="btn btn-secondary btn-sm inline-flex items-center gap-1"><Pencil className="w-3 h-3" />Edit</button>
+                  <button onClick={() => handleBoxAction(details.box.id, 'delete')} className="btn btn-danger btn-sm inline-flex items-center gap-1"><Trash2 className="w-3 h-3" />Delete</button>
                 </div>}
               </div>
               <h4 className="font-bold text-xs uppercase tracking-wide text-muted-foreground mt-3">Subscribers ({details.subscribers.length})</h4>
@@ -612,8 +619,8 @@ export default function GisPage() {
                     onDelete={() => removeArea(a.id)} />)}
                 </div>
                 <div className="flex gap-2 pt-2 border-t border-border">
-                  <input value={zoneName} onChange={e => setZoneName(e.target.value)} placeholder="New zone name" className="flex-1 btn btn-outline text-foreground" />
-                  <select value={zoneArea} onChange={e => setZoneArea(e.target.value)} className="btn btn-outline text-foreground"><option value="">Area…</option>{areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+                  <input value={zoneName} onChange={e => setZoneName(e.target.value)} placeholder="New zone name" className="form-control flex-1" />
+                  <select value={zoneArea} onChange={e => setZoneArea(e.target.value)} className="form-select !w-auto"><option value="">Area…</option>{areas.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
                   <button onClick={saveZone} className="btn btn-primary">Add</button>
                 </div>
                 <div className="max-h-28 overflow-auto space-y-1">
@@ -636,7 +643,7 @@ export default function GisPage() {
                 {importResult && (
                   <div className="p-2 rounded-lg bg-muted/50 text-xs space-y-1">
                     <div>Created: <b>{importResult.created.boxes}</b> boxes, <b>{importResult.created.routes}</b> routes; skipped: {importResult.skipped}</div>
-                    {importResult.errors?.length > 0 && <div className="text-red-300">{importResult.errors.length} row(s) failed: {importResult.errors.slice(0, 3).map((e: any) => `#${e.index + 1} ${e.message}`).join('; ')}</div>}
+                    {importResult.errors?.length > 0 && <div className="text-danger">{importResult.errors.length} row(s) failed: {importResult.errors.slice(0, 3).map((e: any) => `#${e.index + 1} ${e.message}`).join('; ')}</div>}
                   </div>
                 )}
               </div>
@@ -693,14 +700,14 @@ export default function GisPage() {
                       </button>
                       {canWrite && <>
                         <button onClick={() => handleBoxAction(b.id, 'edit')} className="text-primary" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => handleBoxAction(b.id, 'delete')} className="text-red-400" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => handleBoxAction(b.id, 'delete')} className="text-danger" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                       </>}
                     </div>
                   ))}
                 </div>
               </div>
               <div className="card p-4">
-                <h3 className="font-bold mb-2 flex items-center gap-2"><Route className="w-4 h-4 text-cyan-400" />Fiber routes <span className="text-xs font-normal text-muted-foreground">({routesList.length})</span></h3>
+                <h3 className="font-bold mb-2 flex items-center gap-2"><Route className="w-4 h-4 text-teal" />Fiber routes <span className="text-xs font-normal text-muted-foreground">({routesList.length})</span></h3>
                 <div className="max-h-40 overflow-auto space-y-1">
                   {routesList.length === 0 && <div className="text-xs text-muted-foreground">None yet — use “Draw Route” or trace a subscriber.</div>}
                   {routesList.map((r: any) => (
@@ -708,7 +715,7 @@ export default function GisPage() {
                       <button className="text-left flex-1" onClick={() => openEditRoute(r)}><div className="font-semibold">{r.name}</div><div className="text-xs text-muted-foreground">{r.route_type}{r.length_m ? ` • ${(r.length_m / 1000).toFixed(2)} km` : ''}</div></button>
                       {canWrite && <>
                         <button onClick={() => openEditRoute(r)} className="text-primary" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => { setForm({ id: r.id, name: r.name }); setMode('delete-route'); }} className="text-red-400" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => { setForm({ id: r.id, name: r.name }); setMode('delete-route'); }} className="text-danger" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
                       </>}
                     </div>
                   ))}
@@ -738,13 +745,13 @@ function NameRow({ name, sub, renaming, testId, onStart, onChange, onSave, onCan
       <span className="min-w-0 truncate">{name} {sub && <span className="text-xs text-muted-foreground">{sub}</span>}</span>
       <span className="flex gap-2 shrink-0">
         <button onClick={onStart} className="text-primary hover:text-primary/70" title="Rename"><Pencil className="w-3.5 h-3.5" /></button>
-        <button onClick={onDelete} className="text-red-400 hover:text-red-300" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+        <button onClick={onDelete} className="text-danger hover:text-danger/80" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
       </span>
     </div>
   );
 }
-function Kpi({ icon, label, value, hint }: { icon: React.ReactNode; label: string; value: React.ReactNode; hint: string }) {
-  return <div className="card p-3"><div className="flex items-center gap-2 text-xs text-muted-foreground">{icon}{label}</div><div className="text-xl font-bold mt-1">{value}</div><div className="text-[11px] text-muted-foreground">{hint}</div></div>;
+function Kpi({ icon, label, value, hint, tone = 'primary' }: { icon: React.ReactNode; label: string; value: React.ReactNode; hint: string; tone?: string }) {
+  return <div className={`dash-stat dash-stat-${tone}`}><span className="dash-stat-icon">{icon}</span><span className="dash-stat-body"><span className="dash-stat-label">{label}</span><span className="dash-stat-value">{value}</span><span className="dash-stat-hint">{hint}</span></span></div>;
 }
 function Chk({ label, checked, onChange, color }: { label: string; checked: boolean; onChange: (v: boolean) => void; color: string }) {
   return <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={!!checked} onChange={e => onChange(e.target.checked)} className="accent-primary" /><span className={`w-2.5 h-2.5 rounded ${color} inline-block`} />{label}</label>;
@@ -753,8 +760,8 @@ function Panel({ title, onClose, children }: { title: string; onClose: () => voi
   return <div className="card p-4"><div className="flex items-center justify-between mb-3"><h3 className="font-bold">{title}</h3><button onClick={onClose} className="p-1 rounded hover:bg-muted"><X className="w-4 h-4" /></button></div>{children}</div>;
 }
 function Inp({ label, value, onChange, type = 'text' }: { label: string; value: any; onChange: (v: string) => void; type?: string }) {
-  return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div><input type={type} value={value} onChange={e => onChange(e.target.value)} className="w-full btn btn-outline text-foreground" /></label>;
+  return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div><input type={type} value={value} onChange={e => onChange(e.target.value)} className="form-control w-full" /></label>;
 }
 function Sel({ label, value, onChange, options }: { label: string; value: any; onChange: (v: string) => void; options: any[] }) {
-  return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div><select value={value} onChange={e => onChange(e.target.value)} className="w-full btn btn-outline text-foreground">{options.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}</select></label>;
+  return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div><select value={value} onChange={e => onChange(e.target.value)} className="form-select w-full">{options.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}</select></label>;
 }

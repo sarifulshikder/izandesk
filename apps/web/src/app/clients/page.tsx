@@ -1,6 +1,7 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { RedirectShell } from '@/components/layout/redirect-shell';
 
 export default function ClientsAliasPage() {
   const router = useRouter();
@@ -9,5 +10,5 @@ export default function ClientsAliasPage() {
     const qs = sp?.toString();
     router.replace(`/subscribers${qs ? `?${qs}` : ''}`);
   }, [router, sp]);
-  return <div className="p-6 text-sm text-muted-foreground">Redirecting to Clients (Subscribers)...</div>;
+  return <RedirectShell label="Clients (Subscribers)" href="/subscribers" />;
 }

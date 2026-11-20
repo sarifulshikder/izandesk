@@ -82,20 +82,23 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
-          <h1 className="page-title">Inventory & Serial Tracking</h1>
-          <p className="text-sm text-muted-foreground">Warehouses, hardware items, and serial-number lifecycle (stock, assigned, faulty).</p>
+          <span className="page-eyebrow">Asset management · Fulfilment</span>
+          <h1 className="page-title">Inventory &amp; Serial Tracking</h1>
+          <p className="page-subtitle">Warehouses, hardware items and serial-number lifecycle — stock, assigned, faulty and RMA.</p>
         </div>
-        <button onClick={load} className="btn btn-outline inline-flex items-center gap-2 w-fit"><RefreshCw className="w-4 h-4"/>Refresh</button>
+        <div className="page-actions">
+          <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
+          <button onClick={()=>openNew(tab)} className="btn btn-primary"><Plus className="w-4 h-4"/>Add {tab==='warehouses'?'Warehouse':tab==='items'?'Item':'Serial'}</button>
+        </div>
       </div>
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
 
-      <div className="flex gap-2 flex-wrap">
+      <div className="page-tabbar">
         {([['warehouses','Warehouses',Warehouse],['items','Items',Package],['serials','Serial Numbers',Barcode]] as any[]).map(([k,label,Icon]) => (
-          <button key={k} onClick={()=>setTab(k)} className={`filter-chip ${tab===k?'active':''}`}><Icon className="w-4 h-4"/>{label}</button>
+          <button key={k} onClick={()=>setTab(k)} className={`page-tab ${tab===k?'active':''}`}><Icon className="w-3.5 h-3.5"/>{label}</button>
         ))}
-        <button onClick={()=>openNew(tab)} className="ml-auto btn btn-primary"><Plus className="w-4 h-4"/>Add {tab==='warehouses'?'Warehouse':tab==='items'?'Item':'Serial'}</button>
       </div>
 
       {tab === 'warehouses' && (
@@ -116,17 +119,17 @@ export default function InventoryPage() {
       {tab === 'serials' && (
         <div className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-            <input value={serialFilter.q} onChange={e=>setSerialFilter({...serialFilter,q:e.target.value})} placeholder="Search serial/MAC..." className="btn btn-outline"/>
-            <select value={serialFilter.status} onChange={e=>setSerialFilter({...serialFilter,status:e.target.value})} className="btn btn-outline">
+            <input value={serialFilter.q} onChange={e=>setSerialFilter({...serialFilter,q:e.target.value})} placeholder="Search serial/MAC..." className="form-control"/>
+            <select value={serialFilter.status} onChange={e=>setSerialFilter({...serialFilter,status:e.target.value})} className="form-select">
               <option value="">All statuses</option>{['IN_STOCK','ASSIGNED','FAULTY','RMA','RETIRED'].map(s=><option key={s} value={s}>{s}</option>)}
             </select>
-            <select value={serialFilter.item_id} onChange={e=>setSerialFilter({...serialFilter,item_id:e.target.value})} className="btn btn-outline">
+            <select value={serialFilter.item_id} onChange={e=>setSerialFilter({...serialFilter,item_id:e.target.value})} className="form-select">
               <option value="">All items</option>{items.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}
             </select>
-            <select value={serialFilter.warehouse_id} onChange={e=>setSerialFilter({...serialFilter,warehouse_id:e.target.value})} className="btn btn-outline">
+            <select value={serialFilter.warehouse_id} onChange={e=>setSerialFilter({...serialFilter,warehouse_id:e.target.value})} className="form-select">
               <option value="">All warehouses</option>{warehouses.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
-            <select value={serialFilter.source} onChange={e=>setSerialFilter({...serialFilter,source:e.target.value})} className="btn btn-outline">
+            <select value={serialFilter.source} onChange={e=>setSerialFilter({...serialFilter,source:e.target.value})} className="form-select">
               <option value="">All sources</option>
               <option value="MANUAL">Manual entry</option>
               <option value="ONU_IMPORT">ONU (auto-imported from OLT)</option>
@@ -134,8 +137,8 @@ export default function InventoryPage() {
           </div>
           {onuSummary && Number(onuSummary.total_onu_serials) > 0 && (
             <div className="alert alert-success flex-wrap text-sm">
-              <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-300"><Radio className="w-4 h-4"/>ONU auto-import</span>
-              <span className="text-emerald-200/80">{onuSummary.total_onu_serials} linked ONUs in inventory • {onuSummary.assigned} assigned • {onuSummary.subscribers_with_onu} subscribers</span>
+              <span className="inline-flex items-center gap-1.5 font-semibold text-success"><Radio className="w-4 h-4"/>ONU auto-import</span>
+              <span className="text-success/80">{onuSummary.total_onu_serials} linked ONUs in inventory • {onuSummary.assigned} assigned • {onuSummary.subscribers_with_onu} subscribers</span>
               {(onuSummary.by_vendor||[]).map((v:any)=>(<span key={v.vendor} className="badge badge-success">{v.vendor}: {v.count}</span>))}
             </div>
           )}
@@ -165,25 +168,25 @@ export default function InventoryPage() {
             </div>
             <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
               {(modal.type === 'warehouses' || modal.type === 'edit-warehouse') && (<>
-                <Field label="Name"><input className="inp" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})}/></Field>
-                <Field label="Location"><input className="inp" value={form.location||''} onChange={e=>setForm({...form,location:e.target.value})}/></Field>
+                <Field label="Name"><input className="form-control" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})}/></Field>
+                <Field label="Location"><input className="form-control" value={form.location||''} onChange={e=>setForm({...form,location:e.target.value})}/></Field>
               </>)}
               {(modal.type === 'items' || modal.type === 'edit-item') && (<>
-                <Field label="Name"><input className="inp" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})}/></Field>
-                <Field label="Category"><select className="inp" value={form.category||'ONT'} onChange={e=>setForm({...form,category:e.target.value})}>{['ONT','Router','Fiber','Cable','SFP','OLT','Accessory','Other'].map(c=><option key={c}>{c}</option>)}</select></Field>
-                <Field label="Brand"><input className="inp" value={form.brand||''} onChange={e=>setForm({...form,brand:e.target.value})}/></Field>
-                <Field label="Model"><input className="inp" value={form.model||''} onChange={e=>setForm({...form,model:e.target.value})}/></Field>
-                <Field label="Unit"><input className="inp" value={form.unit||'pcs'} onChange={e=>setForm({...form,unit:e.target.value})}/></Field>
-                <Field label="Reorder Level"><input className="inp" type="number" value={form.reorder_level||0} onChange={e=>setForm({...form,reorder_level:Number(e.target.value)})}/></Field>
+                <Field label="Name"><input className="form-control" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})}/></Field>
+                <Field label="Category"><select className="form-select" value={form.category||'ONT'} onChange={e=>setForm({...form,category:e.target.value})}>{['ONT','Router','Fiber','Cable','SFP','OLT','Accessory','Other'].map(c=><option key={c}>{c}</option>)}</select></Field>
+                <Field label="Brand"><input className="form-control" value={form.brand||''} onChange={e=>setForm({...form,brand:e.target.value})}/></Field>
+                <Field label="Model"><input className="form-control" value={form.model||''} onChange={e=>setForm({...form,model:e.target.value})}/></Field>
+                <Field label="Unit"><input className="form-control" value={form.unit||'pcs'} onChange={e=>setForm({...form,unit:e.target.value})}/></Field>
+                <Field label="Reorder Level"><input className="form-control" type="number" value={form.reorder_level||0} onChange={e=>setForm({...form,reorder_level:Number(e.target.value)})}/></Field>
               </>)}
               {(modal.type === 'serials' || modal.type === 'edit-serial') && (<>
-                <Field label="Item"><select className="inp" value={form.item_id||''} onChange={e=>setForm({...form,item_id:e.target.value})}><option value="">Select</option>{items.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select></Field>
-                <Field label="Warehouse"><select className="inp" value={form.warehouse_id||''} onChange={e=>setForm({...form,warehouse_id:e.target.value})}><option value="">None</option>{warehouses.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></Field>
-                <Field label="Serial Number"><input className="inp" value={form.serial_number||''} onChange={e=>setForm({...form,serial_number:e.target.value})}/></Field>
-                <Field label="MAC Address"><input className="inp" value={form.mac_address||''} onChange={e=>setForm({...form,mac_address:e.target.value})}/></Field>
-                <Field label="Status"><select className="inp" value={form.status||'IN_STOCK'} onChange={e=>setForm({...form,status:e.target.value})}>{['IN_STOCK','ASSIGNED','FAULTY','RMA','RETIRED'].map(s=><option key={s}>{s}</option>)}</select></Field>
-                <Field label="Assigned Subscriber"><select className="inp" value={form.assigned_subscriber_id||''} onChange={e=>setForm({...form,assigned_subscriber_id:e.target.value||null})}><option value="">None</option>{subscribers.map(s=><option key={s.id} value={s.id}>{s.full_name} ({s.client_code})</option>)}</select></Field>
-                <div className="md:col-span-2"><Field label="Notes"><input className="inp" value={form.notes||''} onChange={e=>setForm({...form,notes:e.target.value})}/></Field></div>
+                <Field label="Item"><select className="form-select" value={form.item_id||''} onChange={e=>setForm({...form,item_id:e.target.value})}><option value="">Select</option>{items.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select></Field>
+                <Field label="Warehouse"><select className="form-select" value={form.warehouse_id||''} onChange={e=>setForm({...form,warehouse_id:e.target.value})}><option value="">None</option>{warehouses.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></Field>
+                <Field label="Serial Number"><input className="form-control" value={form.serial_number||''} onChange={e=>setForm({...form,serial_number:e.target.value})}/></Field>
+                <Field label="MAC Address"><input className="form-control" value={form.mac_address||''} onChange={e=>setForm({...form,mac_address:e.target.value})}/></Field>
+                <Field label="Status"><select className="form-select" value={form.status||'IN_STOCK'} onChange={e=>setForm({...form,status:e.target.value})}>{['IN_STOCK','ASSIGNED','FAULTY','RMA','RETIRED'].map(s=><option key={s}>{s}</option>)}</select></Field>
+                <Field label="Assigned Subscriber"><select className="form-select" value={form.assigned_subscriber_id||''} onChange={e=>setForm({...form,assigned_subscriber_id:e.target.value||null})}><option value="">None</option>{subscribers.map(s=><option key={s.id} value={s.id}>{s.full_name} ({s.client_code})</option>)}</select></Field>
+                <div className="md:col-span-2"><Field label="Notes"><input className="form-control" value={form.notes||''} onChange={e=>setForm({...form,notes:e.target.value})}/></Field></div>
               </>)}
             </div>
             <div className="px-5 py-4 border-t border-border flex justify-end gap-2">
@@ -193,16 +196,12 @@ export default function InventoryPage() {
           </div>
         </div>
       )}
-
-      <style jsx>{`
-        .inp { width: 100%; padding: 0.5rem 0.75rem; border-radius: 0.75rem; background: var(--card); color: var(--foreground); border: 1px solid var(--border); font-size: 0.875rem; }
-      `}</style>
     </div>
   );
 }
 
 function Field({label, children}: any) { return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>{children}</label>; }
-function Actions({onEdit, onDelete}: any) { return <div className="flex justify-end gap-1"><button onClick={onEdit} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button><button onClick={onDelete} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400"><Trash2 className="w-4 h-4"/></button></div>; }
+function Actions({onEdit, onDelete}: any) { return <div className="flex justify-end gap-1"><button onClick={onEdit} className="p-2 rounded-lg hover:bg-muted"><Pencil className="w-4 h-4"/></button><button onClick={onDelete} className="p-2 rounded-lg hover:bg-danger/10 text-danger"><Trash2 className="w-4 h-4"/></button></div>; }
 function CardTable({headers, rows, loading, empty}: any) {
   return (
     <div className="card overflow-hidden"><div className="overflow-auto"><table className="table table-hover text-sm">

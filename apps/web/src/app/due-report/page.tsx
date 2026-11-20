@@ -1,4 +1,10 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-export default function DueReportAlias() { const r = useRouter(); useEffect(()=>{ r.replace('/reports#dues-aging'); },[r]); return <div className="p-6 text-sm text-muted-foreground">Redirecting to Due Analytics...</div>; }
+import { RedirectShell } from '@/components/layout/redirect-shell';
+
+export default function DuereportAliasPage() {
+  const router = useRouter();
+  useEffect(()=>{ router.replace("/reports#dues-aging"); },[router]);
+  return <RedirectShell label="Due Analytics" href="/reports#dues-aging" />;
+}

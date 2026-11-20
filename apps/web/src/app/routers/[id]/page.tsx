@@ -9,17 +9,19 @@ import { ArrowLeft, RefreshCw, Play, Server, Activity, Wifi, ShieldCheck, Link2,
 
 function modeBadge(m: string) {
   const v = String(m || '').toUpperCase();
-  if (v === 'RADIUS') return 'bg-violet-500/10 text-violet-400 border-violet-500/20';
-  if (v === 'REST') return 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20';
-  return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
+  if (v === 'RADIUS') return 'badge badge-purple';
+  if (v === 'REST') return 'badge badge-info';
+  return 'badge badge-primary';
 }
 
-function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
+function Stat({ label, value, sub, tone='primary' }: { label: string; value: React.ReactNode; sub?: string; tone?: string }) {
   return (
-    <div className="card p-4">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-xl font-black">{value}</div>
-      {sub ? <div className="text-[11px] text-muted-foreground mt-0.5">{sub}</div> : null}
+    <div className={`dash-stat dash-stat-${tone}`}>
+      <span className="dash-stat-body">
+        <span className="dash-stat-label">{label}</span>
+        <span className="dash-stat-value text-base">{value}</span>
+        {sub ? <span className="dash-stat-hint">{sub}</span> : null}
+      </span>
     </div>
   );
 }
@@ -108,7 +110,7 @@ export default function RouterDetailPage() {
   }, [sessions]);
 
   if (loading && !router) return <div className="p-6 text-sm text-muted-foreground">Loading router...</div>;
-  if (!router) return <div className="p-6 space-y-3"><div className="text-red-400">{error || 'Router not found'}</div><Link href="/routers" className="text-primary underline">Back to Routers</Link></div>;
+  if (!router) return <div className="p-6 space-y-3"><div className="text-danger">{error || 'Router not found'}</div><Link href="/routers" className="text-primary underline">Back to Routers</Link></div>;
 
   const mode = String(router.integration_mode || 'API').toUpperCase();
   const isDirect = mode === 'API' || mode === 'REST';
@@ -116,47 +118,48 @@ export default function RouterDetailPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
+      <div className="page-header items-start">
         <div className="space-y-1">
           <Link href="/routers" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"><ArrowLeft className="w-3.5 h-3.5" />Back to Routers</Link>
+          <span className="page-eyebrow">Network · Router Detail</span>
           <h1 className="page-title"><Server className="w-6 h-6 text-primary" />{router.name} <span className="text-sm font-semibold text-muted-foreground">360° View</span></h1>
-          <div className="text-sm text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 items-center">
-            <span className={`px-2 py-0.5 rounded-full border text-xs font-semibold ${modeBadge(mode)}`}>{mode}</span>
+          <div className="page-subtitle flex flex-wrap gap-x-3 gap-y-1 items-center">
+            <span className={modeBadge(mode)}>{mode}</span>
             <span>{router.router_type || 'Router'} {router.ros_version || ''}</span>
             <span>• Host: <span className="font-mono text-foreground">{router.host}</span></span>
             <span>• Site: {router.site || '—'}</span>
           </div>
         </div>
-        <div className="flex gap-2 flex-wrap">
-          <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
-          <button onClick={testConn} className="btn btn-outline inline-flex items-center gap-2"><Play className="w-4 h-4" />Test</button>
-          {isDirect && <button onClick={provisionWalledGarden} className="btn btn-outline inline-flex items-center gap-2"><Globe className="w-4 h-4" />Provision Walled Garden</button>}
-          {mode === 'RADIUS' && <button onClick={syncRadiusNas} className="btn btn-outline inline-flex items-center gap-2"><ShieldCheck className="w-4 h-4" />Sync RADIUS NAS</button>}
-          <Link href="/routers" className="btn btn-outline inline-flex items-center gap-2"><Network className="w-4 h-4" />Overview & Import</Link>
+        <div className="page-actions">
+          <button onClick={load} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />Refresh</button>
+          <button onClick={testConn} className="btn btn-outline"><Play className="w-4 h-4" />Test</button>
+          {isDirect && <button onClick={provisionWalledGarden} className="btn btn-outline"><Globe className="w-4 h-4" />Provision Walled Garden</button>}
+          {mode === 'RADIUS' && <button onClick={syncRadiusNas} className="btn btn-outline"><ShieldCheck className="w-4 h-4" />Sync RADIUS NAS</button>}
+          <Link href="/routers" className="btn btn-outline"><Network className="w-4 h-4" />Overview &amp; Import</Link>
         </div>
       </div>
 
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
-      {msg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{msg}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
+      {msg && <div className="alert alert-success">{msg}</div>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
-        <Stat label="Status" value={<span className={`text-sm px-2 py-0.5 rounded-full border ${router.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':router.status==='OFFLINE'?'bg-red-500/10 text-red-400 border-red-500/20':'bg-muted text-muted-foreground border-border'}`}>{router.status || 'UNKNOWN'}</span>} sub={router.last_seen_at ? new Date(router.last_seen_at).toLocaleString() : 'Never seen'} />
-        <Stat label="Uptime" value={fmtUptime(Number(router.uptime_seconds || 0))} sub={router.identity || '-'} />
-        <Stat label="CPU" value={router.cpu_load != null ? `${Number(router.cpu_load).toFixed(1)}%` : (isDirect ? '—' : 'N/A')} sub={isDirect ? 'RouterOS telemetry' : 'RADIUS NAS'} />
-        <Stat label="Memory" value={router.memory_total_mb ? `${Number(router.memory_used_mb||0).toFixed(0)}/${Number(router.memory_total_mb||0).toFixed(0)} MB` : (isDirect ? '—' : 'N/A')} />
-        <Stat label="Aggregate RX" value={fmtBps(Number(router.rx_bps || derived.totalRx || 0))} sub="Current/derived" />
-        <Stat label="Aggregate TX" value={fmtBps(Number(router.tx_bps || derived.totalTx || 0))} sub="Current/derived" />
-        <Stat label="Sessions" value={st.online_sessions ?? derived.online} sub={`${st.total_sessions ?? sessions.length} total tracked`} />
-        <Stat label="Assigned Subs" value={st.assigned_subscribers ?? 0} sub="Provisioned to router" />
+        <Stat label="Status" value={<span className={`badge ${router.status==='ONLINE'?'badge-success':router.status==='OFFLINE'?'badge-danger':'badge-secondary'}`}>{router.status || 'UNKNOWN'}</span>} sub={router.last_seen_at ? new Date(router.last_seen_at).toLocaleString() : 'Never seen'} tone={router.status==='ONLINE'?'success':router.status==='OFFLINE'?'danger':'secondary'} />
+        <Stat label="Uptime" value={fmtUptime(Number(router.uptime_seconds || 0))} sub={router.identity || '-'} tone="info" />
+        <Stat label="CPU" value={router.cpu_load != null ? `${Number(router.cpu_load).toFixed(1)}%` : (isDirect ? '—' : 'N/A')} sub={isDirect ? 'RouterOS telemetry' : 'RADIUS NAS'} tone="warning" />
+        <Stat label="Memory" value={router.memory_total_mb ? `${Number(router.memory_used_mb||0).toFixed(0)}/${Number(router.memory_total_mb||0).toFixed(0)} MB` : (isDirect ? '—' : 'N/A')} tone="purple" />
+        <Stat label="Aggregate RX" value={fmtBps(Number(router.rx_bps || derived.totalRx || 0))} sub="Current/derived" tone="teal" />
+        <Stat label="Aggregate TX" value={fmtBps(Number(router.tx_bps || derived.totalTx || 0))} sub="Current/derived" tone="indigo" />
+        <Stat label="Sessions" value={st.online_sessions ?? derived.online} sub={`${st.total_sessions ?? sessions.length} total tracked`} tone="success" />
+        <Stat label="Assigned Subs" value={st.assigned_subscribers ?? 0} sub="Provisioned to router" tone="primary" />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="xl:col-span-1 space-y-4">
           <div className="card p-4">
-            <h2 className="font-bold flex items-center gap-2 mb-2"><Activity className="w-4 h-4 text-primary" />Identity & Integration</h2>
+            <h2 className="font-bold flex items-center gap-2 mb-2"><Activity className="w-4 h-4 text-primary" />Identity &amp; Integration</h2>
             <KV k="Router ID" v={router.id} mono />
             <KV k="Name" v={router.name} />
-            <KV k="Integration" v={<span className={`px-2 py-0.5 rounded-full border text-xs font-semibold ${modeBadge(mode)}`}>{mode}</span>} />
+            <KV k="Integration" v={<span className={modeBadge(mode)}>{mode}</span>} />
             <KV k="Type / Version" v={`${router.router_type || '-'} ${router.ros_version || ''}`} />
             <KV k="Identity" v={router.identity || '-'} />
             <KV k="Board" v={router.board_name || '-'} />
@@ -164,7 +167,7 @@ export default function RouterDetailPage() {
           </div>
 
           <div className="card p-4">
-            <h2 className="font-bold flex items-center gap-2 mb-2"><Network className="w-4 h-4 text-primary" />Connectivity & Access</h2>
+            <h2 className="font-bold flex items-center gap-2 mb-2"><Network className="w-4 h-4 text-primary" />Connectivity &amp; Access</h2>
             <KV k="Host / IP" v={router.host} mono />
             {isDirect ? <>
               <KV k="API Port" v={router.api_port ?? '-'} />
@@ -183,18 +186,18 @@ export default function RouterDetailPage() {
           </div>
 
           <div className="card p-4">
-            <h2 className="font-bold flex items-center gap-2 mb-2"><Signal className="w-4 h-4 text-primary" />Capabilities & Notes</h2>
+            <h2 className="font-bold flex items-center gap-2 mb-2"><Signal className="w-4 h-4 text-primary" />Capabilities &amp; Notes</h2>
             <div className="text-sm space-y-2 text-muted-foreground">
               {isDirect ? (
                 <>
                   <div className="flex items-start gap-2"><Link2 className="w-4 h-4 mt-0.5 text-primary" /><span>Direct RouterOS {mode} provisioning: PPP profiles/secrets, queues, telemetry, and active session polling (where supported).</span></div>
                   <div className="flex items-start gap-2"><Globe className="w-4 h-4 mt-0.5 text-primary" /><span>Walled-garden redirect rules can be provisioned to this router via API/REST.</span></div>
-                  <div className="flex items-start gap-2"><Users className="w-4 h-4 mt-0.5 text-primary" /><span>Use “Overview & Import” for MikroTik PPP/Hotspot user & profile import.</span></div>
+                  <div className="flex items-start gap-2"><Users className="w-4 h-4 mt-0.5 text-primary" /><span>Use “Overview &amp; Import” for MikroTik PPP/Hotspot user &amp; profile import.</span></div>
                 </>
               ) : (
                 <>
-                  <div className="flex items-start gap-2"><ShieldCheck className="w-4 h-4 mt-0.5 text-violet-400" /><span>RADIUS NAS: centralized AAA/CoA across RADIUS-enabled routers. Ensure FreeRADIUS NAS/client config is synced and reloaded if required.</span></div>
-                  <div className="flex items-start gap-2"><Globe className="w-4 h-4 mt-0.5 text-violet-400" /><span>Captive/walled-garden firewall/NAT redirect rules must be configured on the NAS device (not pushed via RADIUS-only mode).</span></div>
+                  <div className="flex items-start gap-2"><ShieldCheck className="w-4 h-4 mt-0.5 text-purple" /><span>RADIUS NAS: centralized AAA/CoA across RADIUS-enabled routers. Ensure FreeRADIUS NAS/client config is synced and reloaded if required.</span></div>
+                  <div className="flex items-start gap-2"><Globe className="w-4 h-4 mt-0.5 text-purple" /><span>Captive/walled-garden firewall/NAT redirect rules must be configured on the NAS device (not pushed via RADIUS-only mode).</span></div>
                 </>
               )}
             </div>
@@ -203,40 +206,40 @@ export default function RouterDetailPage() {
 
         <div className="xl:col-span-2 space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="card p-3 flex items-center gap-2"><Cpu className="w-4 h-4 text-primary" /><div><div className="text-[11px] text-muted-foreground">CPU</div><div className="font-bold">{router.cpu_load != null ? `${Number(router.cpu_load).toFixed(1)}%` : '—'}</div></div></div>
-            <div className="card p-3 flex items-center gap-2"><HardDrive className="w-4 h-4 text-primary" /><div><div className="text-[11px] text-muted-foreground">Memory</div><div className="font-bold text-sm">{router.memory_total_mb ? `${Number(router.memory_used_mb||0).toFixed(0)}/${Number(router.memory_total_mb||0).toFixed(0)} MB` : '—'}</div></div></div>
-            <div className="card p-3 flex items-center gap-2"><ArrowDown className="w-4 h-4 text-cyan-400" /><div><div className="text-[11px] text-muted-foreground">RX (agg)</div><div className="font-bold text-sm">{fmtBps(Number(router.rx_bps || derived.totalRx || 0))}</div></div></div>
-            <div className="card p-3 flex items-center gap-2"><ArrowUp className="w-4 h-4 text-indigo-400" /><div><div className="text-[11px] text-muted-foreground">TX (agg)</div><div className="font-bold text-sm">{fmtBps(Number(router.tx_bps || derived.totalTx || 0))}</div></div></div>
+            <div className="dash-stat compact dash-stat-warning"><span className="dash-stat-icon"><Cpu className="w-3.5 h-3.5"/></span><span className="dash-stat-body"><span className="dash-stat-label">CPU</span><span className="dash-stat-value text-sm tabular-nums">{router.cpu_load != null ? `${Number(router.cpu_load).toFixed(1)}%` : '—'}</span></span></div>
+            <div className="dash-stat compact dash-stat-purple"><span className="dash-stat-icon"><HardDrive className="w-3.5 h-3.5"/></span><span className="dash-stat-body"><span className="dash-stat-label">Memory</span><span className="dash-stat-value text-sm tabular-nums">{router.memory_total_mb ? `${Number(router.memory_used_mb||0).toFixed(0)}/${Number(router.memory_total_mb||0).toFixed(0)} MB` : '—'}</span></span></div>
+            <div className="dash-stat compact dash-stat-teal"><span className="dash-stat-icon"><ArrowDown className="w-3.5 h-3.5"/></span><span className="dash-stat-body"><span className="dash-stat-label">RX (agg)</span><span className="dash-stat-value text-sm tabular-nums">{fmtBps(Number(router.rx_bps || derived.totalRx || 0))}</span></span></div>
+            <div className="dash-stat compact dash-stat-indigo"><span className="dash-stat-icon"><ArrowUp className="w-3.5 h-3.5"/></span><span className="dash-stat-body"><span className="dash-stat-label">TX (agg)</span><span className="dash-stat-value text-sm tabular-nums">{fmtBps(Number(router.tx_bps || derived.totalTx || 0))}</span></span></div>
           </div>
 
           <div className="card overflow-hidden">
             <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
               <div>
                 <div className="font-semibold flex items-center gap-2"><Wifi className="w-4 h-4 text-primary" />Live Sessions on this Router ({sessions.length})</div>
-                <div className="text-[11px] text-muted-foreground">{derived.online} online • RX {fmtBps(derived.totalRx)} • TX {fmtBps(derived.totalTx)}</div>
+                <div className="text-[11px] text-muted-foreground tabular-nums">{derived.online} online • RX {fmtBps(derived.totalRx)} • TX {fmtBps(derived.totalTx)}</div>
               </div>
               <Link href="/subscribers/live" className="btn btn-outline btn-sm">Global Live View</Link>
             </div>
-            <div className="overflow-auto max-h-[560px]">
-              <table className="table table-hover text-xs">
-                <thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr>
-                  <th className="text-left px-4 py-2">Subscriber</th>
-                  <th className="text-left px-4 py-2">IP / MAC</th>
-                  <th className="text-left px-4 py-2">Throughput</th>
-                  <th className="text-left px-4 py-2">Mode</th>
-                  <th className="text-left px-4 py-2">Status</th>
+            <div className="table-wrap overflow-auto max-h-[560px]">
+              <table className="table table-hover text-[11px]">
+                <thead className="sticky top-0 z-10"><tr>
+                  <th className="px-3 py-2.5">Subscriber</th>
+                  <th className="px-3 py-2.5">IP / MAC</th>
+                  <th className="px-3 py-2.5">Throughput</th>
+                  <th className="px-3 py-2.5">Mode</th>
+                  <th className="px-3 py-2.5">Status</th>
                 </tr></thead>
                 <tbody>
                   {sessions.map((s: any, i: number) => (
                     <tr key={s.id || `${s.username}-${i}`} className="border-t border-border/70">
-                      <td className="px-4 py-2"><div className="font-medium">{s.full_name || s.username}</div><div className="text-muted-foreground font-mono">{s.username}</div><div className="text-[10px] text-muted-foreground">{s.client_code || ''}</div></td>
-                      <td className="px-4 py-2"><div>{s.ip_address || '-'}</div><div className="text-muted-foreground font-mono">{s.mac_address || '-'}</div></td>
-                      <td className="px-4 py-2"><div className="text-cyan-400">↓ {fmtBps(Number(s.rx_bps || 0))}</div><div className="text-indigo-400">↑ {fmtBps(Number(s.tx_bps || 0))}</div></td>
-                      <td className="px-4 py-2"><span className="text-[10px] px-1.5 py-0.5 rounded border border-border">{s.provisioning_mode || '-'}</span></td>
-                      <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full border font-semibold ${s.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':'bg-muted text-muted-foreground border-border'}`}>{s.status}</span></td>
+                      <td className="px-3 py-2.5"><div className="font-medium">{s.full_name || s.username}</div><div className="text-muted-foreground font-mono">{s.username}</div><div className="text-[10px] text-muted-foreground">{s.client_code || ''}</div></td>
+                      <td className="px-3 py-2.5"><div>{s.ip_address || '-'}</div><div className="text-muted-foreground font-mono">{s.mac_address || '-'}</div></td>
+                      <td className="px-3 py-2.5 tabular-nums"><div className="text-info">↓ {fmtBps(Number(s.rx_bps || 0))}</div><div className="text-indigo">↑ {fmtBps(Number(s.tx_bps || 0))}</div></td>
+                      <td className="px-3 py-2.5"><span className="badge badge-outline">{s.provisioning_mode || '-'}</span></td>
+                      <td className="px-3 py-2.5"><span className={`badge ${s.status==='ONLINE'?'badge-success':'badge-secondary'}`}>{s.status}</span></td>
                     </tr>
                   ))}
-                  {!sessions.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">No session data for this router yet.</td></tr>}
+                  {!sessions.length && <tr><td colSpan={5} className="px-3 py-8 text-center text-muted-foreground">No session data for this router yet.</td></tr>}
                 </tbody>
               </table>
             </div>

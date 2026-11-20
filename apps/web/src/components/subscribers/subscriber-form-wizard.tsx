@@ -256,7 +256,7 @@ export function SubscriberFormWizard({
           </div>
         </div>
 
-        {error && <div className="mx-4 sm:mx-5 mt-4 p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+        {error && <div className="mx-4 sm:mx-5 mt-4 alert alert-danger">{error}</div>}
 
         <div className="p-4 sm:p-5">
           {step === 1 && (
@@ -289,12 +289,12 @@ export function SubscriberFormWizard({
                   {form.provisioning_mode === 'ROUTER' ? (
                     <Select label="Select Router (API/REST)" value={form.router_id || ''} onChange={v => setForm({ ...form, router_id: v })} options={[{ v: '', l: 'Select router by name...' }, ...directRouters.map((r: any) => ({ v: r.id, l: `${r.name} (${String(r.integration_mode || 'API').toUpperCase()} • ${r.host})` }))]} />
                   ) : (
-                    <div className="text-xs text-muted-foreground p-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
+                    <div className="alert alert-primary text-[11px]">
                       Subscriber will authenticate via centralized RADIUS across <b>all enabled RADIUS NAS routers</b> ({radiusRouters.length} available). Ensure RADIUS users are synced in <b>RADIUS &amp; AAA</b>.
                     </div>
                   )}
                 </div>
-                {form.provisioning_mode === 'ROUTER' && !directRouters.length && <div className="text-xs text-amber-400">No API/REST routers available. Add one in Network &amp; Routers or choose RADIUS mode.</div>}
+                {form.provisioning_mode === 'ROUTER' && !directRouters.length && <div className="alert alert-warning text-[11px]">No API/REST routers available. Add one in Network &amp; Routers or choose RADIUS mode.</div>}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

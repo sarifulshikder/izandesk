@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
@@ -11,6 +12,13 @@ type AnyObj = Record<string, any>;
 function money(v: any, cur = '৳') {
   const n = Number(v || 0);
   return `${cur}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function fmtDate(v: any) {
+  if (!v) return '-';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v).slice(0, 10);
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 export default function BillingPage() {
@@ -149,50 +157,51 @@ export default function BillingPage() {
 
   return (
     <div className="space-y-5">
-      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
-          <h1 className="page-title">Billing & Payments</h1>
-          <p className="page-subtitle">Automated invoicing, due policies, suspension/walled-garden enforcement, and payment gateway collections with instant reactivation.</p>
-          <div className="flex flex-wrap gap-2 mt-2 text-[11px]">
-            <a href="/billing/all" className="btn btn-outline btn-sm">All Bills</a>
-            <a href="/billing/unpaid" className="btn btn-outline btn-sm">Unpaid Bills</a>
-            <a href="/billing/paid" className="btn btn-outline btn-sm">Paid Bills</a>
-            <a href="/billing/invoices" className="btn btn-outline btn-sm">Invoices</a>
-            <a href="/billing/monthly-generate" className="btn btn-outline btn-sm">Monthly Generate</a>
-            <a href="/billing/collections" className="btn btn-outline btn-sm">Today&apos;s Collection</a>
-            <a href="/billing/payments" className="btn btn-outline btn-sm">Payments</a>
-            <a href="/billing/due-analytics" className="btn btn-outline btn-sm">Due Analytics</a>
-            <a href="/billing/adjust-bill" className="btn btn-outline btn-sm">Adjust Bill</a>
-            <a href="/billing/auto-suspend" className="btn btn-outline btn-sm">Auto Suspend</a>
-            <a href="/billing/waivers" className="btn btn-outline btn-sm">Waivers</a>
-            <a href="/subscribers" className="btn btn-outline btn-sm">Clients</a>
-            <a href="/plugins" className="btn btn-outline btn-sm">Payment Gateways</a>
-          </div>
+          <span className="page-eyebrow">Revenue operations · Billing core</span>
+          <h1 className="page-title">Billing &amp; Payments</h1>
+          <p className="page-subtitle">Invoicing, collections, due enforcement and gateway settlement in one workspace.</p>
         </div>
-        <div className="page-actions flex gap-2 flex-wrap">
+        <div className="page-actions">
           <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
-          <button onClick={evaluate} disabled={!!working} className="btn btn-warning"><AlertTriangle className="w-4 h-4"/>{working==='eval'?'Evaluating...':'Run Due Policy'}</button>
-          <div className="flex items-center gap-2">
-            <input type="date" className="form-control" value={cycleDate} onChange={e=>setCycleDate(e.target.value)} />
-            <button onClick={runBatch} disabled={!!working} className="btn btn-primary"><Play className="w-4 h-4"/>{working==='batch'?'Generating...':'Generate Batch Invoices'}</button>
-          </div>
+          <button onClick={evaluate} disabled={!!working} className="btn btn-warning"><AlertTriangle className="w-4 h-4"/>{working==='eval'?'Evaluating…':'Run Due Policy'}</button>
+          <input type="date" className="form-control !w-[142px]" value={cycleDate} onChange={e=>setCycleDate(e.target.value)} title="Billing cycle date" />
+          <button onClick={runBatch} disabled={!!working} className="btn btn-primary"><Play className="w-4 h-4"/>{working==='batch'?'Generating…':'Generate Batch'}</button>
         </div>
+      </div>
+
+      <div className="page-tabbar">
+        <Link href="/billing" className="page-tab active">Overview</Link>
+        <Link href="/billing/all" className="page-tab">All Bills</Link>
+        <Link href="/billing/unpaid" className="page-tab">Unpaid</Link>
+        <Link href="/billing/paid" className="page-tab">Paid</Link>
+        <Link href="/billing/invoices" className="page-tab">Invoices</Link>
+        <Link href="/billing/monthly-generate" className="page-tab">Monthly Generate</Link>
+        <Link href="/billing/collections" className="page-tab">Collections</Link>
+        <Link href="/billing/payments" className="page-tab">Payments</Link>
+        <Link href="/billing/due-analytics" className="page-tab">Due Analytics</Link>
+        <Link href="/billing/adjust-bill" className="page-tab">Adjust Bill</Link>
+        <Link href="/billing/auto-suspend" className="page-tab">Auto Suspend</Link>
+        <Link href="/billing/waivers" className="page-tab">Waivers</Link>
+        <Link href="/subscribers" className="page-tab">Clients</Link>
+        <Link href="/plugins" className="page-tab">Gateways</Link>
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         {[
-          { label: 'This Month Billed', value: money(metrics?.monthlyBillGenerated), icon: FileText, accent: 'text-foreground' },
-          { label: 'Today Collections', value: money(metrics?.todayCollections), icon: CreditCard, accent: 'text-emerald-400' },
-          { label: 'Month Collections', value: money(metrics?.thisMonthCollections), icon: Wallet, accent: 'text-cyan-400' },
-          { label: 'Outstanding Due', value: money(metrics?.totalDueOutstanding), icon: AlertTriangle, accent: 'text-amber-400' },
-          { label: 'Suspended/Isolated', value: String(metrics?.suspendedDue ?? 0), icon: ShieldAlert, accent: 'text-red-400' },
-          { label: 'Expired', value: String(metrics?.expiredThisMonth ?? 0), icon: Clock3, accent: 'text-orange-400' },
+          { label: 'This Month Billed', value: money(metrics?.monthlyBillGenerated), hint: 'net amount invoiced', icon: FileText, tone: 'primary' },
+          { label: 'Today Collections', value: money(metrics?.todayCollections), hint: 'payments posted today', icon: CreditCard, tone: 'success' },
+          { label: 'Month Collections', value: money(metrics?.thisMonthCollections), hint: 'collected month to date', icon: Wallet, tone: 'teal' },
+          { label: 'Outstanding Due', value: money(metrics?.totalDueOutstanding), hint: `${metrics?.overdueInvoices ?? 0} overdue invoices`, icon: AlertTriangle, tone: 'warning' },
+          { label: 'Suspended / Isolated', value: String(metrics?.suspendedDue ?? 0), hint: 'accounts restricted', icon: ShieldAlert, tone: 'danger' },
+          { label: 'Expired', value: String(metrics?.expiredThisMonth ?? 0), hint: 'this month', icon: Clock3, tone: 'orange' },
         ].map((c:any) => (
-          <div key={c.label} className="card p-4 card-link">
-            <div className="flex items-center justify-between text-xs uppercase font-bold text-muted-foreground tracking-wider"><span>{c.label}</span><c.icon className={`w-4 h-4 ${c.accent}`}/></div>
-            <div className={`mt-2 text-lg font-black ${c.accent}`}>{c.value}</div>
+          <div key={c.label} className={`dash-stat dash-stat-${c.tone}`}>
+            <span className="dash-stat-icon"><c.icon /></span>
+            <span className="dash-stat-body"><span className="dash-stat-label">{c.label}</span><span className="dash-stat-value">{c.value}</span><span className="dash-stat-hint">{c.hint}</span></span>
           </div>
         ))}
       </div>
@@ -215,22 +224,22 @@ export default function BillingPage() {
             </div>
           </div>
           <div className="table-wrap overflow-auto max-h-[420px]">
-            <table className="table table-hover w-full text-sm">
-              <thead className="bg-muted/40 text-xs uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-3">Invoice</th><th className="text-left px-4 py-3">Subscriber</th><th className="text-left px-4 py-3">Period</th><th className="text-left px-4 py-3">Amounts</th><th className="text-left px-4 py-3">Status</th></tr></thead>
+            <table className="table table-hover w-full text-sm min-w-[720px]">
+              <thead className="sticky top-0 z-10"><tr><th className="text-left px-3 py-2.5">Invoice</th><th className="text-left px-3 py-2.5">Subscriber</th><th className="text-left px-3 py-2.5">Period</th><th className="text-left px-3 py-2.5">Amounts</th><th className="text-left px-3 py-2.5">Status</th></tr></thead>
               <tbody>
                 {filteredInvoices.map((inv:any) => (
                   <tr key={inv.id} className={`border-t border-border/70 cursor-pointer hover:bg-muted/30 transition-colors ${payForm.invoice_id===inv.id?'bg-primary/5':''}`} onClick={()=>setPayForm(f=>({...f, invoice_id: inv.id, amount: String(inv.due_amount || inv.total_amount || '')}))}>
-                    <td className="px-4 py-3"><div className="font-semibold">{inv.invoice_number}</div><div className="text-xs text-muted-foreground">{inv.bill_month || '-'} {inv.prorated ? <span className="text-cyan-400 font-medium">• prorated</span> : null}</div></td>
-                    <td className="px-4 py-3"><div className="font-medium">{inv.subscriber_name || '-'}</div><div className="text-xs text-muted-foreground font-mono">{inv.client_code || ''} {inv.username ? `• ${inv.username}`:''}</div></td>
-                    <td className="px-4 py-3 text-xs"><div>{inv.period_start || '-'} → {inv.period_end || '-'}</div><div className="text-muted-foreground">Due {inv.due_date || '-'}</div></td>
-                    <td className="px-4 py-3 text-xs"><div>Total {money(inv.total_amount||inv.amount)}</div><div className="text-muted-foreground">Paid <span className="text-emerald-400">{money(inv.paid_amount)}</span> • Due <span className={Number(inv.due_amount||0)>0?'text-amber-400 font-medium':''}>{money(inv.due_amount)}</span></div></td>
-                    <td className="px-4 py-3 text-xs">
-                      <div className="flex flex-col items-start gap-1.5">
+                    <td className="px-3 py-2.5"><div className="font-semibold font-mono text-[11px] whitespace-nowrap">{inv.invoice_number}</div><div className="text-[10px] text-muted-foreground">{inv.bill_month || '-'} {inv.prorated ? <span className="text-teal font-medium">• prorated</span> : null}</div></td>
+                    <td className="px-3 py-2.5"><div className="font-medium text-[12px] truncate max-w-[150px]">{inv.subscriber_name || '-'}</div><div className="text-[10px] text-muted-foreground font-mono truncate max-w-[150px]">{inv.client_code || ''} {inv.username ? `• ${inv.username}`:''}</div></td>
+                    <td className="px-3 py-2.5 text-[11px] whitespace-nowrap"><div>{fmtDate(inv.period_start)} → {fmtDate(inv.period_end)}</div><div className="text-[10px] text-muted-foreground">Due {fmtDate(inv.due_date)}</div></td>
+                    <td className="px-3 py-2.5 text-[11px] tabular-nums whitespace-nowrap"><div>Total <span className="font-semibold">{money(inv.total_amount||inv.amount)}</span></div><div className="text-[10px] text-muted-foreground">Paid <span className="text-success">{money(inv.paid_amount)}</span> · Due <span className={Number(inv.due_amount||0)>0?'text-warning font-semibold':''}>{money(inv.due_amount)}</span></div></td>
+                    <td className="px-3 py-2.5 text-[11px]">
+                      <div className="flex flex-col items-start gap-1">
                         <span className={`badge ${inv.status==='PAID'?'badge-success':inv.status==='OVERDUE'?'badge-danger':inv.status==='PARTIAL'?'badge-warning':inv.status==='PENDING'?'badge-primary':'badge-secondary'}`}>{inv.status}</span>
                         {Number(inv.due_amount || 0) > 0 && String(inv.status).toUpperCase() !== 'PAID' && (
                           <div className="flex flex-wrap gap-1.5" onClick={e=>e.stopPropagation()}>
-                            <a href={`/billing/adjust-bill?invoice_id=${encodeURIComponent(inv.id)}`} className="btn btn-outline btn-sm">Adjust</a>
-                            <a href={`/billing/waivers?invoice_id=${encodeURIComponent(inv.id)}`} className="btn btn-outline btn-sm">Waive</a>
+                            <Link href={`/billing/adjust-bill?invoice_id=${encodeURIComponent(inv.id)}`} className="text-[10px] text-primary font-semibold hover:underline underline-offset-2">Adjust</Link>
+                            <Link href={`/billing/waivers?invoice_id=${encodeURIComponent(inv.id)}`} className="text-[10px] text-primary font-semibold hover:underline underline-offset-2">Waive</Link>
                           </div>
                         )}
                       </div>
@@ -270,7 +279,7 @@ export default function BillingPage() {
             <h2 className="card-title mb-3 flex items-center gap-2"><ShieldAlert className="w-4 h-4 text-primary"/>Payment Gateways & Plugins</h2>
             <div className="space-y-2 text-xs">
               {gateways.map((g:any)=> (
-                <div key={g.gateway} className="p-2.5 rounded-xl border border-border/70 flex items-center justify-between"><div><div className="font-semibold uppercase">{g.gateway}</div><div className="text-muted-foreground">{g.mode} • {g.enabled ? 'enabled' : 'configured'} • {g.has_credentials ? 'credentials set' : 'sandbox/no creds'}</div></div><CheckCircle2 className={`w-4 h-4 ${g.enabled || g.mode==='SANDBOX' ? 'text-emerald-400':'text-muted-foreground'}`}/></div>
+                <div key={g.gateway} className="p-2.5 rounded-xl border border-border/70 flex items-center justify-between"><div><div className="font-semibold uppercase">{g.gateway}</div><div className="text-muted-foreground">{g.mode} • {g.enabled ? 'enabled' : 'configured'} • {g.has_credentials ? 'credentials set' : 'sandbox/no creds'}</div></div><CheckCircle2 className={`w-4 h-4 ${g.enabled || g.mode==='SANDBOX' ? 'text-success':'text-muted-foreground'}`}/></div>
               ))}
               <div className="pt-1 text-muted-foreground">Loaded payment plugins: {gatewayPlugins.length ? gatewayPlugins.map((p:any)=>p.id || p.name).join(', ') : 'bKash, Nagad, Rocket, Stripe, PayPal (on reload)'}</div>
             </div>
@@ -280,7 +289,7 @@ export default function BillingPage() {
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
         <div id="billing-due" className="card overflow-hidden scroll-mt-24">
-          <div className="card-header font-semibold flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-400"/>Due / Suspension Control (warning → grace → isolation/walled garden)</div>
+          <div className="card-header font-semibold flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-warning"/>Due / Suspension Control (warning → grace → isolation/walled garden)</div>
           <div className="table-wrap overflow-auto max-h-[360px]">
             <table className="table table-hover w-full text-xs">
               <thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-2">Subscriber</th><th className="text-left px-4 py-2">Due/Stage</th><th className="text-left px-4 py-2">Status</th><th className="text-right px-4 py-2">Actions</th></tr></thead>
@@ -311,7 +320,7 @@ export default function BillingPage() {
             <div className="table-wrap overflow-auto border-b border-border/70">
               <table className="table table-hover w-full text-xs"><thead className="bg-muted/40 uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-2">Time</th><th className="text-left px-4 py-2">Ref/Invoice</th><th className="text-left px-4 py-2">Gateway</th><th className="text-left px-4 py-2">Amount</th><th className="text-left px-4 py-2">Status</th></tr></thead>
                 <tbody>
-                  {filteredPayments.slice(0,30).map((p:any)=>(<tr key={p.id} className="border-t border-border/70"><td className="px-4 py-2 text-muted-foreground">{p.created_at?new Date(p.created_at).toLocaleString():'-'}</td><td className="px-4 py-2"><div className="font-medium">{p.payment_ref}</div><div className="text-muted-foreground">{p.invoice_number || ''} {p.full_name?`• ${p.full_name}`:''}</div></td><td className="px-4 py-2 uppercase">{p.gateway}</td><td className="px-4 py-2">{money(p.amount, p.currency==='USD'?'$':'৳')}</td><td className="px-4 py-2"><span className={p.status==='COMPLETED'?'text-emerald-400':p.status==='FAILED'?'text-red-400':'text-amber-300'}>{p.status}</span></td></tr>))}
+                  {filteredPayments.slice(0,30).map((p:any)=>(<tr key={p.id} className="border-t border-border/70"><td className="px-4 py-2 text-muted-foreground">{p.created_at?new Date(p.created_at).toLocaleString():'-'}</td><td className="px-4 py-2"><div className="font-medium">{p.payment_ref}</div><div className="text-muted-foreground">{p.invoice_number || ''} {p.full_name?`• ${p.full_name}`:''}</div></td><td className="px-4 py-2 uppercase">{p.gateway}</td><td className="px-4 py-2">{money(p.amount, p.currency==='USD'?'$':'৳')}</td><td className="px-4 py-2"><span className={p.status==='COMPLETED'?'text-success':p.status==='FAILED'?'text-danger':'text-warning'}>{p.status}</span></td></tr>))}
                   {!filteredPayments.length && <tr><td colSpan={5} className="px-4 py-4 text-center text-muted-foreground">{payments.length ? 'No payments match the current filter.' : 'No payments yet.'}</td></tr>}
                 </tbody>
               </table>

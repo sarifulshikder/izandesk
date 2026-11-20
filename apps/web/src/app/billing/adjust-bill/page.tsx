@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Receipt } from 'lucide-react';
 
 function money(v: any) { const n = Number(v || 0); return `৳${n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`; }
 
@@ -68,16 +68,27 @@ export default function AdjustBillPage() {
 
   return (
     <div className="space-y-5 max-w-4xl">
-      <div className="page-header flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
+          <span className="page-eyebrow">Revenue operations · Bill adjustments</span>
           <h1 className="page-title">Adjust Bill</h1>
           <p className="page-subtitle">Record bill adjustments/corrections against invoices (posted as finance adjustment transactions).</p>
         </div>
-        <div className="page-actions flex gap-2">
+        <div className="page-actions">
           <button onClick={load} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
           <Link href="/billing?view=invoices" className="btn btn-outline">Back to Billing</Link>
         </div>
       </div>
+
+      <div className="page-tabbar">
+        <Link href="/billing" className="page-tab">Overview</Link>
+        <Link href="/billing/invoices" className="page-tab">Invoices</Link>
+        <Link href="/billing/collections" className="page-tab">Collections</Link>
+        <Link href="/billing/adjust-bill" className="page-tab active">Adjust Bill</Link>
+        <Link href="/billing/waivers" className="page-tab">Waivers</Link>
+        <Link href="/finance" className="page-tab">Finance</Link>
+      </div>
+
       {err && <div className="alert alert-danger">{err}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
 
@@ -99,7 +110,7 @@ export default function AdjustBillPage() {
             <textarea className="form-control w-full min-h-[90px]" placeholder="Reason / narration (e.g. discount, correction, late-fee reversal)" value={form.description} onChange={e=>setForm({...form,description:e.target.value})} />
           </div>
           <button onClick={submit} disabled={!canManage || !form.invoice_id || !Number(form.amount)} className="btn btn-primary w-full">Record Adjustment Transaction</button>
-          {!canManage && <div className="text-xs text-amber-400">You need billing/admin permissions to record adjustments.</div>}
+          {!canManage && <div className="alert alert-warning text-xs">You need billing/admin permissions to record adjustments.</div>}
           <div className="text-xs text-muted-foreground">This records a finance adjustment entry linked to the invoice reference for audit/accounting. Dedicated invoice line-item credit/debit-note recalculation UI may require additional backend workflow support.</div>
         </div>
 
@@ -110,10 +121,16 @@ export default function AdjustBillPage() {
               <button key={i.id} onClick={()=>setForm(f=>({...f, invoice_id:i.id, amount:String(i.due_amount||i.total_amount||'')}))} className={`w-full text-left p-3 rounded-xl border transition-colors ${form.invoice_id===i.id?'border-primary bg-primary/5':'border-border hover:bg-muted/30'}`}>
                 <div className="flex items-center justify-between gap-2"><span className="font-semibold text-sm">{i.invoice_number}</span><span className="badge badge-secondary">{i.status}</span></div>
                 <div className="text-xs text-muted-foreground mt-1">{i.subscriber_name || '-'} {i.client_code ? `• ${i.client_code}` : ''}</div>
-                <div className="text-xs mt-1">Due <span className="text-amber-400 font-semibold">{money(i.due_amount)}</span> / {money(i.total_amount)}</div>
+                <div className="text-xs mt-1 tabular-nums">Due <span className="text-warning font-semibold">{money(i.due_amount)}</span> / {money(i.total_amount)}</div>
               </button>
             ))}
-            {!invoices.length && <div className="text-sm text-muted-foreground py-8 text-center">{loading ? 'Loading...' : 'No unpaid/due invoices found.'}</div>}
+            {!invoices.length && <div className="p-4"><div className="empty-panel">
+              <span className="empty-panel-icon"><Receipt className="w-5 h-5"/></span>
+              <div>
+                <div className="text-sm font-semibold">{loading ? 'Loading invoices…' : 'No due invoices'}</div>
+                <p className="text-[11px] text-muted-foreground mt-1">There are no unpaid or partially paid invoices needing an adjustment right now.</p>
+              </div>
+            </div></div>}
           </div>
           <div className="mt-3 text-xs text-muted-foreground">Need to manage invoice state? Use <Link href="/billing?status=unpaid" className="text-primary underline">Unpaid Bills</Link> or <Link href="/finance" className="text-primary underline">Finance & Accounts</Link>.</div>
         </div>

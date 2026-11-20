@@ -75,8 +75,8 @@ export default function AiSettingsPage() {
   if (!isAdmin) {
     return (
       <div className="space-y-5">
-        <div className="page-header">
-          <div><h1 className="page-title">AI Copilot Settings</h1><p className="page-subtitle">Engine, provider keys and rate limits.</p></div>
+        <div className="page-header items-start">
+          <div><span className="page-eyebrow">Intelligence · Copilot configuration</span><h1 className="page-title">AI Copilot Settings</h1><p className="page-subtitle">Engine, provider keys and rate limits.</p></div>
         </div>
         <div className="alert alert-warning">Only a Super Admin can view or change AI Copilot settings.</div>
         <Link className="btn btn-outline inline-flex items-center gap-2" href="/ai-assistant"><Sparkles className="w-4 h-4" /> Open AI Copilot</Link>
@@ -86,10 +86,11 @@ export default function AiSettingsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="page-header">
+      <div className="page-header items-start">
         <div className="flex items-center gap-3">
           <div className="page-title-icon"><Sparkles className="w-6 h-6" /></div>
           <div>
+            <span className="page-eyebrow">Intelligence · Copilot configuration</span>
             <h1 className="page-title">AI Copilot Settings</h1>
             <p className="page-subtitle">Choose the engine, add provider keys and control cost and privacy.</p>
           </div>
@@ -128,14 +129,14 @@ export default function AiSettingsPage() {
                   {testBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Gauge className="w-3 h-3" />} Test connection
                 </button>
                 {testRes?.message && (
-                  <span className={`text-xs ${testRes.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-danger'}`}>{testRes.message}</span>
+                  <span className={`text-xs ${testRes.ok ? 'text-success' : 'text-danger'}`}>{testRes.message}</span>
                 )}
               </div>
               <label className="form-check">
                 <input type="checkbox" checked={!!form['ai.allow_external']} onChange={(e) => set('ai.allow_external', e.target.checked)} />
                 <span>Allow external AI providers</span>
               </label>
-              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs">
+              <div className="alert alert-warning text-xs">
                 <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>Off by default. When on, free-form questions send <b>aggregate, role-filtered metrics only</b> — never subscriber names, phones, passwords or secrets.</span>
               </div>

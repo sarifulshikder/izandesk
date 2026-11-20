@@ -20,7 +20,10 @@ export const parityTabs = [
 export type ParityTab = typeof parityTabs[number]['key'];
 
 function Stat({ label, value, tone = '' }: { label: string; value: any; tone?: string }) {
-  return <div className={`card p-3 ${tone}`}><div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div><div className="text-lg font-bold mt-1">{value}</div></div>;
+  return <div className={`px-3 py-2.5 rounded-[10px] border border-border bg-card shadow-xs ${tone}`}>
+    <div className="text-[9px] font-bold uppercase tracking-[0.1em] text-muted-foreground">{label}</div>
+    <div className="text-[15px] font-bold tabular-nums mt-1 truncate">{value}</div>
+  </div>;
 }
 
 function DateRange({ from, to, setFrom, setTo }: { from: string; to: string; setFrom: (v: string) => void; setTo: (v: string) => void }) {

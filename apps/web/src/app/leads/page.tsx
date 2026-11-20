@@ -214,12 +214,13 @@ export default function LeadsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
+          <span className="page-eyebrow">Client operations · Lead pipeline</span>
           <h1 className="page-title">Leads Pipeline</h1>
           <p className="page-subtitle">Track prospects from inquiry to subscriber — {total} total</p>
         </div>
-        <div className="page-actions flex gap-2">
+        <div className="page-actions">
           <button onClick={load} className="btn btn-outline">Refresh</button>
           <button onClick={openCreate} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Lead</button>
         </div>
@@ -228,26 +229,27 @@ export default function LeadsPage() {
       {error && <div className="alert alert-danger">{error}</div>}
 
       {summary && (
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
-          <div className="card p-4"><div className="text-xs text-muted-foreground">Total</div><div className="text-xl font-black mt-1">{summary.total}</div></div>
-          <div className="card p-4 border-emerald-500/20 bg-emerald-500/5"><div className="text-xs text-emerald-300/80">Won</div><div className="text-xl font-black mt-1 text-emerald-400">{summary.won}</div></div>
-          <div className="card p-4 border-red-500/20 bg-red-500/5"><div className="text-xs text-red-300/80">Lost</div><div className="text-xl font-black mt-1 text-red-400">{summary.lost}</div></div>
-          <div className="card p-4 border-blue-500/20 bg-blue-500/5"><div className="text-xs text-blue-300/80">This Month</div><div className="text-xl font-black mt-1 text-blue-400">{summary.this_month}</div></div>
-          <div className="card p-4 border-violet-500/20 bg-violet-500/5"><div className="text-xs text-violet-300/80">Conversion</div><div className="text-xl font-black mt-1 text-violet-400">{summary.conversion_rate}%</div></div>
-          <div className="card p-4"><div className="text-xs text-muted-foreground">Pipeline Value</div><div className="text-xl font-black mt-1">—</div></div>
+        <div className="stat-grid">
+          <div className="dash-stat dash-stat-primary"><span className="dash-stat-icon"><User /></span><span className="dash-stat-body"><span className="dash-stat-label">Total Leads</span><span className="dash-stat-value">{summary.total}</span><span className="dash-stat-hint">all records</span></span></div>
+          <div className="dash-stat dash-stat-success"><span className="dash-stat-icon"><CheckCircle2 /></span><span className="dash-stat-body"><span className="dash-stat-label">Won</span><span className="dash-stat-value">{summary.won}</span><span className="dash-stat-hint">converted</span></span></div>
+          <div className="dash-stat dash-stat-danger"><span className="dash-stat-icon"><X /></span><span className="dash-stat-body"><span className="dash-stat-label">Lost</span><span className="dash-stat-value">{summary.lost}</span><span className="dash-stat-hint">closed out</span></span></div>
+          <div className="dash-stat dash-stat-info"><span className="dash-stat-icon"><ArrowRight /></span><span className="dash-stat-body"><span className="dash-stat-label">This Month</span><span className="dash-stat-value">{summary.this_month}</span><span className="dash-stat-hint">new leads</span></span></div>
+          <div className="dash-stat dash-stat-purple"><span className="dash-stat-icon"><Filter /></span><span className="dash-stat-body"><span className="dash-stat-label">Conversion</span><span className="dash-stat-value">{summary.conversion_rate}%</span><span className="dash-stat-hint">won / total</span></span></div>
+          <div className="dash-stat dash-stat-teal"><span className="dash-stat-icon"><FunnelIcon /></span><span className="dash-stat-body"><span className="dash-stat-label">Pipeline Value</span><span className="dash-stat-value">—</span><span className="dash-stat-hint">open opportunities</span></span></div>
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-        <div className="md:col-span-2 relative input-icon">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"/>
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name, phone, email, lead no..." className="form-control pl-9"/>
+      <div className="toolbar-strip">
+        <div className="relative input-icon flex-1 min-w-[220px]">
+          <Search className="w-4 h-4"/>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name, phone, email, lead no..." className="form-control"/>
         </div>
-        <select value={status} onChange={e=>setStatus(e.target.value)} className="form-select">
+        <span className="toolbar-divider"/>
+        <select value={status} onChange={e=>setStatus(e.target.value)} className="form-select w-auto">
           <option value="">All Statuses</option>
           {LEAD_STATUSES.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
-        <select value={source} onChange={e=>setSource(e.target.value)} className="form-select">
+        <select value={source} onChange={e=>setSource(e.target.value)} className="form-select w-auto">
           <option value="">All Sources</option>
           {LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
@@ -255,45 +257,45 @@ export default function LeadsPage() {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="xl:col-span-2 card overflow-hidden">
-          <div className="table-wrap">
-            <table className="table table-hover">
-              <thead className="bg-muted/40 text-muted-foreground text-xs uppercase">
+          <div className="table-wrap overflow-auto">
+            <table className="table table-hover min-w-[720px]">
+              <thead className="sticky top-0 z-10">
                 <tr>
-                  <th className="text-left px-4 py-3">Lead</th>
-                  <th className="text-left px-4 py-3">Contact</th>
-                  <th className="text-left px-4 py-3">Interest</th>
-                  <th className="text-left px-4 py-3">Source</th>
-                  <th className="text-left px-4 py-3">Status / Priority</th>
-                  <th className="text-right px-4 py-3">Actions</th>
+                  <th className="text-left px-3 py-2.5">Lead</th>
+                  <th className="text-left px-3 py-2.5">Contact</th>
+                  <th className="text-left px-3 py-2.5">Interest</th>
+                  <th className="text-left px-3 py-2.5">Source</th>
+                  <th className="text-left px-3 py-2.5">Status / Priority</th>
+                  <th className="text-right px-3 py-2.5">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {loading ? <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Loading leads...</td></tr> :
-                 rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No leads found. Add one with the wizard.</td></tr> :
+                {loading ? <tr><td colSpan={6} className="px-3 py-10 text-center text-muted-foreground text-[11px]">Loading leads...</td></tr> :
+                 rows.length === 0 ? <tr><td colSpan={6} className="px-3 py-10 text-center text-muted-foreground text-[11px]">No leads found. Use “Add Lead” to create one.</td></tr> :
                  rows.map(r => (
                   <tr key={r.id} className="border-t border-border/70 hover:bg-muted/30 cursor-pointer" onClick={()=>openDetail(r.id)}>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <div className="font-semibold text-foreground">{r.full_name}</div>
                       <div className="text-xs text-primary font-mono">{r.lead_no}</div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <div className="text-xs">{r.phone || '-'}</div>
                       <div className="text-xs text-muted-foreground">{r.email || '-'}</div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <div className="text-xs">{r.interested_package || '-'}</div>
                       <div className="text-xs text-muted-foreground">{[r.area_name, r.village, r.thana || r.upazila].filter(Boolean).join(', ') || '-'}</div>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <span className="badge badge-secondary">{r.source || 'OTHER'}</span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5 text-[11px]">
                       <div className="flex flex-col gap-1">
                         <span className={`badge ${statusBadge(r.status)}`}>{r.status}</span>
                         <span className={`badge ${priorityBadge(r.priority)}`}>{r.priority}</span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right" onClick={e=>e.stopPropagation()}>
+                    <td className="px-3 py-2.5 text-right" onClick={e=>e.stopPropagation()}>
                       {r.status !== 'WON' && r.status !== 'LOST' && (
                         <button onClick={()=>convertLead(r.id)} className="btn btn-ghost btn-icon btn-sm text-success" title="Convert to Subscriber"><ArrowRight className="w-4 h-4"/></button>
                       )}
@@ -309,7 +311,14 @@ export default function LeadsPage() {
 
         <div className="card p-4 space-y-4">
           {!detail ? (
-            <div className="empty-state border border-dashed border-border">Select a lead to view details, activities, and convert to subscriber.</div>
+            <div className="empty-panel">
+              <span className="empty-panel-icon"><User className="w-5 h-5" /></span>
+              <div>
+                <div className="text-sm font-semibold text-foreground">No lead selected</div>
+                <p className="text-[11px] text-muted-foreground mt-1 max-w-[270px] leading-relaxed">Open a lead to review contact details, log activities and convert it to a subscriber.</p>
+              </div>
+              <button onClick={openCreate} className="btn btn-primary btn-sm"><Plus className="w-3.5 h-3.5"/>Add lead</button>
+            </div>
           ) : (
             <>
               <div className="flex items-start justify-between gap-2">
@@ -378,7 +387,7 @@ export default function LeadsPage() {
                 <h2 className="font-bold text-lg">{editing ? 'Edit Lead' : 'Add Lead'} — Wizard</h2>
                 <p className="text-xs text-muted-foreground">Step {step} of 3: {steps[step-1].title} — {steps[step-1].desc}</p>
               </div>
-              <button onClick={()=>setShowForm(false)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button>
+              <button onClick={()=>setShowForm(false)} className="btn btn-ghost btn-icon"><X className="w-4 h-4"/></button>
             </div>
 
             <div className="px-4 sm:px-5 pt-4">
@@ -412,14 +421,14 @@ export default function LeadsPage() {
                     <div className="space-y-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="font-semibold text-sm flex items-center gap-2"><MapPin className="w-4 h-4 text-primary"/>Map Pin Picker</div>
-                        <button type="button" onClick={pickCurrentLocation} className="px-3 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold inline-flex items-center gap-1.5">Pick My Current Location</button>
+                        <button type="button" onClick={pickCurrentLocation} className="btn btn-outline btn-sm">Pick My Current Location</button>
                       </div>
                       <LocationPicker lat={form.latitude === '' ? null : Number(form.latitude)} lng={form.longitude === '' ? null : Number(form.longitude)} onChange={onPickLocation} />
                       <div className="grid grid-cols-2 gap-2">
                         <Input label="Latitude" value={form.latitude??''} onChange={v=>setForm({...form, latitude:v})} />
                         <Input label="Longitude" value={form.longitude??''} onChange={v=>setForm({...form, longitude:v})} />
                       </div>
-                      {geoMsg && <div className={`text-xs px-3 py-2 rounded-lg border ${geoLoading?'border-primary/30 bg-primary/10 text-primary':'border-border bg-muted/30 text-foreground/80'}`}>{geoMsg}</div>}
+                      {geoMsg && <div className="alert alert-primary">{geoMsg}</div>}
                     </div>
 
                     <div className="space-y-3">
@@ -464,15 +473,15 @@ export default function LeadsPage() {
                       ['ISP Area', areas.find(a=>a.id===form.area_id)?.name || '-'], ['Zone', zones.find(z=>z.id===form.zone_id)?.name || '-']
                     ]} />
                   </div>
-                  <div className="text-xs text-muted-foreground p-3 rounded-xl border border-border bg-muted/20">Review all details. Lead number will be generated automatically. You can convert to subscriber later from the detail panel.</div>
+                  <div className="alert alert-primary">Review all details. Lead number will be generated automatically. You can convert to subscriber later from the detail panel.</div>
                 </div>
               )}
             </div>
 
             <div className="px-4 sm:px-5 py-4 border-t border-border flex flex-col sm:flex-row justify-between gap-2">
-              <button onClick={()=>setShowForm(false)} className="px-4 py-2 rounded-xl border border-border">Cancel</button>
+              <button onClick={()=>setShowForm(false)} className="btn btn-outline">Cancel</button>
               <div className="flex gap-2 justify-end">
-                <button onClick={prevStep} disabled={step===1} className="px-4 py-2 rounded-xl border border-border disabled:opacity-50 inline-flex items-center gap-1"><ChevronLeft className="w-4 h-4"/>Back</button>
+                <button onClick={prevStep} disabled={step===1} className="btn btn-outline"><ChevronLeft className="w-4 h-4"/>Back</button>
                 {step < 3 ? (
                   <button onClick={nextStep} className="btn btn-primary">Next<ChevronRight className="w-4 h-4"/></button>
                 ) : (
@@ -491,13 +500,13 @@ function Info({ label, value }: { label: string; value: any }) {
   return <div><div className="text-muted-foreground">{label}</div><div className="font-medium text-foreground break-words">{value}</div></div>;
 }
 function ReviewCard({ title, items }: { title: string; items: [string, any][] }) {
-  return <div className="p-4 rounded-xl border border-border bg-muted/20"><div className="font-semibold mb-2 text-sm">{title}</div><div className="space-y-1.5 text-xs">{items.map(([k,v]) => <div key={k} className="flex justify-between gap-3"><span className="text-muted-foreground">{k}</span><span className="text-foreground font-medium text-right break-words">{String(v ?? '-')}</span></div>)}</div></div>;
+  return <div className="card card-body-sm"><div className="card-title mb-2">{title}</div><div className="space-y-1.5 text-xs">{items.map(([k,v]) => <div key={k} className="flex justify-between gap-3"><span className="text-muted-foreground">{k}</span><span className="text-foreground font-medium text-right break-words">{String(v ?? '-')}</span></div>)}</div></div>;
 }
 function Input({ label, value, onChange, type='text', placeholder='' }: { label: string; value: any; onChange: (v: string) => void; type?: string; placeholder?: string }) {
   return (
     <label className="block">
       <div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>
-      <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50" />
+      <input type={type} value={value} placeholder={placeholder} onChange={e=>onChange(e.target.value)} className="form-control" />
     </label>
   );
 }
@@ -506,7 +515,7 @@ function Select({ label, value, onChange, options }: { label: string; value: any
   return (
     <label className="block">
       <div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>
-      <select value={value} onChange={e=>onChange(e.target.value)} className="w-full px-3 py-2 rounded-xl bg-card border border-border text-sm text-foreground outline-none focus:border-primary/50">
+      <select value={value} onChange={e=>onChange(e.target.value)} className="form-select">
         {opts.map((o: any) => <option key={o.v} value={o.v}>{o.l}</option>)}
       </select>
     </label>

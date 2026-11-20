@@ -1,8 +1,10 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-export default function PaidAlias() {
+import { RedirectShell } from '@/components/layout/redirect-shell';
+
+export default function BillingPaidAliasPage() {
   const router = useRouter();
-  useEffect(()=>{ router.replace('/billing?status=paid'); },[router]);
-  return <div className="p-6 text-sm text-muted-foreground">Redirecting to Paid Bills...</div>;
+  useEffect(()=>{ router.replace("/billing?status=paid"); },[router]);
+  return <RedirectShell label="Paid Bills" href="/billing?status=paid" />;
 }

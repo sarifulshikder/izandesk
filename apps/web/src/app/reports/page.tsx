@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
-import { RefreshCw, BarChart3, Download } from 'lucide-react';
+import { RefreshCw, BarChart3, Download, Users, Wallet, CreditCard, Ticket, Store } from 'lucide-react';
 
 function money(v: any) { const n = Number(v || 0); return `৳${n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`; }
 
@@ -61,29 +61,37 @@ export default function ReportsPage() {
   const ov = overview || {};
   return (
     <div className="space-y-5">
-      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-        <div><h1 className="page-title"><BarChart3 className="w-6 h-6 text-primary"/>Reports & Analytics</h1><p className="text-sm text-muted-foreground">Operational/financial reports, exports, and report schedules (Phase 7).</p></div>
-        <div className="page-actions flex flex-wrap gap-2">
-          <button onClick={()=>dlCsv('/api/reports/collections','collections.csv')} className="btn btn-outline"><Download className="w-4 h-4"/>Collections CSV</button>
-          <button onClick={()=>dlCsv('/api/reports/dues-aging','dues-aging.csv')} className="btn btn-outline"><Download className="w-4 h-4"/>Aging CSV</button>
-          <button onClick={()=>dlCsv('/api/reports/profit-loss','profit-loss.csv')} className="btn btn-outline"><Download className="w-4 h-4"/>P&L CSV</button>
-          <button onClick={()=>exportJson('reports-overview', overview)} className="btn btn-outline"><Download className="w-4 h-4"/>JSON</button>
+      <div className="page-header items-start">
+        <div>
+          <span className="page-eyebrow">Business intelligence · Reporting</span>
+          <h1 className="page-title"><BarChart3 className="w-6 h-6 text-primary"/>Reports &amp; Analytics</h1>
+          <p className="page-subtitle">Operational and financial reports, exports and scheduled delivery.</p>
+        </div>
+        <div className="page-actions">
           <button onClick={load} className="btn btn-outline"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`}/>Refresh</button>
+          <button onClick={()=>dlCsv('/api/reports/collections','collections.csv')} className="btn btn-outline"><Download className="w-4 h-4"/>Collections</button>
+          <button onClick={()=>dlCsv('/api/reports/dues-aging','dues-aging.csv')} className="btn btn-outline"><Download className="w-4 h-4"/>Aging</button>
+          <button onClick={()=>dlCsv('/api/reports/profit-loss','profit-loss.csv')} className="btn btn-outline"><Download className="w-4 h-4"/>P&amp;L</button>
+          <button onClick={()=>exportJson('reports-overview', overview)} className="btn btn-outline btn-icon" title="Export overview as JSON"><Download className="w-4 h-4"/></button>
         </div>
       </div>
       {err && <div className="alert alert-danger">{err}</div>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
-        <Kpi label="Subscribers" value={ov.subscribers?.total||0} sub={`${ov.subscribers?.active||0} active`} />
-        <Kpi label="Outstanding" value={money(ov.invoices?.outstanding||0)} sub={`${ov.invoices?.due_count||0} due invoices`} />
-        <Kpi label="Today's Collection" value={money(ov.collections?.today||0)} sub={`Month ${money(ov.collections?.month||0)}`} />
-        <Kpi label="Open Tickets" value={ov.tickets?.open||0} sub={`${ov.tickets?.breached||0} SLA breached`} />
-        <Kpi label="Resellers" value={ov.resellers?.total||0} sub={`Wallet ${money(ov.resellers?.wallet_total||0)}`} />
+      <div className="stat-grid-5">
+        <Kpi label="Subscribers" value={ov.subscribers?.total||0} sub={`${ov.subscribers?.active||0} active`} tone="primary" icon={Users} />
+        <Kpi label="Outstanding" value={money(ov.invoices?.outstanding||0)} sub={`${ov.invoices?.due_count||0} due invoices`} tone="warning" icon={Wallet} />
+        <Kpi label="Today's Collection" value={money(ov.collections?.today||0)} sub={`Month ${money(ov.collections?.month||0)}`} tone="success" icon={CreditCard} />
+        <Kpi label="Open Tickets" value={ov.tickets?.open||0} sub={`${ov.tickets?.breached||0} SLA breached`} tone="danger" icon={Ticket} />
+        <Kpi label="Resellers" value={ov.resellers?.total||0} sub={`Wallet ${money(ov.resellers?.wallet_total||0)}`} tone="purple" icon={Store} />
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
         <Panel title={`Profit & Loss (Net ${money(pnl?.net||0)})`}>
-          <div className="grid grid-cols-3 gap-3 mb-3 text-sm"><div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20"><div className="text-xs text-muted-foreground">Income</div><div className="font-bold">{money(pnl?.income||0)}</div></div><div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20"><div className="text-xs text-muted-foreground">Expense</div><div className="font-bold">{money(pnl?.expense||0)}</div></div><div className="p-3 rounded-xl bg-primary/10 border border-primary/20"><div className="text-xs text-muted-foreground">Net</div><div className="font-bold">{money(pnl?.net||0)}</div></div></div>
+          <div className="grid grid-cols-3 gap-2.5 mb-3">
+            <div className="px-3 py-2.5 rounded-lg bg-success/10 border border-success/15"><div className="text-[9px] font-bold uppercase tracking-[0.1em] text-success">Income</div><div className="font-bold text-[13px] tabular-nums mt-1">{money(pnl?.income||0)}</div></div>
+            <div className="px-3 py-2.5 rounded-lg bg-danger/10 border border-danger/15"><div className="text-[9px] font-bold uppercase tracking-[0.1em] text-danger">Expense</div><div className="font-bold text-[13px] tabular-nums mt-1">{money(pnl?.expense||0)}</div></div>
+            <div className="px-3 py-2.5 rounded-lg bg-primary/10 border border-primary/15"><div className="text-[9px] font-bold uppercase tracking-[0.1em] text-primary">Net</div><div className="font-bold text-[13px] tabular-nums mt-1">{money(pnl?.net||0)}</div></div>
+          </div>
           <Table cols={['Type','Method','Count','Total']} rows={(pnl?.breakdown||[]).map((r:any)=>[r.txn_type,r.method,r.count,money(r.total)])} empty="No finance data." />
         </Panel>
         <Panel title="Dues Aging" id="dues-aging">
@@ -122,7 +130,7 @@ export default function ReportsPage() {
   );
 }
 
-function Kpi({label,value,sub}:any){ return <div className="card p-4"><div className="text-xs text-muted-foreground mb-1">{label}</div><div className="text-xl font-black">{value}</div>{sub && <div className="text-[11px] text-muted-foreground mt-1">{sub}</div>}</div>; }
+function Kpi({label,value,sub,tone='primary',icon:Icon}:any){ return <div className={`dash-stat dash-stat-${tone}`}><span className="dash-stat-icon"><Icon /></span><span className="dash-stat-body"><span className="dash-stat-label">{label}</span><span className="dash-stat-value">{value}</span>{sub && <span className="dash-stat-hint">{sub}</span>}</span></div>; }
 function Bucket({label,count,amount}:any){ return <div className="card card-body-sm"><div className="text-xs text-muted-foreground">{label}</div><div className="text-lg font-bold">{count}</div><div className="text-xs text-muted-foreground">{money(amount)}</div></div>; }
 function Panel({title,children,id}:any){ return <div id={id} className="card p-4 scroll-mt-24"><h2 className="card-title mb-3">{title}</h2><div className="table-wrap overflow-auto max-h-[300px]">{children}</div></div>; }
 function Table({cols,rows,empty}:any){ return <table className="table table-hover"><thead className="text-muted-foreground uppercase sticky top-0 bg-card"><tr className="border-b border-border">{cols.map((c:string)=><th key={c} className="text-left py-2 px-2">{c}</th>)}</tr></thead><tbody>{(rows||[]).map((r:any,i:number)=>(<tr key={i} className="border-b border-border/50">{r.map((c:any,j:number)=><td key={j} className="py-2 px-2">{c}</td>)}</tr>))}{!(rows||[]).length && <tr><td colSpan={cols.length} className="py-6 text-center text-muted-foreground">{empty||'No data.'}</td></tr>}</tbody></table>; }

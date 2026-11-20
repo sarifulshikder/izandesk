@@ -1,8 +1,10 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-export default function AllBillsAlias() {
+import { RedirectShell } from '@/components/layout/redirect-shell';
+
+export default function BillingAllAliasPage() {
   const router = useRouter();
-  useEffect(()=>{ router.replace('/billing?status=all'); },[router]);
-  return <div className="p-6 text-sm text-muted-foreground">Redirecting to All Bills...</div>;
+  useEffect(()=>{ router.replace("/billing?status=all"); },[router]);
+  return <RedirectShell label="All Bills" href="/billing?status=all" />;
 }

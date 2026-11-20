@@ -59,29 +59,33 @@ export default function LiveSubscribersPage() {
 
   return (
     <div className="space-y-5">
-      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
+          <span className="page-eyebrow">Network operations · Live sessions</span>
           <h1 className="page-title">Live Subscribers (Online Sessions)</h1>
           <p className="page-subtitle">Real-time PPPoE/RADIUS subscriber sessions, throughput, router/NAS binding and provisioning mode (auto-refreshing).</p>
         </div>
-        <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
+        <div className="page-actions">
+          <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
+        </div>
       </div>
 
       {error && <div className="alert alert-danger">{error}</div>}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="card p-4 border-emerald-500/20 bg-emerald-500/5"><div className="flex items-center justify-between text-xs text-emerald-300/80"><span>Online Sessions</span><Wifi className="w-4 h-4"/></div><div className="mt-2 text-xl font-black text-emerald-400">{summary.online || 0}</div></div>
-        <div className="card p-4"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>Total Tracked</span><Activity className="w-4 h-4"/></div><div className="mt-2 text-xl font-black">{summary.total || sessions.length || 0}</div></div>
-        <div className="card p-4 border-cyan-500/20 bg-cyan-500/5"><div className="flex items-center justify-between text-xs text-cyan-300/80"><span>Aggregate RX</span><ArrowDown className="w-4 h-4"/></div><div className="mt-2 text-xl font-black text-cyan-400">{fmtBps(Number(summary.aggRxBps || 0))}</div></div>
-        <div className="card p-4 border-indigo-500/20 bg-indigo-500/5"><div className="flex items-center justify-between text-xs text-indigo-300/80"><span>Aggregate TX</span><ArrowUp className="w-4 h-4"/></div><div className="mt-2 text-xl font-black text-indigo-400">{fmtBps(Number(summary.aggTxBps || 0))}</div></div>
+      <div className="stat-grid">
+        <div className="dash-stat dash-stat-success"><span className="dash-stat-icon"><Wifi className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">Online Sessions</span><span className="dash-stat-value">{summary.online || 0}</span><span className="dash-stat-hint">active PPPoE sessions</span></span></div>
+        <div className="dash-stat dash-stat-primary"><span className="dash-stat-icon"><Activity className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">Total Tracked</span><span className="dash-stat-value">{summary.total || sessions.length || 0}</span><span className="dash-stat-hint">in current view</span></span></div>
+        <div className="dash-stat dash-stat-info"><span className="dash-stat-icon"><ArrowDown className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">Aggregate RX</span><span className="dash-stat-value">{fmtBps(Number(summary.aggRxBps || 0))}</span><span className="dash-stat-hint">downstream throughput</span></span></div>
+        <div className="dash-stat dash-stat-indigo"><span className="dash-stat-icon"><ArrowUp className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">Aggregate TX</span><span className="dash-stat-value">{fmtBps(Number(summary.aggTxBps || 0))}</span><span className="dash-stat-hint">upstream throughput</span></span></div>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-3">
-        <div className="relative flex-1 input-icon">
+      <div className="toolbar-strip">
+        <div className="relative flex-1 min-w-[220px] input-icon">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input className="form-control pl-9" placeholder="Search username, name, client code, router, IP..." value={q} onChange={e=>setQ(e.target.value)} />
         </div>
-        <select className="form-select" value={status} onChange={e=>setStatus(e.target.value)}>
+        <span className="toolbar-divider"/>
+        <select className="form-select !w-[150px]" value={status} onChange={e=>setStatus(e.target.value)}>
           <option value="">All statuses</option>
           <option value="ONLINE">ONLINE</option>
           <option value="OFFLINE">OFFLINE</option>
@@ -90,31 +94,31 @@ export default function LiveSubscribersPage() {
 
       <div className="card overflow-hidden">
         <div className="card-header text-xs text-muted-foreground">Live data source: <code className="font-mono">/api/network/sessions</code> (polling). SSE: <code className="font-mono">/api/network/sessions/stream</code>, WS: <code className="font-mono">/api/network/sessions/ws</code>.</div>
-        <div className="table-wrap">
-          <table className="table table-hover">
-            <thead className="bg-muted/40 text-xs uppercase text-muted-foreground sticky top-0"><tr><th className="text-left px-4 py-3">Subscriber</th><th className="text-left px-4 py-3">Router / NAS</th><th className="text-left px-4 py-3">Session / IP</th><th className="text-left px-4 py-3">Throughput</th><th className="text-left px-4 py-3">Status</th></tr></thead>
+        <div className="table-wrap overflow-auto">
+          <table className="table table-hover min-w-[720px]">
+            <thead className="sticky top-0 z-10"><tr><th className="text-left px-3 py-2.5">Subscriber</th><th className="text-left px-3 py-2.5">Router / NAS</th><th className="text-left px-3 py-2.5">Session / IP</th><th className="text-left px-3 py-2.5">Throughput</th><th className="text-left px-3 py-2.5">Status</th></tr></thead>
             <tbody>
               {filtered.map((s: AnyObj, i: number) => (
                 <tr key={s.id || s.username || i} className="border-t border-border/70 hover:bg-muted/20">
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-2.5 text-[11px]">
                     {s.subscriber_id ? (
                       <Link href={`/subscribers/${s.subscriber_id}/live`} className="block group">
-                        <div className="font-semibold text-foreground group-hover:text-primary group-hover:underline underline-offset-2">{s.full_name || s.username || '-'}</div>
-                        <div className="text-xs text-muted-foreground font-mono">{s.username || ''} {s.client_code ? `• ${s.client_code}` : ''}</div>
+                        <div className="font-semibold text-foreground group-hover:text-primary group-hover:underline underline-offset-2 truncate max-w-[210px]" title={s.full_name || s.username || ''}>{s.full_name || s.username || '-'}</div>
+                        <div className="text-[10px] text-muted-foreground font-mono truncate max-w-[210px]">{s.username || ''} {s.client_code ? `• ${s.client_code}` : ''}</div>
                         <div className="text-[10px] text-primary/80 mt-0.5">Open live dashboard →</div>
                       </Link>
                     ) : (
                       <>
-                        <div className="font-semibold">{s.full_name || s.username || '-'}</div>
-                        <div className="text-xs text-muted-foreground font-mono">{s.username || ''} {s.client_code ? `• ${s.client_code}` : ''}</div>
+                        <div className="font-semibold truncate max-w-[210px]" title={s.full_name || s.username || ''}>{s.full_name || s.username || '-'}</div>
+                        <div className="text-[10px] text-muted-foreground font-mono truncate max-w-[210px]">{s.username || ''} {s.client_code ? `• ${s.client_code}` : ''}</div>
                         <div className="text-[10px] text-muted-foreground mt-0.5">{s.provisioning_mode || ''}</div>
                       </>
                     )}
                   </td>
-                  <td className="px-4 py-3"><div className="flex items-center gap-2"><Router className="w-3.5 h-3.5 text-muted-foreground"/><span>{s.router_name || '-'}</span></div><div className="text-xs text-muted-foreground">{s.integration_mode || ''}</div></td>
-                  <td className="px-4 py-3 text-xs"><div className="font-mono">{s.ip_address || '-'}</div><div className="text-muted-foreground">Uptime: {s.uptime || fmtUptime(s.uptime_sec)}</div></td>
-                  <td className="px-4 py-3 text-xs"><div className="text-cyan-400">↓ RX {fmtBps(Number(s.rx_bps || 0))}</div><div className="text-indigo-400">↑ TX {fmtBps(Number(s.tx_bps || 0))}</div></td>
-                  <td className="px-4 py-3"><span className={`badge ${String(s.status).toUpperCase()==='ONLINE' ? 'badge-success' : 'badge-secondary'}`}>{s.status || 'UNKNOWN'}</span></td>
+                  <td className="px-3 py-2.5 text-[11px]"><div className="flex items-center gap-2"><Router className="w-3.5 h-3.5 text-muted-foreground"/><span className="truncate max-w-[130px]">{s.router_name || '-'}</span></div><div className="text-[10px] text-muted-foreground">{s.integration_mode || ''}</div></td>
+                  <td className="px-3 py-2.5 text-[11px] tabular-nums"><div className="font-mono">{s.ip_address || '-'}</div><div className="text-[10px] text-muted-foreground">Uptime: {s.uptime || fmtUptime(s.uptime_sec)}</div></td>
+                  <td className="px-3 py-2.5 text-[11px] tabular-nums whitespace-nowrap"><div className="text-info">↓ RX {fmtBps(Number(s.rx_bps || 0))}</div><div className="text-indigo">↑ TX {fmtBps(Number(s.tx_bps || 0))}</div></td>
+                  <td className="px-3 py-2.5"><span className={`badge ${String(s.status).toUpperCase()==='ONLINE' ? 'badge-success' : 'badge-secondary'}`}>{s.status || 'UNKNOWN'}</span></td>
                 </tr>
               ))}
               {!filtered.length && <tr><td colSpan={5} className="px-4 py-10 text-center text-muted-foreground">{loading ? 'Loading live sessions...' : 'No live sessions found for current filter.'}</td></tr>}

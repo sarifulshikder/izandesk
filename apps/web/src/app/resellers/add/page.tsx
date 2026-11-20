@@ -51,19 +51,27 @@ export default function AddResellerPage() {
 
   return (
     <div className="space-y-5 max-w-3xl">
-      <div className="page-header flex items-center gap-3">
-        <Link href="/resellers" className="btn btn-outline btn-icon"><ArrowLeft className="w-4 h-4" /></Link>
-        <div>
-          <h1 className="page-title">Add Reseller</h1>
-          <p className="text-sm text-muted-foreground">Create a new reseller. After creation you will be redirected to the reseller's page.</p>
+      <div className="page-header items-start">
+        <div className="flex items-start gap-3">
+          <Link href="/resellers" className="btn btn-outline btn-icon mt-0.5"><ArrowLeft className="w-4 h-4" /></Link>
+          <div>
+            <span className="page-eyebrow">Partner network · Onboarding</span>
+            <h1 className="page-title">Add Reseller</h1>
+            <p className="page-subtitle">Create a new reseller. You&apos;ll be taken to their workspace once created.</p>
+          </div>
         </div>
       </div>
 
       {err && <div className="alert alert-danger">{err}</div>}
       {msg && <div className="alert alert-success">{msg}</div>}
 
-      <div className="card p-4 space-y-4">
-        <h2 className="font-bold flex items-center gap-2"><Building2 className="w-4 h-4 text-primary" />Reseller Details</h2>
+      <div className="card overflow-hidden">
+        <div className="px-4 py-3 border-b border-border bg-card-cap/60 flex items-center gap-2">
+          <Building2 className="w-4 h-4 text-primary" />
+          <h2 className="text-[13px] font-bold">Reseller Details</h2>
+          <span className="badge badge-secondary ml-auto">New</span>
+        </div>
+        <div className="p-4 space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
             ['Name *', 'name'], ['Company', 'company_name'], ['Email', 'email'], ['Phone', 'phone'],
@@ -91,9 +99,10 @@ export default function AddResellerPage() {
             <input className="form-control" type="number" value={form.wallet_balance} onChange={e => setForm((v: any) => ({ ...v, wallet_balance: e.target.value }))} />
           </label>
         </div>
-        <div className="flex gap-3 pt-2">
-          <button onClick={create} disabled={saving} className="btn btn-primary"><Plus className="w-4 h-4" />{saving ? 'Creating...' : 'Create Reseller'}</button>
+        <div className="flex gap-3 pt-2 border-t border-border">
+          <button onClick={create} disabled={saving} className="btn btn-primary"><Plus className="w-4 h-4" />{saving ? 'Creating…' : 'Create Reseller'}</button>
           <Link href="/resellers" className="btn btn-outline">Cancel</Link>
+        </div>
         </div>
       </div>
     </div>

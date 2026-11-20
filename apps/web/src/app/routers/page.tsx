@@ -6,7 +6,8 @@ import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import { RefreshCw, Plus, Pencil, Trash2, Server, Wifi, Cpu, HardDrive, ArrowDown, ArrowUp, Play, X, ShieldCheck, Link2, Globe, Download, ExternalLink, Network } from 'lucide-react';
 
-const modeBadge = (m: string) => m === 'RADIUS' ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' : m === 'REST' ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' : 'bg-blue-500/10 text-blue-400 border-blue-500/20';
+const modeBadge = (m: string) => m === 'RADIUS' ? 'badge badge-purple' : m === 'REST' ? 'badge badge-teal' : 'badge badge-info';
+const statusBadge = (s: string) => String(s || '').toUpperCase() === 'ONLINE' ? 'badge badge-success' : String(s || '').toUpperCase() === 'OFFLINE' ? 'badge badge-danger' : 'badge badge-secondary';
 
 export default function RoutersPage() {
   const { token } = useAuth();
@@ -117,25 +118,26 @@ export default function RoutersPage() {
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
-          <h1 className="page-title"><Network className="w-6 h-6 text-primary" />Network & NAS Overview</h1>
-          <p className="text-sm text-muted-foreground">Manage RouterOS (API/REST) and RADIUS NAS devices. Open each router for a 360° view, sessions, and actions.</p>
+          <span className="page-eyebrow">Network operations · Access layer</span>
+          <h1 className="page-title"><Network className="w-6 h-6 text-primary" />Network &amp; NAS Overview</h1>
+          <p className="page-subtitle">Manage RouterOS (API/REST) and RADIUS NAS devices, sessions and live telemetry.</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <button onClick={load} className="btn btn-outline inline-flex items-center gap-2"><RefreshCw className={`w-4 h-4 ${loading?'animate-spin':''}`} />Refresh</button>
           <button onClick={()=>{setForm({name:'',host:'',integration_mode:'API',api_port:8728,rest_port:443,username:'admin',password:'',router_type:'MIKROTIK',ros_version:'v7',use_ssl:false,site:'',is_enabled:true,radius_secret:'',coa_port:3799,nas_identifier:''}); setModal('new');}} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Router / NAS</button>
         </div>
       </div>
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
-        <Stat label="Routers/NAS Online" value={`${stats.online}/${stats.total}`} icon={Server} accent="text-emerald-400" />
-        <Stat label="API/REST" value={stats.apiRest} icon={Link2} accent="text-blue-400" />
-        <Stat label="RADIUS NAS" value={stats.radius} icon={ShieldCheck} accent="text-violet-400" />
-        <Stat label="Active Sessions" value={summary.online || 0} icon={Wifi} accent="text-cyan-400" />
-        <Stat label="Aggregate RX" value={fmtBps(summary.aggRxBps||0)} icon={ArrowDown} accent="text-blue-400" />
-        <Stat label="Aggregate TX" value={fmtBps(summary.aggTxBps||0)} icon={ArrowUp} accent="text-indigo-400" />
+        <Stat label="Routers/NAS Online" value={`${stats.online}/${stats.total}`} icon={Server} accent="text-success" />
+        <Stat label="API/REST" value={stats.apiRest} icon={Link2} accent="text-info" />
+        <Stat label="RADIUS NAS" value={stats.radius} icon={ShieldCheck} accent="text-purple" />
+        <Stat label="Active Sessions" value={summary.online || 0} icon={Wifi} accent="text-teal" />
+        <Stat label="Aggregate RX" value={fmtBps(summary.aggRxBps||0)} icon={ArrowDown} accent="text-info" />
+        <Stat label="Aggregate TX" value={fmtBps(summary.aggTxBps||0)} icon={ArrowUp} accent="text-indigo" />
       </div>
 
       <div className="card p-4">
@@ -151,8 +153,8 @@ export default function RoutersPage() {
                       <Link href={`/routers/${r.id}`} className="font-semibold hover:text-primary inline-flex items-center gap-1.5 group">
                         {r.name} <ExternalLink className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100" />
                       </Link>
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full border ${modeBadge(m)}`}>{m}</span>
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full border ${r.status==='ONLINE'?'bg-emerald-500/10 text-emerald-400 border-emerald-500/20':r.status==='OFFLINE'?'bg-red-500/10 text-red-400 border-red-500/20':'bg-muted text-muted-foreground border-border'}`}>{r.status}</span>
+                      <span className={modeBadge(m)}>{m}</span>
+                      <span className={statusBadge(r.status)}>{r.status}</span>
                       <span className="text-[10px] text-muted-foreground">{r.router_type} {r.ros_version}</span>
                     </div>
                     <div className="text-xs text-muted-foreground mt-1">
@@ -164,10 +166,10 @@ export default function RoutersPage() {
                   <div className="flex gap-1 shrink-0 flex-wrap justify-end">
                     <Link href={`/routers/${r.id}`} className="p-2 rounded-lg hover:bg-muted" title="Open 360° view"><ExternalLink className="w-4 h-4"/></Link>
                     <button onClick={()=>testConn(r.id)} className="p-2 rounded-lg hover:bg-muted" title="Test connection"><Play className="w-4 h-4"/></button>
-                    {m !== 'RADIUS' && <button onClick={()=>openImport(r)} className="p-2 rounded-lg hover:bg-cyan-500/10 text-cyan-400" title="Import from MikroTik"><Download className="w-4 h-4"/></button>}
-                    {m !== 'RADIUS' && <button onClick={()=>provisionWalledGarden(r)} className="p-2 rounded-lg hover:bg-amber-500/10 text-amber-400" title="Provision walled-garden"><Globe className="w-4 h-4"/></button>}
+                    {m !== 'RADIUS' && <button onClick={()=>openImport(r)} className="p-2 rounded-lg hover:bg-teal/10 text-teal" title="Import from MikroTik"><Download className="w-4 h-4"/></button>}
+                    {m !== 'RADIUS' && <button onClick={()=>provisionWalledGarden(r)} className="p-2 rounded-lg hover:bg-warning/10 text-warning" title="Provision walled-garden"><Globe className="w-4 h-4"/></button>}
                     <button onClick={()=>{setForm({...r, integration_mode: m, radius_secret: r.radius_secret||'', coa_port: r.coa_port||3799, nas_identifier: r.nas_identifier||''}); setModal(r);}} className="p-2 rounded-lg hover:bg-muted" title="Edit"><Pencil className="w-4 h-4"/></button>
-                    <button onClick={()=>del(r.id)} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400" title="Delete"><Trash2 className="w-4 h-4"/></button>
+                    <button onClick={()=>del(r.id)} className="p-2 rounded-lg hover:bg-danger/10 text-danger" title="Delete"><Trash2 className="w-4 h-4"/></button>
                   </div>
                 </div>
                 {m !== 'RADIUS' ? (
@@ -178,7 +180,7 @@ export default function RoutersPage() {
                     <Meter icon={ArrowUp} label="TX" value={fmtBps(Number(r.tx_bps||0))} />
                   </div>
                 ) : (
-                  <div className="mt-3 text-xs p-2 rounded-lg bg-violet-500/5 border border-violet-500/20 text-violet-300 inline-flex items-center gap-2"><ShieldCheck className="w-4 h-4"/>RADIUS NAS • AAA/CoA pool. Open 360° view for details.</div>
+                  <div className="mt-3 text-xs p-2 rounded-lg bg-purple/5 border border-purple/20 text-purple inline-flex items-center gap-2"><ShieldCheck className="w-4 h-4"/>RADIUS NAS • AAA/CoA pool. Open 360° view for details.</div>
                 )}
                 <div className="flex items-center justify-between gap-2 mt-2 text-[11px] text-muted-foreground">
                   <span>Uptime: {formatUptime(Number(r.uptime_seconds||0))} • Last seen: {r.last_seen_at ? new Date(r.last_seen_at).toLocaleTimeString() : '-'}</span>
@@ -203,7 +205,7 @@ export default function RoutersPage() {
           <div className="p-5 space-y-4">
             <div className="flex flex-col md:flex-row gap-3 md:items-end">
               <label className="block flex-1"><div className="text-xs font-semibold text-muted-foreground mb-1">Import Type</div>
-                <select className="inp" value={importType} onChange={e=>{setImportType(e.target.value); setImportItems([]); setImportSelected({}); setImportMsg(null);}}>
+                <select className="form-select" value={importType} onChange={e=>{setImportType(e.target.value); setImportItems([]); setImportSelected({}); setImportMsg(null);}}>
                   <option value="ppp-secrets">PPPoE Users (PPP Secrets → Subscribers)</option>
                   <option value="ppp-profiles">PPPoE Packages (PPP Profiles → Bandwidth Packages)</option>
                   <option value="hotspot-users">Hotspot Users (→ Subscribers, HOTSPOT)</option>
@@ -215,7 +217,7 @@ export default function RoutersPage() {
                 <button onClick={runImport} disabled={importing || !importItems.length} className="btn btn-primary"><Download className="w-4 h-4"/>{importing?'Importing...':'Import Selected'}</button>
               </div>
             </div>
-            {importMsg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{importMsg}</div>}
+            {importMsg && <div className="alert alert-success">{importMsg}</div>}
             <div className="text-xs text-muted-foreground">Fetch items from the router, choose what to import, then import. Existing IzanDesk records are detected and unchecked by default.</div>
 
             <div className="rounded-xl border border-border overflow-hidden">
@@ -239,7 +241,7 @@ export default function RoutersPage() {
                       <tr key={it.name} className="border-b border-border/50 hover:bg-muted/20">
                         <td className="py-2 px-3"><input type="checkbox" checked={!!importSelected[it.name]} onChange={()=>toggleImportItem(it.name)} /></td>
                         <td className="py-2 px-3"><div className="font-mono font-medium text-foreground">{it.name}</div>{it.comment ? <div className="text-muted-foreground truncate max-w-[220px]">{it.comment}</div> : null}</td>
-                        <td className="py-2 px-3">{it.profile || '-'} {it.service ? <span className="text-muted-foreground">({it.service})</span> : null}{it.rate_limit ? <div className="text-cyan-400">{it.rate_limit}</div> : null}</td>
+                        <td className="py-2 px-3">{it.profile || '-'} {it.service ? <span className="text-muted-foreground">({it.service})</span> : null}{it.rate_limit ? <div className="text-teal">{it.rate_limit}</div> : null}</td>
                         <td className="py-2 px-3 text-muted-foreground">
                           {it.remote_address ? <div>remote: {it.remote_address}</div> : null}
                           {it.caller_id || it.mac_address ? <div>mac/caller: {it.caller_id || it.mac_address}</div> : null}
@@ -267,40 +269,42 @@ export default function RoutersPage() {
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto"><div className="w-full max-w-2xl card my-8">
           <div className="flex items-center justify-between px-5 py-4 border-b border-border"><h2 className="font-bold">{modal==='new'?'Add Router / NAS':'Edit Router / NAS'}</h2><button onClick={()=>setModal(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button></div>
           <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
-            <F label="Integration Method"><select className="inp" value={mode} onChange={e=>{const m=e.target.value; setForm({...form,integration_mode:m, api_port: m==='RADIUS'?null:(form.api_port||8728), rest_port: m==='REST'? (form.rest_port||443): (m==='API'? (form.rest_port??null): null)});}}>
+            <F label="Integration Method"><select className="form-select" value={mode} onChange={e=>{const m=e.target.value; setForm({...form,integration_mode:m, api_port: m==='RADIUS'?null:(form.api_port||8728), rest_port: m==='REST'? (form.rest_port||443): (m==='API'? (form.rest_port??null): null)});}}>
               <option value="API">API (RouterOS API - direct per router)</option>
               <option value="REST">REST (RouterOS v7 REST - direct per router)</option>
               <option value="RADIUS">RADIUS (NAS for centralized AAA/CoA pool)</option>
             </select></F>
-            <F label="Name"><input className="inp" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})}/></F>
-            <F label={mode==='RADIUS' ? 'NAS IP / Host' : 'Host / IP'}><input className="inp" value={form.host||''} onChange={e=>setForm({...form,host:e.target.value})}/></F>
-            <F label="Site"><input className="inp" value={form.site||''} onChange={e=>setForm({...form,site:e.target.value})}/></F>
+            <F label="Name"><input className="form-control" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})}/></F>
+            <F label={mode==='RADIUS' ? 'NAS IP / Host' : 'Host / IP'}><input className="form-control" value={form.host||''} onChange={e=>setForm({...form,host:e.target.value})}/></F>
+            <F label="Site"><input className="form-control" value={form.site||''} onChange={e=>setForm({...form,site:e.target.value})}/></F>
             {mode !== 'RADIUS' && <>
-              <F label="API Port"><input className="inp" type="number" value={form.api_port ?? (mode==='REST'?'':8728)} onChange={e=>setForm({...form,api_port:e.target.value===''?null:Number(e.target.value)})}/></F>
-              <F label="REST Port"><input className="inp" type="number" value={form.rest_port ?? (mode==='REST'?443:'')} onChange={e=>setForm({...form,rest_port:e.target.value===''?null:Number(e.target.value)})}/></F>
-              <F label="Username"><input className="inp" value={form.username||''} onChange={e=>setForm({...form,username:e.target.value})}/></F>
-              <F label="Password"><input className="inp" type="password" value={form.password||''} onChange={e=>setForm({...form,password:e.target.value})}/></F>
-              <F label="RouterOS Version"><select className="inp" value={form.ros_version||'v7'} onChange={e=>setForm({...form,ros_version:e.target.value})}><option value="v7">v7</option><option value="v6">v6</option></select></F>
-              <F label="Use SSL"><select className="inp" value={form.use_ssl?'yes':'no'} onChange={e=>setForm({...form,use_ssl:e.target.value==='yes'})}><option value="no">No</option><option value="yes">Yes</option></select></F>
+              <F label="API Port"><input className="form-control" type="number" value={form.api_port ?? (mode==='REST'?'':8728)} onChange={e=>setForm({...form,api_port:e.target.value===''?null:Number(e.target.value)})}/></F>
+              <F label="REST Port"><input className="form-control" type="number" value={form.rest_port ?? (mode==='REST'?443:'')} onChange={e=>setForm({...form,rest_port:e.target.value===''?null:Number(e.target.value)})}/></F>
+              <F label="Username"><input className="form-control" value={form.username||''} onChange={e=>setForm({...form,username:e.target.value})}/></F>
+              <F label="Password"><input className="form-control" type="password" value={form.password||''} onChange={e=>setForm({...form,password:e.target.value})}/></F>
+              <F label="RouterOS Version"><select className="form-select" value={form.ros_version||'v7'} onChange={e=>setForm({...form,ros_version:e.target.value})}><option value="v7">v7</option><option value="v6">v6</option></select></F>
+              <F label="Use SSL"><select className="form-select" value={form.use_ssl?'yes':'no'} onChange={e=>setForm({...form,use_ssl:e.target.value==='yes'})}><option value="no">No</option><option value="yes">Yes</option></select></F>
               <div className="md:col-span-2 text-xs text-muted-foreground p-3 rounded-xl bg-muted/30 border border-border flex items-start gap-2"><Link2 className="w-4 h-4 mt-0.5 text-primary"/>Direct provisioning for subscribers assigned to this router (API/REST).</div>
             </>}
             {mode === 'RADIUS' && <>
-              <F label="RADIUS Shared Secret"><input className="inp" type="password" value={form.radius_secret||''} onChange={e=>setForm({...form,radius_secret:e.target.value})} placeholder="Per-NAS secret"/></F>
-              <F label="CoA / PoD Port"><input className="inp" type="number" value={form.coa_port ?? 3799} onChange={e=>setForm({...form,coa_port:Number(e.target.value||3799)})}/></F>
-              <F label="NAS Identifier"><input className="inp" value={form.nas_identifier||''} onChange={e=>setForm({...form,nas_identifier:e.target.value})} placeholder="e.g. nas-mirpur-01"/></F>
-              <F label="Router Type"><input className="inp" value={form.router_type||'MIKROTIK'} onChange={e=>setForm({...form,router_type:e.target.value})}/></F>
-              <div className="md:col-span-2 text-xs text-muted-foreground p-3 rounded-xl bg-violet-500/5 border border-violet-500/20 flex items-start gap-2"><ShieldCheck className="w-4 h-4 mt-0.5 text-violet-400"/>RADIUS NAS for centralized AAA/CoA pool. Sync NAS config and reload FreeRADIUS as needed.</div>
+              <F label="RADIUS Shared Secret"><input className="form-control" type="password" value={form.radius_secret||''} onChange={e=>setForm({...form,radius_secret:e.target.value})} placeholder="Per-NAS secret"/></F>
+              <F label="CoA / PoD Port"><input className="form-control" type="number" value={form.coa_port ?? 3799} onChange={e=>setForm({...form,coa_port:Number(e.target.value||3799)})}/></F>
+              <F label="NAS Identifier"><input className="form-control" value={form.nas_identifier||''} onChange={e=>setForm({...form,nas_identifier:e.target.value})} placeholder="e.g. nas-mirpur-01"/></F>
+              <F label="Router Type"><input className="form-control" value={form.router_type||'MIKROTIK'} onChange={e=>setForm({...form,router_type:e.target.value})}/></F>
+              <div className="md:col-span-2 text-xs text-muted-foreground p-3 rounded-xl bg-purple/5 border border-purple/20 flex items-start gap-2"><ShieldCheck className="w-4 h-4 mt-0.5 text-purple"/>RADIUS NAS for centralized AAA/CoA pool. Sync NAS config and reload FreeRADIUS as needed.</div>
             </>}
           </div>
           <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={()=>setModal(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button><button onClick={save} className="btn btn-primary">Save</button></div>
         </div></div>
       )}
-      <style jsx>{`.inp{width:100%;padding:.5rem .75rem;border-radius:.75rem;background:var(--card);color:var(--foreground);border:1px solid var(--border);font-size:.875rem}`}</style>
     </div>
   );
 }
 
-function Stat({label,value,icon:Icon,accent='text-foreground'}:any){ return <div className="card p-4 hover:border-primary/30 transition-colors"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{label}</span><Icon className={`w-4 h-4 ${accent}`}/></div><div className={`mt-2 text-xl font-black ${accent}`}>{value}</div></div>; }
-function Meter({icon:Icon,label,value}:any){ return <div className="card p-2"><div className="flex items-center gap-1 text-muted-foreground"><Icon className="w-3.5 h-3.5"/>{label}</div><div className="font-semibold text-foreground mt-0.5">{value}</div></div>; }
+function Stat({label,value,icon:Icon,accent=''}:any){
+  const tone = String(accent).includes('emerald') ? 'success' : String(accent).includes('blue') ? 'info' : String(accent).includes('violet') ? 'purple' : String(accent).includes('cyan') ? 'teal' : String(accent).includes('indigo') ? 'indigo' : 'primary';
+  return <div className={`dash-stat dash-stat-${tone}`}><span className="dash-stat-icon"><Icon /></span><span className="dash-stat-body"><span className="dash-stat-label">{label}</span><span className="dash-stat-value">{value}</span></span></div>;
+}
+function Meter({icon:Icon,label,value}:any){ return <div className="px-2.5 py-2 rounded-lg bg-muted/35 border border-border/60"><div className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-[0.1em] text-muted-foreground"><Icon className="w-3 h-3"/>{label}</div><div className="font-semibold text-foreground text-[11px] tabular-nums mt-1">{value}</div></div>; }
 function F({label,children}:any){ return <label className="block"><div className="text-xs font-semibold text-muted-foreground mb-1">{label}</div>{children}</label>; }
 function formatUptime(sec:number){ if(!sec) return '-'; const d=Math.floor(sec/86400),h=Math.floor((sec%86400)/3600),m=Math.floor((sec%3600)/60); return `${d}d ${h}h ${m}m`; }

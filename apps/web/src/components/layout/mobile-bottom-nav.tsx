@@ -48,24 +48,24 @@ export function MobileBottomNav() {
   };
 
   return (
-    <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-card border-t border-border px-1 sm:px-2 py-1.5 flex items-center justify-around shadow-lg">
-      {navs.map((item) => {
-        const active = isActive(item);
-        const Icon = item.icon;
+    <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 px-2 pb-[max(0.4rem,env(safe-area-inset-bottom))] pt-1.5">
+      <div className="mx-auto max-w-md rounded-2xl border border-border bg-[color-mix(in_srgb,var(--card)_90%,transparent)] backdrop-blur-xl shadow-lg px-1.5 py-1.5 flex items-center justify-around">
+        {navs.map((item) => {
+          const active = isActive(item);
+          const Icon = item.icon;
 
-        return (
-          <Link
-            key={item.name}
-            href={item.href}
-            className={`flex flex-col items-center gap-0.5 py-1.5 rounded transition-colors min-w-0 ${compact ? 'px-1' : 'px-3'} ${
-              active ? 'text-primary font-semibold bg-primary/10' : 'text-muted-foreground'
-            }`}
-          >
-            <Icon className="w-5 h-5 shrink-0" />
-            <span className={`${compact ? 'text-[9px]' : 'text-[10px]'} tracking-tight leading-none whitespace-nowrap`}>{item.name}</span>
-          </Link>
-        );
-      })}
+          return (
+            <Link
+              key={item.name}
+              href={item.href}
+              className={`mobile-nav-item ${active ? 'active' : ''} ${compact ? 'px-1.5' : 'px-3'}`}
+            >
+              <Icon className={`${compact ? 'w-[18px] h-[18px]' : 'w-5 h-5'} shrink-0`} />
+              <span className="tracking-tight leading-none whitespace-nowrap">{item.name}</span>
+            </Link>
+          );
+        })}
+      </div>
     </nav>
   );
 }

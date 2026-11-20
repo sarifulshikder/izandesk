@@ -1,6 +1,7 @@
 'use client';
 import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { RedirectShell } from '@/components/layout/redirect-shell';
 
 export default function ClientDetailAliasPage() {
   const router = useRouter();
@@ -8,5 +9,5 @@ export default function ClientDetailAliasPage() {
   useEffect(() => {
     if (params?.id) router.replace(`/subscribers/${params.id}`);
   }, [router, params]);
-  return <div className="p-6 text-sm text-muted-foreground">Redirecting to client profile...</div>;
+  return <RedirectShell label="Client Profile" href="/subscribers" />;
 }

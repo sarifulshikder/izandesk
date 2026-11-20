@@ -130,13 +130,14 @@ export default function GatewayConfigPage() {
 
   return (
     <div className="space-y-5 max-w-4xl">
-      <div className="page-header flex items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
-          <Link href="/plugins" className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mb-1"><ArrowLeft className="w-3 h-3"/>Back to Plugins</Link>
+          <Link href="/plugins" className="text-[11px] text-muted-foreground hover:text-primary inline-flex items-center gap-1 mb-1"><ArrowLeft className="w-3 h-3"/>Back to Plugins</Link>
+          <span className="page-eyebrow">Payments · Gateway configuration</span>
           <h1 className="page-title">{meta.title}</h1>
-          <p className="text-sm text-muted-foreground">Plugins → Payment Gateways → {gateway}</p>
+          <p className="page-subtitle">Plugins → Payment Gateways → {gateway}</p>
         </div>
-        <div className="page-actions flex gap-2">
+        <div className="page-actions">
           <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
           <button onClick={save} disabled={!canManage || saving} className="btn btn-primary"><Save className="w-4 h-4"/>{saving?'Saving...':'Save Configuration'}</button>
         </div>
@@ -180,7 +181,7 @@ export default function GatewayConfigPage() {
                   <input type={f.type || 'text'} className="form-control" placeholder={f.placeholder || f.label} value={cred[f.key] || ''} onChange={e=>setCred(prev=>({...prev,[f.key]: e.target.value}))} disabled={!canManage} />
                 </label>
               ))}
-              {!meta.fields.length && <div className="text-sm text-muted-foreground">No predefined fields; use Config JSON below for credentials/config.</div>}
+              {!meta.fields.length && <div className="col-span-full empty-state">No predefined fields; use Config JSON below for credentials/config.</div>}
             </div>
           </div>
 
@@ -195,7 +196,7 @@ export default function GatewayConfigPage() {
             <h2 className="font-bold flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-primary"/>Plugin & Status</h2>
             <div><span className="text-muted-foreground">Plugin:</span> {plugin?.title || plugin?.name || `payment-${gateway}`}</div>
             <div><span className="text-muted-foreground">Version:</span> {plugin?.version || '-'}</div>
-            <div><span className="text-muted-foreground">Status:</span> <span className={plugin?.status==='OK'?'text-emerald-400':''}>{plugin?.status || 'Unknown'}</span></div>
+            <div><span className="text-muted-foreground">Status:</span> <span className={plugin?.status==='OK'?'badge badge-success':'badge badge-secondary'}>{plugin?.status || 'Unknown'}</span></div>
             <div><span className="text-muted-foreground">Configured:</span> {cfg ? `${cfg.mode} • ${cfg.enabled ? 'enabled':'disabled'}` : 'Not configured'}</div>
             <div><span className="text-muted-foreground">Credentials stored:</span> {cfg?.has_credentials ? 'Yes' : 'No'}</div>
             <div><span className="text-muted-foreground">Webhook secret:</span> {cfg?.has_webhook_secret ? 'Set' : 'Not set'}</div>

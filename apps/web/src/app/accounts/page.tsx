@@ -1,4 +1,10 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-export default function AccountsAlias() { const r = useRouter(); useEffect(()=>{ r.replace('/finance'); },[r]); return <div className="p-6 text-sm text-muted-foreground">Redirecting to Finance & Accounts...</div>; }
+import { RedirectShell } from '@/components/layout/redirect-shell';
+
+export default function AccountsAliasPage() {
+  const router = useRouter();
+  useEffect(()=>{ router.replace("/finance"); },[router]);
+  return <RedirectShell label="Finance & Accounts" href="/finance" />;
+}

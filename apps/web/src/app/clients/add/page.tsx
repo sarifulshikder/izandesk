@@ -1,4 +1,10 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-export default function AddClientAlias() { const r = useRouter(); useEffect(()=>{ r.replace('/subscribers?new=1'); },[r]); return <div className="p-6 text-sm text-muted-foreground">Redirecting to Add Subscriber...</div>; }
+import { RedirectShell } from '@/components/layout/redirect-shell';
+
+export default function ClientsAddAliasPage() {
+  const router = useRouter();
+  useEffect(()=>{ router.replace("/subscribers?new=1"); },[router]);
+  return <RedirectShell label="Add Subscriber" href="/subscribers?new=1" />;
+}

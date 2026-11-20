@@ -11,12 +11,20 @@ import { SystemStatusCard } from '@/components/dashboard/system-status-card';
 import { AttentionBar } from '@/components/dashboard/attention-bar';
 import { RecentSubscribersTable } from '@/components/dashboard/recent-subscribers-table';
 import {
-  LayoutDashboard, UserPlus, Activity, CreditCard, Wifi, AlertTriangle, BellRing,
-  Radio, Network as NetworkIcon, Receipt, HardDrive, ExternalLink,
+  UserPlus, Activity, CreditCard, AlertTriangle, BellRing, Radio,
+  Network as NetworkIcon, Receipt, HardDrive, ArrowUpRight, ArrowDownRight,
+  Wallet, Gauge, CircleDollarSign,
 } from 'lucide-react';
 
 function money(v: any) {
   return `৳${Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+}
+
+function fmtBps(bps: number) {
+  const n = Number(bps || 0);
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} Gbps`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} Mbps`;
+  return `${Math.max(0, n / 1e3).toFixed(0)} Kbps`;
 }
 
 export default function DashboardPage() {
@@ -25,13 +33,8 @@ export default function DashboardPage() {
 
   const load = useCallback(async () => {
     if (!token) return;
-    // Diagnostics is admin-only — skip it for reseller/technician roles instead of firing a 403.
     const canDiagnostics = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(activeRole || user?.role));
-    // Billing metrics are tenant-wide; skip for roles without billing access
-    // instead of firing a 403 (resellers use their own scoped dashboard).
     const canBilling = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(activeRole || user?.role));
-    // Network/OLT inventory is staff-only — resellers have no use for it and
-    // the API now rejects those roles, so skip the calls entirely.
     const canNetwork = canBilling;
     try {
       const [sum, subs, sessions, billing, routers, olts, onus, health, apiHealth, diag, general] = await Promise.all([
@@ -86,80 +89,178 @@ export default function DashboardPage() {
   if (!user || !activeRole) return null;
   const b = d?.billing || {};
   const s = d?.sessions || { online: 0, aggRxBps: 0, aggTxBps: 0 };
+  const sum = d?.summary || {};
   const bill = Number(b.monthlyBillGenerated || 0);
   const collected = Number(b.thisMonthCollections || 0);
   const pct = bill > 0 ? Math.min(100, Math.round((collected / bill) * 100)) : (collected > 0 ? 100 : 0);
+  const routers = d?.routers || [];
+  const olts = d?.olts || [];
+  const routersOnline = routers.filter((r: any) => String(r.status).toUpperCase() === 'ONLINE').length;
+  const oltsOnline = olts.filter((o: any) => String(o.status).toUpperCase() === 'ONLINE').length;
+  const firstName = String(user.name || '').split(' ')[0] || 'there';
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const dateLabel = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const healthPct = Number(bill) > 0 ? pct : 0;
 
   return (
-    <div className="space-y-4 animate-in fade-in duration-200">
-      {/* Page header — CIS style */}
-      <div className="page-header">
-        <div>
-          <h1 className="page-title"><LayoutDashboard className="page-title-icon w-5 h-5" /> Dashboard</h1>
-          <p className="page-subtitle">
-            Welcome back, <span className="font-semibold text-foreground">{user.name}</span> · {activeRole.replace(/_/g, ' ')} · {d?.company || 'IzanDesk'}
-          </p>
+    <div className="space-y-5">
+      {/* ── Command hero ─────────────────────────────────────────────────── */}
+      <section className="command-hero">
+        <div className="p-5 sm:p-7">
+          <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-6">
+            <div className="min-w-0 xl:max-w-[58%]">
+              <span className="hero-eyebrow">
+                <span className="status-dot online" />
+                {dateLabel}
+                <span className="text-white/15">/</span>
+                <span className="text-[#7f9c90]">{d?.company || 'IzanDesk'}</span>
+              </span>
+              <h1 className="hero-title">{greeting}, <em>{firstName}</em>.</h1>
+              <p className="hero-copy">
+                Your network, revenue and field operations in one calm view — measured live from
+                {' '}{routersOnline}/{routers.length || 0} routers and {oltsOnline}/{olts.length || 0} optical line terminals.
+              </p>
+              <div className="hero-actions mt-5">
+                <Link href="/subscribers?new=1" className="hero-mini-btn solid"><UserPlus className="w-3.5 h-3.5" /> Add Client</Link>
+                <Link href="/subscribers/live" className="hero-mini-btn"><Activity className="w-3.5 h-3.5" /> Live Sessions</Link>
+                <Link href="/billing" className="hero-mini-btn"><CreditCard className="w-3.5 h-3.5" /> Billing Center</Link>
+              </div>
+            </div>
+
+            <div className="xl:w-[400px] shrink-0">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[9px] font-bold uppercase tracking-[0.16em] text-[#7f9c90]">Today at a glance</span>
+                <span className="inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.12em] text-[#8ff3c9]">
+                  <span className="status-dot online" /> Live
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="hero-stat-label"><Wallet className="w-3 h-3" /> Collected</span>
+                    <ArrowUpRight className="w-3.5 h-3.5 text-[#8ff3c9]" />
+                  </div>
+                  <div className="hero-stat-value">{money(collected)}</div>
+                  <div className="hero-stat-hint">This month · {pct}% of billed</div>
+                </div>
+                <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="hero-stat-label"><CircleDollarSign className="w-3 h-3" /> Outstanding</span>
+                    <ArrowDownRight className="w-3.5 h-3.5 text-[#e8b64c]" />
+                  </div>
+                  <div className="hero-stat-value">{money(b.totalDueOutstanding)}</div>
+                  <div className="hero-stat-hint">{Number(b.overdueInvoices || 0)} overdue invoices</div>
+                </div>
+                <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="hero-stat-label"><Activity className="w-3 h-3" /> Online now</span>
+                    <span className="text-[9px] font-mono text-[#8ff3c9]">{Number(sum.total || 0)} total</span>
+                  </div>
+                  <div className="hero-stat-value">{Number(s.online || 0)}</div>
+                  <div className="hero-stat-hint">PPPoE & RADIUS sessions</div>
+                </div>
+                <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="hero-stat-label"><Gauge className="w-3 h-3" /> Throughput</span>
+                    <span className="live-pill"><span className="status-dot online" /></span>
+                  </div>
+                  <div className="hero-stat-value">{fmtBps(Number(s.aggRxBps || 0) + Number(s.aggTxBps || 0))}</div>
+                  <div className="hero-stat-hint">↓ {fmtBps(Number(s.aggRxBps || 0))} · ↑ {fmtBps(Number(s.aggTxBps || 0))}</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div className="page-actions">
-          <Link href="/subscribers?new=1" className="btn btn-primary"><UserPlus className="w-4 h-4" /> Add Client</Link>
-          <Link href="/subscribers/live" className="btn btn-outline"><Activity className="w-4 h-4" /> Live Sessions</Link>
-          <Link href="/billing" className="btn btn-outline"><CreditCard className="w-4 h-4" /> Billing</Link>
-        </div>
-      </div>
+      </section>
 
       {d && <AttentionBar alerts={alerts} />}
 
-      {/* KPI stat tiles */}
-      {d && <MetricsGrid summary={d.summary} billing={b} sessions={s} routers={d.routers} olts={d.olts} />}
+      {/* ── KPI board ────────────────────────────────────────────────────── */}
+      {d && <MetricsGrid summary={sum} billing={b} sessions={s} routers={routers} olts={olts} />}
 
-      {/* Billing progress / Invoice status / Network health */}
+      {/* ── Revenue · invoices · network ─────────────────────────────────── */}
       {d && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="card">
             <div className="card-header">
-              <span className="card-title">Billing Progress</span>
-              <Link href="/billing" className="text-xs text-primary font-semibold inline-flex items-center gap-1">View billing <ExternalLink className="w-3 h-3" /></Link>
-            </div>
-            <div className="card-body space-y-3">
-              <div className="flex items-end justify-between">
-                <div className="text-2xl font-bold">{pct}%</div>
-                <span className="text-xs text-muted-foreground">Collected against net bill</span>
+              <div>
+                <span className="card-title">Billing Progress</span>
+                <div className="card-subtitle">Collection against net bill this month</div>
               </div>
-              <div className="progress"><div className="progress-bar" style={{ width: `${pct}%` }} /></div>
-              <div className="grid grid-cols-3 gap-2 pt-1">
-                <div><div className="text-[10px] uppercase text-muted-foreground">Bill</div><div className="text-sm font-semibold">{money(bill)}</div></div>
-                <div><div className="text-[10px] uppercase text-muted-foreground">Collected</div><div className="text-sm font-semibold text-success">{money(collected)}</div></div>
-                <div><div className="text-[10px] uppercase text-muted-foreground">Remaining</div><div className="text-sm font-semibold text-danger">{money(Math.max(bill - collected, 0))}</div></div>
+              <Link href="/billing" className="text-[10.5px] text-primary font-semibold inline-flex items-center gap-1 hover:underline underline-offset-2">Open <ArrowUpRight className="w-3 h-3" /></Link>
+            </div>
+            <div className="card-body">
+              <div className="flex items-center gap-5">
+                <div className="ring-stat" style={{ ['--pct' as any]: Math.max(healthPct, 1) }}>
+                  <div className="ring-stat-center">
+                    <div className="ring-stat-value">{pct}%</div>
+                    <div className="ring-stat-label">Collected</div>
+                  </div>
+                </div>
+                <div className="min-w-0 flex-1 kpi-list">
+                  <div className="kpi-row">
+                    <span className="kpi-row-label"><span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)]" /> Bill</span>
+                    <span className="kpi-row-value">{money(bill)}</span>
+                  </div>
+                  <div className="kpi-row">
+                    <span className="kpi-row-label"><span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" /> Collected</span>
+                    <span className="kpi-row-value text-success">{money(collected)}</span>
+                  </div>
+                  <div className="kpi-row">
+                    <span className="kpi-row-label"><span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)]" /> Remaining</span>
+                    <span className="kpi-row-value text-warning">{money(Math.max(bill - collected, 0))}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 flex items-center gap-2 text-[10.5px] text-muted-foreground">
+                <Receipt className="w-3.5 h-3.5" />
+                <span>{Number(b.unpaidInvoices || 0)} unpaid invoices · {Number(b.overdueInvoices || 0)} overdue</span>
               </div>
             </div>
           </div>
 
           <div className="card">
             <div className="card-header">
-              <span className="card-title">Invoice Status</span>
-              <Link href="/billing/invoices" className="text-xs text-primary font-semibold inline-flex items-center gap-1">View invoices <ExternalLink className="w-3 h-3" /></Link>
+              <div>
+                <span className="card-title">Invoice Status</span>
+                <div className="card-subtitle">Receivables and settlement health</div>
+              </div>
+              <Link href="/billing/invoices" className="text-[10.5px] text-primary font-semibold inline-flex items-center gap-1 hover:underline underline-offset-2">Invoices <ArrowUpRight className="w-3 h-3" /></Link>
             </div>
-            <div className="card-body space-y-2.5">
-              <div className="flex items-center justify-between py-1.5 border-b border-border">
-                <span className="flex items-center gap-2 text-sm"><span className="status-dot warning" /> Unpaid</span>
-                <span className="badge badge-warning">{Number(b.unpaidInvoices || 0)}</span>
+            <div className="card-body">
+              <div className="space-y-0.5">
+                <div className="kpi-row">
+                  <span className="kpi-row-label"><span className="status-dot warning" /> Unpaid</span>
+                  <span className="badge badge-warning">{Number(b.unpaidInvoices || 0)} invoices</span>
+                </div>
+                <div className="kpi-row">
+                  <span className="kpi-row-label"><span className="status-dot danger" /> Overdue</span>
+                  <span className="badge badge-danger">{Number(b.overdueInvoices || 0)} invoices</span>
+                </div>
+                <div className="kpi-row">
+                  <span className="kpi-row-label"><span className="status-dot online" /> Outstanding value</span>
+                  <span className="kpi-row-value">{money(b.totalDueOutstanding)}</span>
+                </div>
               </div>
-              <div className="flex items-center justify-between py-1.5 border-b border-border">
-                <span className="flex items-center gap-2 text-sm"><span className="status-dot danger" /> Overdue</span>
-                <span className="badge badge-danger">{Number(b.overdueInvoices || 0)}</span>
+              <div className="mt-4">
+                <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1.5">
+                  <span>Settlement rate</span><span className="font-mono">{pct}%</span>
+                </div>
+                <div className="progress"><div className="progress-bar" style={{ width: `${Math.max(pct, 1)}%` }} /></div>
               </div>
-              <div className="flex items-center justify-between py-1.5">
-                <span className="flex items-center gap-2 text-sm"><span className="status-dot online" /> Outstanding</span>
-                <span className="text-sm font-semibold">{money(b.totalDueOutstanding)}</span>
+              <div className="grid grid-cols-2 gap-2 mt-4">
+                <Link href="/collections" className="btn btn-outline btn-sm justify-center">Collections</Link>
+                <Link href="/billing/payments" className="btn btn-outline btn-sm justify-center">Payments</Link>
               </div>
             </div>
           </div>
 
-          <NetworkHealthCard routers={d.routers} olts={d.olts} onus={d.onus} />
+          <NetworkHealthCard routers={routers} olts={olts} onus={d.onus} />
         </div>
       )}
 
-      {/* Live throughput + system status */}
+      {/* ── Throughput + system ──────────────────────────────────────────── */}
       {d && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
           <div className="xl:col-span-2"><LiveTrafficChart rx={Number(s.aggRxBps || 0)} tx={Number(s.aggTxBps || 0)} online={Number(s.online || 0)} /></div>
@@ -167,7 +268,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Recent subscribers */}
       {d && <RecentSubscribersTable subscribers={d.recent} />}
     </div>
   );

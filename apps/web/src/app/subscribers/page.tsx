@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { SubscriberFormWizard } from '@/components/subscribers/subscriber-form-wizard';
-import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, Download, Upload as UploadIcon, Eye, History, FileSpreadsheet, AlertCircle, CheckCircle, MinusCircle, Package, MessageSquare, Phone, Mail, Activity } from 'lucide-react';
+import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, Download, Upload as UploadIcon, Eye, History, FileSpreadsheet, AlertCircle, CheckCircle, MinusCircle, Package, MessageSquare, Phone, Mail, Activity, Users, UserCheck, UserX, Clock3 } from 'lucide-react';
 
 export default function SubscribersPage() {
   const { token } = useAuth();
@@ -374,69 +374,88 @@ export default function SubscribersPage() {
 
   return (
     <div className="space-y-5">
-      <div className="page-header flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+      <div className="page-header items-start">
         <div>
-          <h1 className="page-title">Subscribers (BSS Core)</h1>
-          <p className="text-sm text-muted-foreground">Wizard onboarding, PPPoE profiles, map-based location, auto address fill, KYC & topology — {total} total</p>
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {[
-              ['', 'All'],
-              ['ACTIVE', 'Active'],
-              ['EXPIRED', 'Expired'],
-              ['SUSPENDED', 'Suspended'],
-              ['PENDING', 'Pending'],
-            ].map(([k, label]) => (
-              <button key={k || 'all'} onClick={() => setStatus(k)} className={`filter-chip ${status === k ? 'active' : ''}`}>{label}</button>
-            ))}
-            <Link href="/gis" className="btn btn-outline btn-sm"><MapPin className="w-3.5 h-3.5"/>Client Locations (GIS)</Link>
-            <button onClick={() => setClientView(v => v === 'detailed' ? 'compact' : 'detailed')} className={`filter-chip ${clientView === 'detailed' ? 'active' : ''}`}>All Client Info</button>
-          </div>
+          <span className="page-eyebrow">Client operations · BSS Core</span>
+          <h1 className="page-title">Subscribers</h1>
+          <p className="page-subtitle">Onboarding, PPPoE profiles, KYC, topology and billing in one client record · {total} total</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="page-actions">
           <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
           <button onClick={exportCsv} className="btn btn-outline"><Download className="w-4 h-4"/>Export CSV</button>
-          <button onClick={()=>{ setShowImport(true); setImportMode('file'); resetMtImport(); }} className="btn btn-outline"><UploadIcon className="w-4 h-4"/>Import</button>
-          {selectedIds.length > 0 && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-amber-500/30 bg-amber-500/5">
-              <span className="text-xs text-amber-400">{selectedIds.length} selected</span>
-              <select value={batchAction} onChange={e=>setBatchAction(e.target.value)} className="btn btn-outline btn-sm">
-                <option value="">Action...</option>
-                <option value="activate">Activate</option>
-                <option value="suspend">Suspend</option>
-                <option value="walled_garden">Walled Garden</option>
-                <option value="provision">Re-provision</option>
-                <option value="set_package">Set Package</option>
-                <option value="set_reseller">Set Reseller</option>
-                <option value="delete">Delete</option>
-              </select>
-              <button onClick={handleBatchAction} disabled={!batchAction} className="btn btn-warning btn-sm">Apply</button>
-              <button onClick={clearSelection} className="p-1.5 rounded-lg hover:bg-muted"><X className="w-3.5 h-3.5"/></button>
-            </div>
-          )}
+          <button onClick={()=>{ setShowImport(true); setImportMode('file'); resetMtImport(); }} className="btn btn-outline btn-icon" title="Import subscribers"><UploadIcon className="w-4 h-4"/></button>
           <button onClick={openCreate} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Subscriber</button>
         </div>
       </div>
 
-      {error && <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10 text-red-300 text-sm">{error}</div>}
+      {error && <div className="alert alert-danger">{error}</div>}
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <div className="card p-4"><div className="text-xs text-muted-foreground">Total (all)</div><div className="text-xl font-black mt-1">{total}</div></div>
-        <div className="card p-4 border-success/30"><div className="text-xs text-emerald-300/80">Active (loaded)</div><div className="text-xl font-black mt-1 text-emerald-400">{counts.active}</div></div>
-        <div className="card p-4 border-warning/30"><div className="text-xs text-amber-300/80">Expired (loaded)</div><div className="text-xl font-black mt-1 text-amber-400">{counts.expired}</div></div>
-        <div className="card p-4 border-danger/30"><div className="text-xs text-red-300/80">Suspended (loaded)</div><div className="text-xl font-black mt-1 text-red-400">{counts.suspended}</div></div>
-        <div className="card p-4 border-info/30"><div className="text-xs text-blue-300/80">Pending (loaded)</div><div className="text-xl font-black mt-1 text-blue-400">{counts.pending}</div></div>
+      <div className="stat-grid-5">
+        <button onClick={()=>setStatus('')} className={`dash-stat dash-stat-primary compact ${status === '' ? '!border-primary/50' : ''}`}>
+          <span className="dash-stat-icon"><Users /></span>
+          <span className="dash-stat-body"><span className="dash-stat-label">Total Clients</span><span className="dash-stat-value">{total}</span><span className="dash-stat-hint">all records</span></span>
+        </button>
+        <button onClick={()=>setStatus('ACTIVE')} className={`dash-stat dash-stat-success compact ${status === 'ACTIVE' ? '!border-primary/50' : ''}`}>
+          <span className="dash-stat-icon"><UserCheck /></span>
+          <span className="dash-stat-body"><span className="dash-stat-label">Active</span><span className="dash-stat-value">{counts.active}</span><span className="dash-stat-hint">in current view</span></span>
+        </button>
+        <button onClick={()=>setStatus('EXPIRED')} className={`dash-stat dash-stat-warning compact ${status === 'EXPIRED' ? '!border-primary/50' : ''}`}>
+          <span className="dash-stat-icon"><Clock3 /></span>
+          <span className="dash-stat-body"><span className="dash-stat-label">Expired</span><span className="dash-stat-value">{counts.expired}</span><span className="dash-stat-hint">renewal needed</span></span>
+        </button>
+        <button onClick={()=>setStatus('SUSPENDED')} className={`dash-stat dash-stat-danger compact ${status === 'SUSPENDED' ? '!border-primary/50' : ''}`}>
+          <span className="dash-stat-icon"><UserX /></span>
+          <span className="dash-stat-body"><span className="dash-stat-label">Suspended</span><span className="dash-stat-value">{counts.suspended}</span><span className="dash-stat-hint">access restricted</span></span>
+        </button>
+        <button onClick={()=>setStatus('PENDING')} className={`dash-stat dash-stat-info compact ${status === 'PENDING' ? '!border-primary/50' : ''}`}>
+          <span className="dash-stat-icon"><FileSpreadsheet /></span>
+          <span className="dash-stat-body"><span className="dash-stat-label">Pending</span><span className="dash-stat-value">{counts.pending}</span><span className="dash-stat-hint">awaiting activation</span></span>
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        <div className="md:col-span-2 relative">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"/>
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search by name, client code, username, phone, email, MAC, IP..." className="form-control w-full pl-9"/>
+      <div className="toolbar-strip">
+        {[
+          ['', 'All'],
+          ['ACTIVE', 'Active'],
+          ['EXPIRED', 'Expired'],
+          ['SUSPENDED', 'Suspended'],
+          ['PENDING', 'Pending'],
+        ].map(([k, label]) => (
+          <button key={k || 'all'} onClick={() => setStatus(k)} className={`filter-chip ${status === k ? 'active' : ''}`}>{label}</button>
+        ))}
+        <span className="toolbar-divider" />
+        <Link href="/gis" className="btn btn-ghost btn-sm"><MapPin className="w-3.5 h-3.5"/>Client Locations</Link>
+        <button onClick={() => setClientView(v => v === 'detailed' ? 'compact' : 'detailed')} className={`filter-chip ${clientView === 'detailed' ? 'active' : ''}`}>All Client Info</button>
+        {selectedIds.length > 0 && (
+          <>
+            <span className="toolbar-divider" />
+            <span className="text-[11px] font-semibold text-warning">{selectedIds.length} selected</span>
+            <select value={batchAction} onChange={e=>setBatchAction(e.target.value)} className="form-select !h-[30px] !w-auto !text-[11px]">
+              <option value="">Bulk action…</option>
+              <option value="activate">Activate</option>
+              <option value="suspend">Suspend</option>
+              <option value="walled_garden">Walled Garden</option>
+              <option value="provision">Re-provision</option>
+              <option value="set_package">Set Package</option>
+              <option value="set_reseller">Set Reseller</option>
+              <option value="delete">Delete</option>
+            </select>
+            <button onClick={handleBatchAction} disabled={!batchAction} className="btn btn-warning btn-sm">Apply</button>
+            <button onClick={clearSelection} className="topbar-icon-btn !w-[30px] !h-[30px]" title="Clear selection"><X className="w-3.5 h-3.5"/></button>
+          </>
+        )}
+      </div>
+
+      <div className="card p-3 grid grid-cols-1 md:grid-cols-4 gap-2.5">
+        <div className="md:col-span-2 input-icon">
+          <Search />
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search name, client code, username, phone, email, MAC or IP…" className="form-control w-full"/>
         </div>
-        <select value={status} onChange={e=>setStatus(e.target.value)} className="btn btn-outline">
+        <select value={status} onChange={e=>setStatus(e.target.value)} className="form-select">
           <option value="">All Statuses</option>
           {['PENDING','ACTIVE','SUSPENDED','EXPIRED','TERMINATED'].map(s=><option key={s} value={s}>{s}</option>)}
         </select>
-        <select value={type} onChange={e=>setType(e.target.value)} className="btn btn-outline">
+        <select value={type} onChange={e=>setType(e.target.value)} className="form-select">
           <option value="">All Types</option>
           {['HOME','CORPORATE','HOTSPOT'].map(s=><option key={s} value={s}>{s}</option>)}
         </select>
@@ -445,66 +464,73 @@ export default function SubscribersPage() {
       <div className={`grid grid-cols-1 ${clientView === 'detailed' ? '' : 'xl:grid-cols-3'} gap-5`}>
         <div className={`${clientView === 'detailed' ? '' : 'xl:col-span-2'} card overflow-hidden`}>
           <div className="table-wrap">
-            <table className="table table-hover text-sm">
-              <thead className="bg-muted/40 text-muted-foreground text-xs uppercase">
+            <table className="table table-hover text-sm min-w-[820px]">
+              <thead className="sticky top-0 z-10">
                 <tr>
-                  <th className="text-center px-4 py-3 w-10"><input type="checkbox" checked={selectedIds.length === rows.length && rows.length > 0} onChange={selectedIds.length === rows.length ? clearSelection : selectAll} className="w-4 h-4"/></th>
-                  <th className="text-left px-4 py-3">Client</th>
-                  <th className="text-left px-4 py-3">Contact</th>
-                  {clientView === 'detailed' && <th className="text-left px-4 py-3">Address</th>}
-                  <th className="text-left px-4 py-3">Connection</th>
-                  <th className="text-left px-4 py-3">Package</th>
-                  {clientView === 'detailed' && <th className="text-left px-4 py-3">Billing</th>}
-                  <th className="text-left px-4 py-3">Location/Topology</th>
-                  <th className="text-left px-4 py-3">Status</th>
-                  <th className="text-right px-4 py-3">Actions</th>
+                  <th className="text-center px-3 py-2.5 w-10"><input type="checkbox" checked={selectedIds.length === rows.length && rows.length > 0} onChange={selectedIds.length === rows.length ? clearSelection : selectAll} className="w-4 h-4"/></th>
+                  <th className="text-left px-3 py-2.5">Client</th>
+                  {clientView === 'detailed' && <th className="text-left px-3 py-2.5">Contact</th>}
+                  {clientView === 'detailed' && <th className="text-left px-3 py-2.5">Address</th>}
+                  <th className="text-left px-3 py-2.5">Connection</th>
+                  <th className="text-left px-3 py-2.5">Package</th>
+                  {clientView === 'detailed' && <th className="text-left px-3 py-2.5">Billing</th>}
+                  <th className="text-left px-3 py-2.5">Location / Topology</th>
+                  <th className="text-left px-3 py-2.5">Status</th>
+                  <th className="text-right px-3 py-2.5">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {loading ? <tr><td colSpan={clientView === 'detailed' ? 10 : 8} className="px-4 py-8 text-center text-muted-foreground">Loading subscribers...</td></tr> :
-                 rows.length === 0 ? <tr><td colSpan={clientView === 'detailed' ? 10 : 8} className="px-4 py-8 text-center text-muted-foreground">No subscribers found. Add one with the wizard.</td></tr> :
+                {loading ? <tr><td colSpan={clientView === 'detailed' ? 10 : 7} className="px-4 py-8 text-center text-muted-foreground">Loading subscribers...</td></tr> :
+                 rows.length === 0 ? <tr><td colSpan={clientView === 'detailed' ? 10 : 7} className="px-4 py-8 text-center text-muted-foreground">No subscribers found. Add one with the wizard.</td></tr> :
                  rows.map(r => (
                   <tr key={r.id} className="border-t border-border/70 hover:bg-muted/30 cursor-pointer" onClick={(e)=>{ if(!(e.target as HTMLElement).closest('button,input')) openDetail(r.id); }}>
-                    <td className="px-4 py-3 text-center"><input type="checkbox" checked={selectedIds.includes(r.id)} onChange={(e)=>{ e.stopPropagation(); toggleSelect(r.id); }} className="w-4 h-4"/></td>
-                    <td className="px-4 py-3">
-                      <div className="font-semibold text-foreground">{r.full_name}</div>
-                      <div className="text-xs text-primary font-mono">{r.client_code}</div>
-                      {clientView !== 'detailed' && <div className="text-xs text-muted-foreground">{r.phone || r.email || '-'}</div>}
+                    <td className="px-3 py-2.5 text-center"><input type="checkbox" checked={selectedIds.includes(r.id)} onChange={(e)=>{ e.stopPropagation(); toggleSelect(r.id); }} className="w-4 h-4"/></td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="avatar avatar-sm avatar-primary">{String(r.full_name || '?').charAt(0).toUpperCase()}</span>
+                        <div className="min-w-0">
+                          <div className="font-semibold text-foreground text-[12px] truncate max-w-[150px]">{r.full_name}</div>
+                          <div className="text-[10px] text-primary font-mono truncate max-w-[140px]">{r.client_code}</div>
+                          {clientView !== 'detailed' && <div className="text-[10px] text-muted-foreground truncate max-w-[150px]">{r.phone || r.email || '-'}</div>}
+                        </div>
+                      </div>
                     </td>
-                    <td className="px-4 py-3">
+                    {clientView === 'detailed' && <td className="px-3 py-2.5">
                       <div className="text-xs">{r.phone || '-'}</div>
-                      <div className="text-xs text-muted-foreground truncate max-w-[180px]" title={r.email || ''}>{r.email || '-'}</div>
-                    </td>
+                      <div className="text-xs text-muted-foreground truncate max-w-[150px]" title={r.email || ''}>{r.email || '-'}</div>
+                    </td>}
                     {clientView === 'detailed' && (
-                      <td className="px-4 py-3">
-                        <div className="text-xs max-w-[240px] truncate" title={r.address || ''}>{r.address || '-'}</div>
-                        <div className="text-xs text-muted-foreground">{[r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || '-'}</div>
+                      <td className="px-3 py-2.5">
+                        <div className="text-xs max-w-[180px] truncate" title={r.address || ''}>{r.address || '-'}</div>
+                        <div className="text-[10px] text-muted-foreground truncate max-w-[180px]">{[r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || '-'}</div>
                       </td>
                     )}
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-2.5">
                       <div className="text-xs font-medium">{r.connection_type}</div>
-                      <div className="text-xs text-muted-foreground">{r.username ? `PPPoE: ${r.username}` : (r.subscriber_type || 'HOME')}</div>
-                      <div className="text-[10px] mt-0.5">{r.provisioning_mode === 'ROUTER' ? <span className="text-cyan-400">Router: {r.router_name || 'selected'}</span> : <span className="text-violet-400">RADIUS pool</span>}</div>
+                      <div className="text-[10px] text-muted-foreground truncate max-w-[140px]" title={r.username || ''}>{r.username ? `PPPoE: ${r.username}` : (r.subscriber_type || 'HOME')}</div>
+                      <div className="text-[9.5px] mt-0.5 truncate max-w-[140px]">{r.provisioning_mode === 'ROUTER' ? <span className="text-teal">Router: {r.router_name || 'selected'}</span> : <span className="text-purple">RADIUS pool</span>}</div>
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="text-xs">{r.package_name || '-'}</div>
-                      <div className="text-xs text-muted-foreground">{r.bandwidth_mbps ? `${r.bandwidth_mbps} Mbps` : ''} {r.monthly_bill ? `• ৳${r.monthly_bill}` : ''}</div>
+                    <td className="px-3 py-2.5">
+                      <div className="text-xs truncate max-w-[140px]">{r.package_name || '-'}</div>
+                      <div className="text-[10px] text-muted-foreground tabular-nums">{r.bandwidth_mbps ? `${r.bandwidth_mbps} Mbps` : ''} {r.monthly_bill ? `• ৳${r.monthly_bill}` : ''}</div>
                     </td>
                     {clientView === 'detailed' && (
-                      <td className="px-4 py-3">
-                        <div className="text-xs">Bill: {r.monthly_bill != null ? `৳${Number(r.monthly_bill).toLocaleString()}` : '-'}</div>
-                        <div className={`text-xs font-medium ${Number(r.current_due || 0) > 0 ? 'text-amber-400' : 'text-muted-foreground'}`}>Due: ৳{Number(r.current_due || 0).toLocaleString()}</div>
+                      <td className="px-3 py-2.5">
+                        <div className="text-xs tabular-nums">Bill: {r.monthly_bill != null ? `৳${Number(r.monthly_bill).toLocaleString()}` : '-'}</div>
+                        <div className={`text-[10px] font-medium tabular-nums ${Number(r.current_due || 0) > 0 ? 'text-warning' : 'text-muted-foreground'}`}>Due: ৳{Number(r.current_due || 0).toLocaleString()}</div>
                       </td>
                     )}
-                    <td className="px-4 py-3">
-                      <div className="text-xs">{[r.area_name, r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || `${r.area_name_db || r.area_name || '-'}`}</div>
-                      <div className="text-xs text-muted-foreground">{r.distribution_box_name || r.distribution_box_code || '-'} {r.latitude ? '• 📍' : ''}</div>
+                    <td className="px-3 py-2.5">
+                      <div className="text-[11px] truncate max-w-[175px]" title={[r.area_name, r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ')}>{[r.area_name, r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || `${r.area_name_db || r.area_name || '-'}`}</div>
+                      <div className="text-[9.5px] text-muted-foreground truncate max-w-[175px]">{r.distribution_box_name || r.distribution_box_code || '-'} {r.latitude ? '• 📍' : ''}</div>
                     </td>
-                    <td className="px-4 py-3"><div className="flex flex-col gap-1 items-start"><span className={`badge ${statusBadge(r.status)}`}>{r.status}</span>{r.fup_exceeded && <span className="badge badge-warning">FUP Throttled</span>}</div></td>
-                    <td className="px-4 py-3 text-right" onClick={e=>e.stopPropagation()}>
-                      <Link href={`/subscribers/${r.id}/live`} onClick={e=>e.stopPropagation()} className="p-2 rounded-lg hover:bg-emerald-500/10 text-emerald-400 inline-flex" title="Open Live Dashboard"><Activity className="w-4 h-4"/></Link>
-                      <button onClick={(e)=>{e.stopPropagation();openEdit(r)}} className="p-2 rounded-lg hover:bg-muted" title="Edit"><Pencil className="w-4 h-4"/></button>
-                      <button onClick={(e)=>{e.stopPropagation();remove(r.id)}} className="p-2 rounded-lg hover:bg-red-500/10 text-red-400" title="Delete"><Trash2 className="w-4 h-4"/></button>
+                    <td className="px-3 py-2.5"><div className="flex flex-col gap-1 items-start"><span className={`badge ${statusBadge(r.status)}`}>{r.status}</span>{r.fup_exceeded && <span className="badge badge-warning">FUP Throttled</span>}</div></td>
+                    <td className="px-3 py-2.5 text-right" onClick={e=>e.stopPropagation()}>
+                      <div className="inline-flex items-center gap-0.5">
+                        <Link href={`/subscribers/${r.id}/live`} onClick={e=>e.stopPropagation()} className="topbar-icon-btn !w-7 !h-7 !rounded-lg" title="Open Live Dashboard"><Activity className="w-3.5 h-3.5"/></Link>
+                        <button onClick={(e)=>{e.stopPropagation();openEdit(r)}} className="topbar-icon-btn !w-7 !h-7 !rounded-lg" title="Edit"><Pencil className="w-3.5 h-3.5"/></button>
+                        <button onClick={(e)=>{e.stopPropagation();remove(r.id)}} className="topbar-icon-btn !w-7 !h-7 !rounded-lg hover:!text-danger" title="Delete"><Trash2 className="w-3.5 h-3.5"/></button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -513,11 +539,23 @@ export default function SubscribersPage() {
           </div>
         </div>
 
-        <div className="card p-4 space-y-4">
+        <div className="card overflow-hidden">
           {!detail ? (
-            <div className="text-sm text-muted-foreground py-16 text-center border border-dashed border-border rounded-xl">Select a subscriber to view profile, provisioning, location and KYC documents.</div>
+            <div className="p-4">
+              <div className="empty-panel">
+                <span className="empty-panel-icon"><Users className="w-5 h-5" /></span>
+                <div>
+                  <div className="text-sm font-semibold text-foreground">No client selected</div>
+                  <p className="text-[11px] text-muted-foreground mt-1 max-w-[280px] leading-relaxed">Choose a subscriber from the table to open the full profile, provisioning, location and KYC record.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={openCreate} className="btn btn-primary btn-sm"><Plus className="w-3.5 h-3.5" />Add client</button>
+                  <Link href="/gis" className="btn btn-outline btn-sm"><MapPin className="w-3.5 h-3.5" />GIS map</Link>
+                </div>
+              </div>
+            </div>
           ) : (
-            <>
+            <div className="p-4 space-y-4">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="font-bold text-foreground flex items-center gap-2"><User className="w-4 h-4 text-primary"/><span className="truncate">{detail.full_name}</span></div>
@@ -577,26 +615,26 @@ export default function SubscribersPage() {
                     <div className="col-span-2"><Info label="Address" value={detail.address || '-'} /></div>
                   </div>
                   <div className="flex flex-wrap gap-2 pt-1">
-                    <Link href={`/subscribers/${detail.id}/live`} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-400 bg-emerald-500/5 hover:bg-emerald-500/10 inline-flex items-center gap-1"><Activity className="w-3.5 h-3.5"/>Open Live Dashboard</Link>
+                    <Link href={`/subscribers/${detail.id}/live`} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-success/30 text-success bg-success/5 hover:bg-success/10 inline-flex items-center gap-1"><Activity className="w-3.5 h-3.5"/>Open Live Dashboard</Link>
                     <a href={`/subscribers/live`} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50">All Live Sessions</a>
                     <a href={`/billing`} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50">Billing</a>
                   </div>
                   <div className="pt-2 border-t border-border">
                     <div className="font-semibold text-sm mb-2">FUP / Quota Enforcement</div>
                     <div className="text-xs text-muted-foreground mb-2 space-y-1">
-                      <div className="flex flex-wrap items-center gap-2"><span>Status: {detail.fup_exceeded ? <span className="text-amber-400 font-semibold">Throttled (FUP enforced)</span> : <span className="text-emerald-400">Not throttled</span>}{detail.fup_applied_at ? ` • applied ${new Date(detail.fup_applied_at).toLocaleString()}` : ''}</span>{detail.fup_exempt && <span className="badge badge-purple">EXEMPT</span>}</div>
+                      <div className="flex flex-wrap items-center gap-2"><span>Status: {detail.fup_exceeded ? <span className="text-warning font-semibold">Throttled (FUP enforced)</span> : <span className="text-success">Not throttled</span>}{detail.fup_applied_at ? ` • applied ${new Date(detail.fup_applied_at).toLocaleString()}` : ''}</span>{detail.fup_exempt && <span className="badge badge-purple">EXEMPT</span>}</div>
                       {detail.quota ? (
                         <div>
-                          <div>Monthly usage: {Number(detail.quota.used_bytes||0) > 1e9 ? (Number(detail.quota.used_bytes)/1e9).toFixed(2)+' GB' : Number(detail.quota.used_bytes||0) > 1e6 ? (Number(detail.quota.used_bytes)/1e6).toFixed(2)+' MB' : `${Number(detail.quota.used_bytes||0)} B`} of {Number(detail.quota.cap_gb)} GB ({Number(detail.quota.percent||0).toFixed(2)}%) • {detail.quota.over_cap ? <span className="text-red-400">Over cap</span> : <span className="text-emerald-400">Within cap</span>}{detail.quota.fup_speed_mbps ? ` • FUP ${detail.quota.fup_speed_mbps} Mbps` : ''}</div>
-                          <div className="mt-1 h-1.5 rounded-full bg-white/10 overflow-hidden"><div className={`${detail.quota.over_cap?'bg-red-500':'bg-cyan-500'} h-full`} style={{width:`${Math.min(100,Number(detail.quota.percent||0))}%`}}/></div>
+                          <div>Monthly usage: {Number(detail.quota.used_bytes||0) > 1e9 ? (Number(detail.quota.used_bytes)/1e9).toFixed(2)+' GB' : Number(detail.quota.used_bytes||0) > 1e6 ? (Number(detail.quota.used_bytes)/1e6).toFixed(2)+' MB' : `${Number(detail.quota.used_bytes||0)} B`} of {Number(detail.quota.cap_gb)} GB ({Number(detail.quota.percent||0).toFixed(2)}%) • {detail.quota.over_cap ? <span className="text-danger">Over cap</span> : <span className="text-success">Within cap</span>}{detail.quota.fup_speed_mbps ? ` • FUP ${detail.quota.fup_speed_mbps} Mbps` : ''}</div>
+                          <div className="mt-1 h-1.5 rounded-full bg-muted overflow-hidden"><div className={`${detail.quota.over_cap?'bg-danger':'bg-teal'} h-full`} style={{width:`${Math.min(100,Number(detail.quota.percent||0))}%`}}/></div>
                         </div>
                       ) : <div>Quota: not configured for this package.</div>}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button disabled={fupBusy} onClick={()=>fupAction('evaluate')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-border hover:bg-muted/50 disabled:opacity-50">Evaluate</button>
-                      <button disabled={fupBusy} onClick={()=>fupAction('clear')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 disabled:opacity-50">Clear FUP</button>
-                      <button disabled={fupBusy} onClick={()=>fupAction('apply')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-amber-500/30 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50">Force Apply</button>
-                      <button disabled={fupBusy} onClick={toggleFupExempt} className={`text-[11px] px-2.5 py-1.5 rounded-lg border disabled:opacity-50 ${detail.fup_exempt ? 'border-violet-500/30 text-violet-300 hover:bg-violet-500/10' : 'border-border hover:bg-muted/50'}`}>{detail.fup_exempt ? 'Remove Exemption' : 'Mark Exempt'}</button>
+                      <button disabled={fupBusy} onClick={()=>fupAction('clear')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-success/30 text-success hover:bg-success/10 disabled:opacity-50">Clear FUP</button>
+                      <button disabled={fupBusy} onClick={()=>fupAction('apply')} className="text-[11px] px-2.5 py-1.5 rounded-lg border border-warning/30 text-warning hover:bg-warning/10 disabled:opacity-50">Force Apply</button>
+                      <button disabled={fupBusy} onClick={toggleFupExempt} className={`text-[11px] px-2.5 py-1.5 rounded-lg border disabled:opacity-50 ${detail.fup_exempt ? 'border-purple/30 text-purple hover:bg-purple/10' : 'border-border hover:bg-muted/50'}`}>{detail.fup_exempt ? 'Remove Exemption' : 'Mark Exempt'}</button>
                     </div>
                     <div className="text-[11px] text-muted-foreground mt-2">Best-effort: RADIUS/CoA and direct PPPoE profile throttling (ROUTER mode) with session refresh. Billing restrictions take precedence.</div>
                     <div className="mt-3">
@@ -604,7 +642,7 @@ export default function SubscribersPage() {
                       <div className="space-y-1.5 max-h-[140px] overflow-auto">
                         {fupLogs.slice(0,6).map((l:any)=>(
                           <div key={l.id} className="text-[11px] p-2 rounded-lg border border-border bg-muted/20 flex items-center justify-between gap-2">
-                            <div className="min-w-0"><div><span className={`font-semibold ${l.action==='APPLIED'?'text-amber-400':'text-emerald-400'}`}>{l.action}</span> • {Number(l.used_bytes||0)>1e9?(Number(l.used_bytes)/1e9).toFixed(2)+' GB':Number(l.used_bytes||0)>1e6?(Number(l.used_bytes)/1e6).toFixed(2)+' MB':`${Number(l.used_bytes||0)} B`} / {l.cap_gb!=null?Number(l.cap_gb)+' GB':'-'} {l.fup_speed_mbps?`• FUP ${l.fup_speed_mbps} Mbps`:''}</div>{l.details?.reason && <div className="text-muted-foreground truncate">Reason: {String(l.details.reason)}</div>}</div>
+                            <div className="min-w-0"><div><span className={`font-semibold ${l.action==='APPLIED'?'text-warning':'text-success'}`}>{l.action}</span> • {Number(l.used_bytes||0)>1e9?(Number(l.used_bytes)/1e9).toFixed(2)+' GB':Number(l.used_bytes||0)>1e6?(Number(l.used_bytes)/1e6).toFixed(2)+' MB':`${Number(l.used_bytes||0)} B`} / {l.cap_gb!=null?Number(l.cap_gb)+' GB':'-'} {l.fup_speed_mbps?`• FUP ${l.fup_speed_mbps} Mbps`:''}</div>{l.details?.reason && <div className="text-muted-foreground truncate">Reason: {String(l.details.reason)}</div>}</div>
                             <div className="text-muted-foreground whitespace-nowrap">{l.created_at ? new Date(l.created_at).toLocaleString() : ''}</div>
                           </div>
                         ))}
@@ -625,7 +663,7 @@ export default function SubscribersPage() {
                     <div className="mt-3 p-3 rounded-xl bg-muted/30 border border-border space-y-2">
                       <div className="text-xs font-semibold flex items-center gap-2"><Upload className="w-3.5 h-3.5"/>Upload KYC</div>
                       <div className="flex gap-2">
-                        <select id="kyc-type" className="btn btn-outline btn-sm" defaultValue="NID">{['NID','PASSPORT','CONTRACT','PHOTO','OTHER'].map(t=><option key={t} value={t}>{t}</option>)}</select>
+                        <select id="kyc-type" className="form-select !w-auto min-w-[92px] !h-8 !text-[11px]" defaultValue="NID">{['NID','PASSPORT','CONTRACT','PHOTO','OTHER'].map(t=><option key={t} value={t}>{t}</option>)}</select>
                         <input type="file" className="text-xs flex-1" onChange={e=>{ const f=e.target.files?.[0]; const t=(document.getElementById('kyc-type') as HTMLSelectElement)?.value || 'OTHER'; if(f){ uploadKyc(f,t); e.currentTarget.value=''; } }} disabled={kycUploading} />
                       </div>
                       {kycUploading && <div className="text-xs text-muted-foreground">Uploading...</div>}
@@ -663,7 +701,7 @@ export default function SubscribersPage() {
                               'badge-secondary'
                             }`}>{eq.status}</span>
                             <button onClick={() => setEditEquip(eq)} className="p-1.5 rounded hover:bg-muted"><Pencil className="w-3.5 h-3.5"/></button>
-                            <button onClick={() => removeEquip(eq.id)} className="p-1.5 rounded hover:bg-red-500/10 text-red-400"><Trash2 className="w-3.5 h-3.5"/></button>
+                            <button onClick={() => removeEquip(eq.id)} className="p-1.5 rounded hover:bg-danger/10 text-danger"><Trash2 className="w-3.5 h-3.5"/></button>
                           </div>
                         </div>
                       ))
@@ -691,8 +729,8 @@ export default function SubscribersPage() {
                           <div className="flex items-start justify-between gap-2 mb-1">
                             <div className="flex items-center gap-2">
                               <span className={`badge ${
-                                c.channel === 'CALL' ? 'bg-green-500/10 text-green-400 border-green-500/20' :
-                                c.channel === 'WHATSAPP' ? 'bg-green-500/10 text-green-400 border-green-500/20' :
+                                c.channel === 'CALL' ? 'badge-success' :
+                                c.channel === 'WHATSAPP' ? 'badge-success' :
                                 c.channel === 'EMAIL' ? 'badge-info' :
                                 c.channel === 'SMS' ? 'badge-purple' :
                                 'badge-secondary'
@@ -729,7 +767,7 @@ export default function SubscribersPage() {
                   }
                 </div>
               )}
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -779,26 +817,26 @@ export default function SubscribersPage() {
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <div className={`p-2 rounded-lg ${importPreview.valid > 0 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-red-500/10 border-red-500/20'} border`}>
+                        <div className={`p-2 rounded-lg ${importPreview.valid > 0 ? 'bg-success/10 border-success/20' : 'bg-danger/10 border-danger/20'} border`}>
                           <div className="text-xs text-muted-foreground">Total Rows</div>
                           <div className="text-xl font-black">{importPreview.total}</div>
                         </div>
-                        <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                        <div className="p-2 rounded-lg bg-success/10 border border-success/20">
                           <div className="text-xs text-muted-foreground">Valid</div>
-                          <div className="text-xl font-black text-emerald-400">{importPreview.valid}</div>
+                          <div className="text-xl font-black text-success">{importPreview.valid}</div>
                         </div>
-                        <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20">
+                        <div className="p-2 rounded-lg bg-danger/10 border border-danger/20">
                           <div className="text-xs text-muted-foreground">Invalid</div>
-                          <div className="text-xl font-black text-red-400">{importPreview.invalid}</div>
+                          <div className="text-xl font-black text-danger">{importPreview.invalid}</div>
                         </div>
                       </div>
                       <button onClick={()=>{ setImportPreview(null); setImportFile(null); }} className="px-3 py-1.5 rounded-lg border border-border text-xs hover:bg-muted">Change File</button>
                     </div>
 
                     {importPreview.errors?.length > 0 && (
-                      <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/10">
-                        <div className="text-xs font-semibold text-red-400 mb-2">Validation Errors (first 50)</div>
-                        <div className="space-y-1 max-h-40 overflow-auto text-[11px] text-red-300">
+                      <div className="p-3 rounded-xl border border-danger/30 bg-danger/10">
+                        <div className="text-xs font-semibold text-danger mb-2">Validation Errors (first 50)</div>
+                        <div className="space-y-1 max-h-40 overflow-auto text-[11px] text-danger">
                           {importPreview.errors.slice(0, 50).map((e: string, i: number) => <div key={i} className="truncate">{e}</div>)}
                         </div>
                       </div>
@@ -824,13 +862,13 @@ export default function SubscribersPage() {
                             {importPreview.preview.map((p: any) => (
                               <tr key={p.row} className="border-t border-border/50">
                                 <td className="px-2 py-1">{p.row}</td>
-                                <td className="px-2 py-1">{p.valid ? <CheckCircle className="w-4 h-4 text-emerald-400"/> : <AlertCircle className="w-4 h-4 text-red-400"/>}</td>
+                                <td className="px-2 py-1">{p.valid ? <CheckCircle className="w-4 h-4 text-success"/> : <AlertCircle className="w-4 h-4 text-danger"/>}</td>
                                 <td className="px-2 py-1">{p.data?.full_name || '-'}</td>
                                 <td className="px-2 py-1">{p.data?.username || '-'}</td>
                                 <td className="px-2 py-1">{p.data?.package_name || '-'}</td>
                                 <td className="px-2 py-1">{p.data?.area_id || '-'}</td>
                                 <td className="px-2 py-1">{p.data?.provisioning_mode || '-'}</td>
-                                <td className="px-2 py-1 text-red-400 truncate max-w-xs">{p.errors?.join('; ') || '-'}</td>
+                                <td className="px-2 py-1 text-danger truncate max-w-xs">{p.errors?.join('; ') || '-'}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -866,7 +904,7 @@ export default function SubscribersPage() {
                       <button onClick={runMtImport} disabled={importLoading || !mtImportItems.length} className="btn btn-primary"><Download className="w-4 h-4"/>Import Selected</button>
                     </div>
                   </div>
-                  {mtImportMsg && <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm">{mtImportMsg}</div>}
+                  {mtImportMsg && <div className="p-3 rounded-xl border border-success/30 bg-success/10 text-success text-sm">{mtImportMsg}</div>}
                   <div className="text-xs text-muted-foreground">Imports selected MikroTik users as IzanDesk subscribers (auto client code, assigned to this router as ROUTER provisioning). PPP profile names are matched to existing bandwidth package names/profile names when possible. Existing usernames are detected and unchecked by default.</div>
 
                   <div className="rounded-xl border border-border overflow-hidden">

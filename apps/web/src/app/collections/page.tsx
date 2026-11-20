@@ -1,4 +1,10 @@
 'use client';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-export default function CollectionsRootAlias() { const r = useRouter(); useEffect(()=>{ r.replace('/billing?view=collections'); },[r]); return <div className="p-6 text-sm text-muted-foreground">Redirecting to Today’s Collection...</div>; }
+import { RedirectShell } from '@/components/layout/redirect-shell';
+
+export default function CollectionsAliasPage() {
+  const router = useRouter();
+  useEffect(()=>{ router.replace("/billing?view=collections"); },[router]);
+  return <RedirectShell label="Today’s Collection" href="/billing?view=collections" />;
+}

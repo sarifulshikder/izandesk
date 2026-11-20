@@ -287,15 +287,15 @@ export function Sidebar() {
         ].join(' ')}
       >
         <div className="sidebar-brand">
-          <Link href="/" className="flex items-center gap-2" onClick={() => setMobileMenuOpen(false)}>
+          <Link href="/" className="brand-lockup" onClick={() => setMobileMenuOpen(false)}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/izan-logo.svg" alt="Izan" className="w-8 h-8 rounded shrink-0" />
-            <span className="flex flex-col leading-none">
-              <span className="text-[15px] font-bold tracking-tight text-foreground">Izan<span className="text-primary">Desk</span> <span className="text-[10px] font-semibold text-muted-foreground">ERP</span></span>
-              <span className="text-[10px] text-muted-foreground mt-0.5">ISP Billing & Network OSS</span>
+            <img src="/izan-logo.svg" alt="Izan" className="brand-mark" />
+            <span className="flex flex-col leading-none min-w-0">
+              <span className="brand-name">Izan<em>Desk</em></span>
+              <span className="brand-sub">ISP Operations Suite</span>
             </span>
           </Link>
-          <button onClick={() => setMobileMenuOpen(false)} className="topbar-icon-btn lg:hidden" aria-label="Close menu"><X className="w-4 h-4" /></button>
+          <button onClick={() => setMobileMenuOpen(false)} className="w-8 h-8 rounded-lg text-white/50 hover:text-white hover:bg-white/10 lg:hidden flex items-center justify-center" aria-label="Close menu"><X className="w-4 h-4" /></button>
         </div>
 
         <div className="sidebar-scroll">
@@ -348,11 +348,21 @@ export function Sidebar() {
         </div>
 
         <div className="sidebar-footer">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="flex items-center gap-1.5 text-muted-foreground"><span className="status-dot online" /> System status</span>
-            <span className="font-semibold text-success">Operational</span>
+          <div className="rail-status">
+            <span className="flex items-center gap-1.5 text-[#9db3aa]">
+              <span className="status-dot online" /> System status
+            </span>
+            <span className="font-semibold text-[#8ff3c9]">Operational</span>
           </div>
-          <div className="text-[10px] text-muted-foreground mt-1">Signed in as <span className="font-medium text-foreground">{user.name}</span></div>
+          <div className="flex items-center gap-2 mt-2.5 px-0.5">
+            <span className="w-6 h-6 rounded-full bg-white/[0.07] border border-white/10 text-[#cfe1d9] text-[10px] font-bold flex items-center justify-center shrink-0">
+              {user.name.charAt(0)}
+            </span>
+            <div className="min-w-0 leading-tight">
+              <div className="text-[10px] text-[#7f958d]">Signed in as</div>
+              <div className="text-[11px] font-semibold text-[#e3f0ea] truncate">{user.name}</div>
+            </div>
+          </div>
         </div>
       </aside>
 
