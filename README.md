@@ -23,6 +23,9 @@ All complete architectural blueprints, database schemas, and feature catalogs ar
 5. **[ISP ERP Research & Benchmark Analysis](./docs/izandesk_isp_erp_research_and_architecture.md)**  
    *Deep-dive analysis of CIS Complete ISP Solution (`demo.cisbd.net`) vs. international market leaders (Splynx, Sonar).*
 
+6. **[MCP Server Setup](./docs/mcp-setup.md)**
+   *Connect Claude, Cursor or ChatGPT to role-scoped, audited ISP tools at `/api/mcp`, with read-only keys and confirmation-gated writes.*
+
 ---
 
 ## ⚡ Core Architecture Highlights

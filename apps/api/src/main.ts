@@ -40,6 +40,8 @@ import subscriberEquipmentRouter from './routes/subscriber-equipment';
 import subscriberCommunicationsRouter from './routes/subscriber-communications';
 import settingsRouter from './routes/settings';
 import aiRouter from './routes/ai';
+import { createMcpRouter } from './routes/mcp';
+import { createMcpAuth } from './integrations/mcp-auth';
 import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
@@ -303,6 +305,17 @@ async function bootstrap() {
 
   // AI Copilot: role-scoped, bilingual assistant (free local engine by default)
   app.use('/api/ai', authMiddleware, aiRouter);
+
+  // MCP: same AI engine and RBAC, exposed to Claude/Cursor/ChatGPT over JSON-RPC.
+  // Bearer keys are checked against the existing user table; dedicated izmc_ keys
+  // are hash-verified and may be read-only or restricted to specific tools.
+  const mcpAuth = createMcpAuth({
+    jwtSecret: JWT_SECRET,
+    findUser: (id) => users.find((u) => u.id === id),
+    findUserByRole: (role) => users.find((u) => u.role === role),
+    jwtMiddleware: authMiddleware,
+  });
+  app.use('/api/mcp', mcpAuth, createMcpRouter(pool));
 
   // Phase 3: Network OSS, OLT, AAA/RADIUS, WireGuard overlay
   app.use('/api/network', authMiddleware, networkRouter);

@@ -34,6 +34,7 @@ export const SETTINGS_CATEGORIES: Record<string, { label: string; description: s
   network: { label: 'Network', description: 'Default device/management parameters.' },
   acs: { label: 'ACS / TR-069', description: 'GenieACS (TR-069/CWMP) integration for CPE management.' },
   ai: { label: 'AI Copilot', description: 'Bilingual operations assistant: free local engine, optional Gemini/OpenAI for free-form questions.' },
+  mcp: { label: 'MCP Server', description: 'Connect Claude, Cursor or ChatGPT to IzanDesk. Role-scoped, audited, confirmation-gated tools.' },
 };
 
 export const SETTINGS_SCHEMA: SettingDef[] = [
@@ -119,6 +120,13 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { key: 'ai.nim_model', category: 'ai', label: 'NIM Model', type: 'string', default: 'nvidia/nemotron-3-ultra-550b-a55b', description: 'NIM chat model id, e.g. nvidia/nemotron-3-ultra-550b-a55b or meta/llama-3.3-70b-instruct.' },
   { key: 'ai.rate_limit_per_min', category: 'ai', label: 'Requests per minute per user', type: 'number', min: 1, max: 300, default: 30 },
   { key: 'ai.max_history', category: 'ai', label: 'Max conversation turns sent', type: 'number', min: 0, max: 100, default: 20 },
+
+  // ---- mcp ----
+  { key: 'mcp.enabled', category: 'mcp', label: 'Enable MCP Server', type: 'boolean', default: true,
+    description: 'Allow AI assistants to connect at /api/mcp. All calls inherit the connected account role and are audited.' },
+  { key: 'mcp.rate_limit_per_min', category: 'mcp', label: 'Tool calls per minute', type: 'number', min: 1, max: 600, default: 90 },
+  { key: 'mcp.allowed_origins', category: 'mcp', label: 'Allowed browser origins', type: 'array', default: [],
+    description: 'Comma-separated origins for browser-based MCP clients. Desktop clients send no Origin and are always allowed.' },
 ];
 
 export function defFor(key: string): SettingDef | undefined {

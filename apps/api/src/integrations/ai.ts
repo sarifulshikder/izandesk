@@ -13,7 +13,7 @@
 import { randomBytes } from 'crypto';
 import { getCached } from './settings';
 
-export type AIActor = { id: string; name: string; role: string; resellerId?: string | null };
+export type AIActor = { id: string; name: string; email?: string; role: string; resellerId?: string | null };
 export type AICard = { title: string; badge?: string; desc?: string; url?: string; prompt?: string };
 /** Frontend actions are a closed allowlist — the model never supplies these.
  *  Mutations carry only server-generated values, never free-form model output. */
@@ -1285,5 +1285,51 @@ export async function askAI(pool: any, actor: AIActor, message: string, history:
     stats: filterStatsForRole(merged, actor.role),
     meta: { role: actor.role, restricted: !allowed, latency_ms: Date.now() - start, at: new Date().toISOString() },
     ...(action ? { action } : {}),
+  };
+}
+
+/**
+ * Run one known intent directly. MCP tools use this instead of reconstructing
+ * a natural-language prompt: the tool name already identifies the intent, so
+ * keyword detection would be needlessly fragile. Role gates, stat filtering,
+ * rendering and the response shape stay identical to `askAI`.
+ */
+export async function runAIIntent(
+  pool: any,
+  actor: AIActor,
+  target: { intent: string; lang?: 'bn' | 'en'; entity?: string },
+): Promise<AIResult> {
+  const start = Date.now();
+  const ctx: Ctx = { role: actor.role, actor };
+  const detected: Detection = {
+    intent: target.intent,
+    lang: target.lang || 'en',
+    entity: target.entity,
+  };
+  const allowed = intentAllowed(detected.intent, actor.role);
+  const s = await baseStats(pool, ctx);
+  const extras = allowed ? await intentExtras(pool, ctx, detected.intent, detected.entity) : { stats: {}, rows: [] };
+  const merged = { ...s, ...extras.stats };
+
+  let reply: string;
+  let cards: AICard[] = [];
+  if (!allowed) {
+    const T = EN.title;
+    reply = `### ${(T as any)[TITLE_KEYS[detected.intent] || 'help']}\n\n${denyText(false)}`;
+  } else {
+    const rendered = render(detected.intent, detected.lang, merged, extras.rows, ctx, detected.entity);
+    reply = rendered.reply;
+    cards = rendered.cards;
+  }
+
+  return {
+    reply,
+    provider: 'local',
+    intent: detected.intent,
+    lang: detected.lang,
+    cards,
+    quickPrompts: quickPromptsFor(actor.role, detected.lang),
+    stats: filterStatsForRole(merged, actor.role),
+    meta: { role: actor.role, restricted: !allowed, latency_ms: Date.now() - start, at: new Date().toISOString() },
   };
 }
