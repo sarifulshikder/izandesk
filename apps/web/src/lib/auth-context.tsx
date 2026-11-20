@@ -34,15 +34,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [theme, setTheme] = useState<'dark' | 'light'>('light');
+  // Read the saved theme during the first render: an effect read raced with the
+  // mount write of the stale 'light' value (StrictMode re-ran the read after
+  // localStorage had already been overwritten), so a saved 'dark' reverted to
+  // light on refresh. With lazy init, state, document classes and
+  // localStorage all start from the same value.
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('izandesk_theme');
+      if (saved === 'dark' || saved === 'light') return saved;
+    }
+    return 'light';
+  });
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [activeRole, setActiveRole] = useState<UserRole | null>(null);
-
-  useEffect(() => {
-    const savedTheme = (typeof window !== 'undefined' && localStorage.getItem('izandesk_theme')) as 'dark' | 'light' | null;
-    if (savedTheme) setTheme(savedTheme);
-  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
