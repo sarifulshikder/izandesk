@@ -193,6 +193,34 @@ router.get('/payments/sms', asyncHandler(async (req, res) => {
   res.json({ ok: true, data: r.rows });
 }));
 
+/** Record a received payment (used by the AI Copilot). Identifiers are resolved
+ *  here with the same exactly-one semantics as the AI client side. */
+router.post('/payments/record', asyncHandler(async (req, res) => {
+  if (!requireBillingRole(req, res)) return;
+  const b = req.body || {};
+  const amount = Number(b.amount || 0);
+  if (!(amount > 0) || amount > 100000) return res.status(400).json({ message: 'amount must be a positive number ≤ 100000' });
+  const identifier = String(b.identifier || '').trim();
+  if (!identifier) return res.status(400).json({ message: 'subscriber identifier is required' });
+  const matches = (await pool.query(
+    `SELECT id, full_name, client_code FROM subscribers WHERE (client_code ILIKE $1 OR username ILIKE $1 OR full_name ILIKE $1 OR phone ILIKE $1) LIMIT 5`,
+    [`%${identifier}%`]
+  )).rows;
+  if (!matches.length) return res.status(404).json({ message: 'No subscriber matched that identifier' });
+  if (matches.length > 1) return res.status(400).json({ message: `${matches.length} subscribers matched — be more specific` });
+  const rec = await recordPaymentAndReactivate({
+    gateway: String(b.gateway || 'AI_COPILOT').slice(0, 40),
+    amount,
+    subscriber_id: matches[0].id,
+    trx_id: String(b.trx_id || '').trim() || undefined,
+    method: 'AI_COPILOT',
+    raw: b.note ? { note: b.note } : undefined,
+    status: 'COMPLETED',
+  });
+  const dueR = await pool.query(`SELECT COALESCE(SUM(GREATEST(due_amount,0)),0)::numeric as due FROM invoices WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE')`, [matches[0].id]);
+  res.json({ ok: true, duplicate: !!rec.duplicate, data: { payment: rec.payment, due_left: Number(dueR.rows[0]?.due || 0) } });
+}));
+
 router.post('/subscribers/:id/reactivate', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
   const result = await reactivateSubscriber(req.params.id, req.body?.reason || 'Manual reactivation');

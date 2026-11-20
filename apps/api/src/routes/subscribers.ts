@@ -753,6 +753,19 @@ router.delete('/:id/kyc/:docId', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
+router.put('/:id/kyc/:docId/status', asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
+  const b = req.body || {};
+  const newStatus = String(b.status || '').toUpperCase();
+  if (!['APPROVED', 'REJECTED'].includes(newStatus)) return res.status(400).json({ message: 'status must be APPROVED or REJECTED' });
+  const r = await pool.query('SELECT * FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, req.params.id]);
+  if (!r.rows[0]) return res.status(404).json({ message: 'KYC document not found' });
+  await pool.query('UPDATE kyc_documents SET status=$1 WHERE id=$2', [newStatus, req.params.docId]);
+  await auditLog({ ...reqActor(req), action: newStatus === 'APPROVED' ? 'SUBSCRIBER_KYC_APPROVED' : 'SUBSCRIBER_KYC_REJECTED', entity_type: 'subscriber', entity_id: req.params.id, details: { doc_id: req.params.docId, doc_type: r.rows[0].doc_type } });
+  const updated = (await pool.query('SELECT * FROM kyc_documents WHERE id=$1', [req.params.docId])).rows[0];
+  res.json({ ok: true, data: updated });
+}));
+
 // Ownership-checked KYC download. Replaces public static serving of /uploads/kyc.
 router.get('/:id/kyc/:docId/file', asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;

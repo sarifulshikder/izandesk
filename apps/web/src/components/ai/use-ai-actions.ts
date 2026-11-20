@@ -23,6 +23,13 @@ export function useAiActions(onResult: (message: AiMessage) => void) {
         content: `⚠️ Could not complete that action: ${error?.message || 'request failed'}`,
       });
 
+    // Package lookup by name (case-insensitive) for assign_package actions.
+    const findPackage = async (name: string): Promise<any | null> => {
+      const pkgs = await apiFetch<any>('/api/network/packages', {}, token);
+      const list = pkgs?.data || [];
+      const lower = String(name || '').toLowerCase();
+      return list.find((p: any) => String(p.name || '').toLowerCase() === lower || String(p.profile_name || '').toLowerCase() === lower) || null;
+    };
     // Resolve a search query to exactly one record — never guess between matches.
     const one = async (path: string, label: string, identifier: string) => {
       const res = await apiFetch<any>(path, {}, token);
@@ -71,6 +78,44 @@ export function useAiActions(onResult: (message: AiMessage) => void) {
         const ticket = result.data || result;
         ok(`✅ Ticket **${ticket.ticket_no || ''}** created — "${ticket.subject || subject}" (${ticket.priority || priority}).`,
           [{ title: 'Open ticket', url: `/tickets/${ticket.id}` }]);
+      } else if (action.type === 'record_payment') {
+        const { identifier, amount, gateway, note, trx_id } = action.payload;
+        const sub = await one(`/api/subscribers?q=${encodeURIComponent(identifier)}`, 'subscriber', identifier);
+        const res = await apiFetch<any>('/api/billing/payments/record', {
+          method: 'POST',
+          body: JSON.stringify({ subscriber_id: sub.id, amount, gateway, note, trx_id }),
+        }, token);
+        const data = res?.data || {};
+        ok(`✅ Payment of **৳${Number(amount).toFixed(2)}** recorded for **${sub.full_name || identifier}** (${gateway || 'cash'}).${res?.duplicate ? ' (Already recorded — not double-counted.)' : ''} Due left: **৳${Number(data.due_left || 0).toFixed(2)}**.`,
+          [{ title: 'View collection report', url: '/collections' }]);
+      } else if (action.type === 'assign_package') {
+        const { identifier, package_name, bandwidth_mbps } = action.payload;
+        const sub = await one(`/api/subscribers?q=${encodeURIComponent(identifier)}`, 'subscriber', identifier);
+        let pkg = await findPackage(package_name);
+        if (!pkg && package_name) pkg = await findPackage(identifier).catch(() => null);
+        if (!pkg) throw new Error(`No package matched "${package_name}"`);
+        const body: Record<string, any> = { package_name: pkg.name || package_name };
+        if (bandwidth_mbps) body.bandwidth_mbps = bandwidth_mbps;
+        const updated = await apiFetch<any>(`/api/subscribers/${sub.id}`, { method: 'PUT', body: JSON.stringify(body) }, token);
+        ok(`✅ **${sub.full_name || identifier}** moved to package **${updated.package_name || pkg.name || package_name}**.`,
+          [{ title: 'Open subscriber', url: `/subscribers/${sub.id}` }]);
+      } else if (action.type === 'close_ticket') {
+        const { ticket_no, identifier, status } = action.payload;
+        const t = await one(`/api/tickets?q=${encodeURIComponent(ticket_no || identifier || '')}`, 'ticket', ticket_no || identifier || '');
+        const result = await apiFetch<any>(`/api/tickets/${t.id}`, { method: 'PUT', body: JSON.stringify({ status: status || 'CLOSED' }) }, token);
+        const ticket = result?.data || result;
+        ok(`✅ Ticket **${ticket.ticket_no}** closed.`, [{ title: 'Open tickets', url: '/tickets' }]);
+      } else if (action.type === 'approve_kyc' || action.type === 'reject_kyc') {
+        const sub = await one(`/api/subscribers?q=${encodeURIComponent(action.payload.identifier)}`, 'subscriber', action.payload.identifier);
+        const docs = (sub.kyc_documents || []) as any[];
+        const doc = docs.find((d) => !d.status || d.status === 'PENDING') || docs.find((d) => d.id === action.payload.docId);
+        if (!doc) throw new Error('No pending KYC document found for this subscriber');
+        const kycReason = (action.payload as { reason?: string }).reason;
+        await apiFetch<any>(`/api/subscribers/${sub.id}/kyc/${doc.id}/status`, {
+          method: 'PUT',
+          body: JSON.stringify({ status: action.type === 'approve_kyc' ? 'APPROVED' : 'REJECTED', ...(kycReason ? { reason: kycReason } : {}) }),
+        }, token);
+        ok(`✅ KYC document **${doc.doc_type}** (${doc.file_name}) ${action.type === 'approve_kyc' ? 'approved' : 'rejected'} for **${sub.full_name || sub.client_code || action.payload.identifier}**.`);
       }
     } catch (e: any) {
       fail(e);

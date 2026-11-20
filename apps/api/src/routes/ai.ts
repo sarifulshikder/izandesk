@@ -3,7 +3,7 @@ import { pool } from '../db';
 import { asyncHandler, ValidationError } from './helpers';
 import { auditLog, reqActor } from '../integrations/audit';
 import { getAllSettings, getCached, maskedView, setCategory } from '../integrations/settings';
-import { askAI, capabilitiesFor, quickPromptsFor } from '../integrations/ai';
+import { askAI, capabilitiesFor, quickPromptsFor, testExternalProvider } from '../integrations/ai';
 
 const router: Router = Router();
 
@@ -63,7 +63,7 @@ router.get('/status', asyncHandler(async (req, res) => {
     quick_prompts: quickPromptsFor(role, 'bn'),
     limits: { per_minute: Number(await getCached('ai.rate_limit_per_min', 30)) || 30, message_chars: 2000, history_turns: Number(await getCached('ai.max_history', 20)) || 20 },
     privacy: externalReady
-      ? `${labels[provider]} is enabled for free-form questions; only aggregate metrics are shared.`
+      ? `${labels[provider]} is enabled for free-form questions; only aggregate metrics and explicit action intents (e.g. "suspend <client code>") leave the app.`
       : 'Local-only: your questions and data never leave IzanDesk.',
   });
 }));
@@ -85,11 +85,19 @@ router.post('/chat', rateLimit, asyncHandler(async (req, res) => {
   const u = req.user as any;
   const actor = { id: u.id, name: u.name || u.email, role: u.role, resellerId: u.resellerId || null };
   const started = Date.now();
-  const result = await askAI(pool, actor, b.message.trim(), history);
+  const mode = (['local', 'llm'].includes(String(b.mode || '')) ? String(b.mode) : 'auto') as 'auto' | 'local' | 'llm';
+  const result = await askAI(pool, actor, b.message.trim(), history, { mode });
   await auditLog({
     ...reqActor(req), action: 'AI_CHAT', entity_type: 'ai', entity_id: result.intent,
-    details: { intent: result.intent, provider: result.provider, latency_ms: Date.now() - started, chars: b.message.length },
+    details: { intent: result.intent, provider: result.provider, latency_ms: Date.now() - started, chars: b.message.length, mode },
   });
+  res.json(result);
+}));
+
+router.post('/test-provider', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const b = req.body || {};
+  const result = await testExternalProvider(String(b.provider || ''), b.api_key);
   res.json(result);
 }));
 

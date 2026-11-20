@@ -25,7 +25,14 @@ export type AIAction =
     } }
   | { type: 'set_subscriber_status'; payload: { identifier: string; status: 'ACTIVE' | 'SUSPENDED' } }
   | { type: 'topup_reseller_wallet'; payload: { identifier: string; amount: number } }
-  | { type: 'create_ticket'; payload: { subject: string; priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; identifier?: string } };
+  | { type: 'create_ticket'; payload: { subject: string; priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; identifier?: string } }
+  /** The server routes (payments/kyc/tickets) build the payload values —
+   *  the model never supplies request fields, identifiers, amounts or text. */
+  | { type: 'record_payment'; payload: { identifier: string; amount: number; gateway?: string; note?: string; trx_id?: string } }
+  | { type: 'assign_package'; payload: { identifier: string; package_name: string; bandwidth_mbps?: number } }
+  | { type: 'close_ticket'; payload: { ticket_no?: string; identifier?: string; status?: 'CLOSED' | 'RESOLVED' } }
+  | { type: 'approve_kyc'; payload: { identifier: string; docId?: string } }
+  | { type: 'reject_kyc'; payload: { identifier: string; docId?: string; reason?: string } };
 export type AIResult = {
   reply: string;
   provider: 'local' | 'gemini' | 'openai' | 'nim';
@@ -44,9 +51,9 @@ const NETWORK_ROLES = ['SUPER_ADMIN', 'NOC_ENGINEER'];
 const CRM_ROLES = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'TECHNICIAN'];
 
 export function capabilitiesFor(role: string): string[] {
-  if (role === 'SUPER_ADMIN') return ['collections', 'subscribers', 'network', 'olt', 'tickets', 'crm', 'inventory', 'resellers', 'finance', 'hotspot'];
+  if (role === 'SUPER_ADMIN') return ['collections', 'subscribers', 'network', 'olt', 'tickets', 'crm', 'inventory', 'resellers', 'finance', 'hotspot', 'suspend/activate subs', 'assign packages', 'record payments', 'approve KYC', 'close tickets'];
   if (role === 'NOC_ENGINEER') return ['subscribers', 'network', 'olt', 'tickets', 'hotspot'];
-  if (role === 'BILLING_OPERATOR') return ['collections', 'subscribers', 'tickets', 'crm', 'finance', 'resellers', 'hotspot'];
+  if (role === 'BILLING_OPERATOR') return ['collections', 'subscribers', 'tickets', 'crm', 'finance', 'resellers', 'hotspot', 'record payments'];
   if (role === 'TECHNICIAN') return ['subscribers', 'tickets', 'olt', 'network_read'];
   return ['own_subscribers', 'own_wallet', 'own_tickets']; // RESELLER
 }
@@ -190,7 +197,67 @@ function ticketCommand(text: string): AIAction | undefined {
   return { type: 'create_ticket', payload: { subject, priority, ...(identifier ? { identifier } : {}) } };
 }
 
-function detectIntent(message: string): Detection {
+/** Money amount extraction — last standalone number in the text (BDT). */
+function extractAmount(text: string): number | undefined {
+  const raw = text.match(/(?<![\w-])(\d+(?:\.\d{1,2})?)/g) || [];
+  return raw.map(Number).filter((v) => Number.isFinite(v) && v > 0).pop();
+}
+
+/** Common gateway names; anything else the user mentions falls back to 'AI_COPILOT'. */
+function extractGateway(text: string): string {
+  const m = text.match(/\b(bkash|nagad|rocket|stripe|paypal|mcash|gpay|airtel|telepay|bdcom|vsol|sms|manual)\b/i);
+  return m ? m[1].toLowerCase() : 'AI_COPILOT';
+}
+
+const AMOUNT_STOPWORDS = ['pay', 'paid', 'payment', 'receive', 'receiving', 'record', 'recorded', 'recording', 'collect', 'collected', 'deposit', 'credit', 'amount', 'taka', 'bdt', '৳', '৬', '১'];
+
+function recordPaymentCommand(text: string): AIAction | undefined {
+  if (text.includes('?')) return undefined;
+  if (!/\b(pay|paid|receive|receiving|record|recorded|collect|collected|deposit|credit)\b/i.test(text)) return undefined;
+  const amount = extractAmount(text);
+  if (!amount || amount > 100000) return undefined;
+  const identifier = commandTarget(text, [...AMOUNT_STOPWORDS, String(amount)]);
+  if (!identifier) return undefined;
+  return { type: 'record_payment', payload: { identifier, amount, gateway: extractGateway(text) } };
+}
+
+function assignPackageCommand(text: string): AIAction | undefined {
+  const verbM = text.match(/\b(assign|change|set|upgrade|downgrade|switch|give|provide|update)\b/i);
+  if (!verbM || text.includes('?')) return undefined;
+  // Package name: the first word after the verb ("assign addon plan to rasel"),
+  // else the word after the package/plan/rate/bandwidth keyword.
+  const afterVerb = text.slice(verbM.index! + verbM[0].length);
+  const m = afterVerb.match(/^\s+(?:of\s+|to\s+|for\s+|the\s+|a\s+|an\s+|package\s+|plan\s+|rate\s+|bandwidth\s+|mbps\s+)?([A-Za-z][\w-]{1,30})/i);
+  const packageName = m ? m[1] : text.match(/\b(?:package|plan|rate|bandwidth)\s+(?:of\s+|to\s+|for\s+|the\s+|a\s+|an\s+)?([A-Za-z][\w-]{1,30})\b/i)?.[1];
+  if (!/\b(package|plan|rate|bandwidth)\b/i.test(text) && !packageName) return undefined;
+  const identifier = commandTarget(text, ['assign', 'change', 'set', 'upgrade', 'downgrade', 'switch', 'give', 'provide', 'update', 'to', 'for', 'the', 'a', 'an', 'package', 'plan', 'rate', 'bandwidth', 'mbps']);
+  if (!packageName || !identifier) return undefined;
+  return { type: 'assign_package', payload: { identifier, package_name: packageName } };
+}
+
+function closeTicketCommand(text: string): AIAction | undefined {
+  if (text.includes('?')) return undefined;
+  if (!/\b(close|resolve|complete|finish|cancel)\b/i.test(text)) return undefined;
+  const no = text.match(/\b(TKT-\d+)\b/i);
+  const ticketNo = no ? String(no[1]).toUpperCase() : undefined;
+  const identifier = commandTarget(text, ['close', 'resolve', 'complete', 'finish', 'cancel', 'ticket', 'complaint', 'support request']);
+  const status: 'CLOSED' | 'RESOLVED' = /\b(resolve|complete)\b/i.test(text) ? 'RESOLVED' : 'CLOSED';
+  return { type: 'close_ticket', payload: { ...(ticketNo ? { ticket_no: ticketNo } : {}), ...(identifier ? { identifier } : {}), status } };
+}
+
+function setKycStatusCommand(text: string): AIAction | undefined {
+  if (text.includes('?')) return undefined;
+  const verb = text.match(/\b(approve|reject)\b/i)?.[1];
+  if (!verb) return undefined;
+  if (!/\b(kyc|verification|document|doc)\b/i.test(text)) return undefined;
+  const identifier = commandTarget(text, ['approve', 'reject', 'kyc', 'verification', 'document', 'doc', 'request', verb]);
+  if (!identifier) return undefined;
+  return verb.toLowerCase() === 'approve'
+    ? { type: 'approve_kyc', payload: { identifier } }
+    : { type: 'reject_kyc', payload: { identifier } };
+}
+
+export function detectIntent(message: string): Detection {
   const lang = detectLang(message);
   const text = message.trim().toLowerCase();
   const theme = detectThemeCommand(text);
@@ -208,6 +275,24 @@ function detectIntent(message: string): Detection {
   if (topup) return { intent: 'topup_reseller_wallet', lang, action: topup };
   const ticket = ticketCommand(text);
   if (ticket) return { intent: 'create_ticket', lang, action: ticket };
+  // Mutation commands with server-generated payloads (never free-form model input).
+  const payment = recordPaymentCommand(text);
+  if (payment) return { intent: 'record_payment', lang, action: payment };
+  const pkg = assignPackageCommand(text);
+  if (pkg) return { intent: 'assign_package', lang, action: pkg };
+  const close = closeTicketCommand(text);
+  if (close) return { intent: 'close_ticket', lang, action: close };
+  const kyc = setKycStatusCommand(text);
+  if (kyc) return { intent: kyc.type as 'approve_kyc' | 'reject_kyc', lang, action: kyc };
+  // Per-subscriber live usage: "live bandwidth of roshid", "রশ Stokes流量" — answered
+  // locally from subscriber_sessions (never sent to an external provider).
+  const usage = /(bandwidth|traffic|usage|speed|consum|live data|data use|ব্যান্ডউইথ|ট্রাফিক|খরচ|গতি|ব্যবহার)/i.test(text);
+  if (usage) {
+    const byOf = text.match(/\b(?:by|of|for)\s+([a-z0-9][a-z0-9._@-]{1,63})\b/i);
+    const liveEntity = extractEntity(text) || (byOf && !NOT_A_NAME.test(byOf[1]) ? byOf[1] : undefined);
+    if (liveEntity) return { intent: 'subscriber_live', lang, entity: liveEntity };
+    return { intent: 'online_users', lang };
+  }
   // A named subscriber takes priority over topic keywords: "isa's ONU info"
   // must not be answered with the generic OLT health table.
   const entity = extractEntity(text);
@@ -223,10 +308,10 @@ type Ctx = { role: string; actor: AIActor };
 type Row = Record<string, any>;
 
 async function one(pool: any, sql: string, params: any[] = []): Promise<Row> {
-  try { const r = await pool.query(sql, params); return r.rows?.[0] || {}; } catch { return {}; }
+  try { const r = await pool.query(sql, params); return r.rows?.[0] || {}; } catch (e: any) { console.error('[AI] one() query failed:', e?.message || e); return {}; }
 }
 async function many(pool: any, sql: string, params: any[] = []): Promise<Row[]> {
-  try { const r = await pool.query(sql, params); return r.rows || []; } catch { return []; }
+  try { const r = await pool.query(sql, params); return r.rows || []; } catch (e: any) { console.error('[AI] many() query failed:', e?.message || e); return []; }
 }
 const num = (v: any) => Number(v || 0);
 const money = (v: any, symbol = '৳') => `${symbol}${num(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -319,9 +404,9 @@ async function intentExtras(pool: any, ctx: Ctx, intent: string, entity?: string
   switch (intent) {
     case 'dues': {
       if (can(MONEY_ROLES) || role === 'RESELLER') {
-        const [sql, p] = bind(`SELECT s.client_code, s.full_name, s.phone, i.due_amount, s.monthly_bill
+        const [sql, p] = bind(`SELECT s.client_code, s.full_name, s.phone, SUM(i.due_amount)::numeric AS due_amount, s.monthly_bill
           FROM invoices i JOIN subscribers s ON s.id=i.subscriber_id
-          WHERE i.due_amount > 0${sc.sql} ORDER BY i.due_amount DESC LIMIT 10`, sc.params);
+          WHERE i.due_amount > 0${sc.sql} GROUP BY s.id, s.client_code, s.full_name, s.phone, s.monthly_bill ORDER BY due_amount DESC LIMIT 10`, sc.params);
         rows = await many(pool, sql, p);
       }
       break;
@@ -466,6 +551,20 @@ async function intentExtras(pool: any, ctx: Ctx, intent: string, entity?: string
       rows = await many(pool, sql.replace(/\$E/g, () => `$${p.length + 1}`), [...p, `%${entity}%`]);
       break;
     }
+    case 'subscriber_live': {
+      if (!entity) break;
+      const [sql, p] = bind(`SELECT s.client_code, s.full_name, s.username, s.status AS subscriber_status, s.package_name,
+        ss.status AS session_status, ss.ip_address, ss.mac_address, ss.rx_bps, ss.tx_bps, ss.rx_bytes, ss.tx_bytes, ss.uptime_sec, ss.updated_at,
+        r.name AS router_name
+        FROM subscribers s
+        LEFT JOIN (SELECT DISTINCT ON (username) username, status, ip_address, mac_address, rx_bps, tx_bps, rx_bytes, tx_bytes, uptime_sec, updated_at, router_id
+                   FROM subscriber_sessions ORDER BY username, updated_at DESC) ss ON ss.username = s.username
+        LEFT JOIN network_routers r ON r.id = ss.router_id
+        WHERE (s.client_code ILIKE $E OR s.username ILIKE $E OR s.full_name ILIKE $E OR s.phone ILIKE $E)${sc.sql}
+        ORDER BY ss.updated_at DESC NULLS LAST LIMIT 5`, sc.params);
+      rows = await many(pool, sql.replace(/\$E/g, () => `$${p.length + 1}`), [...p, `%${entity}%`]);
+      break;
+    }
     case 'gis_sites': {
       if (can(['SUPER_ADMIN', 'NOC_ENGINEER', 'BILLING_OPERATOR', 'TECHNICIAN'])) {
         stats.gis_sites = num((await one(pool, `SELECT COUNT(*)::int n FROM distribution_boxes`)).n);
@@ -502,7 +601,7 @@ function table(headers: string[], rows: any[][]) {
 }
 const esc = (v: any) => String(v ?? '-').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 
-function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows: Row[], ctx: Ctx, entity?: string, value?: 'dark' | 'light' | 'toggle', action?: AIAction): { reply: string; cards: AICard[] } {
+export function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows: Row[], ctx: Ctx, entity?: string, value?: 'dark' | 'light' | 'toggle', action?: AIAction): { reply: string; cards: AICard[] } {
   const T = lang === 'bn' ? BN.title : EN.title;
   const bn = lang === 'bn';
   const cards: AICard[] = [];
@@ -725,6 +824,27 @@ function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows:
       cards.push({ title: bn ? 'OLT ম্যানেজার' : 'OLT manager', url: '/olts' });
       break;
     }
+    case 'subscriber_live': {
+      if (!NETWORK_ROLES.includes(ctx.actor.role) && !['BILLING_OPERATOR', 'TECHNICIAN', 'RESELLER'].includes(ctx.actor.role)) {
+        body = `### ${T.online}\n\n${denyText(bn)}`;
+        break;
+      }
+      const notFound = bn ? `\`${esc(entity)}\` দিয়ে কোনো গ্রাহক পাওয়া যায়নি।` : `No subscriber found for \`${esc(entity)}\`.`;
+      body = `### ${bn ? '🔌 লাইভ ব্যবহার' : '🔌 Live usage'} · \`${esc(entity)}\`\n\n` + (rows.length
+        ? rows.map(r => {
+            const head = `**${esc(r.full_name)}** · \`${esc(r.client_code)}\` · ${esc(r.subscriber_status)}\n`;
+            if (!r.session_status) return head + `- ${bn ? 'এখন কোনো লাইভ সেশন নেই (অফলাইন)।' : 'No live session right now (offline).'}\n`;
+            return head + table(
+              bn ? ['সেশন', 'IP', 'রাউটার', 'আপটাইম', 'Rx now', 'Tx now', 'মোট Rx', 'মোট Tx']
+                : ['Session', 'IP', 'Router', 'Uptime', 'Rx now', 'Tx now', 'Total Rx', 'Total Tx'],
+              [[r.session_status === 'ONLINE' ? '🟢 Online' : esc(r.session_status), esc(r.ip_address), esc(r.router_name),
+                fmtUptime(r.uptime_sec), fmtBps(r.rx_bps), fmtBps(r.tx_bps), fmtBytes(r.rx_bytes), fmtBytes(r.tx_bytes)]]
+            ) + `- ${bn ? 'প্যাকেজ' : 'Package'}: ${esc(r.package_name)} · ${bn ? 'আপডেট' : 'Updated'}: ${esc(r.updated_at ? new Date(r.updated_at).toISOString().slice(0, 19).replace('T', ' ') + ' UTC' : '-')}\n`;
+          }).join('\n')
+        : `> ${notFound}`);
+      cards.push({ title: bn ? 'লাইভ সেশন' : 'Live sessions', url: '/subscribers/live' });
+      break;
+    }
     case 'ui_theme': {
       const label = value === 'toggle' ? (bn ? 'বদলানো' : 'switched')
         : value === 'dark' ? (bn ? 'ডার্ক' : 'dark') : (bn ? 'লাইট' : 'light');
@@ -770,6 +890,48 @@ function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>, rows:
       cards.push({ title: bn ? 'টিকেট' : 'Tickets', url: '/tickets' });
       break;
     }
+    case 'record_payment': {
+      const p = action?.type === 'record_payment' ? action.payload : null;
+      body = `### ${T.collection}\n\n` + (p
+        ? bn
+          ? `💰 **${money(p.amount)}** — \`${esc(p.identifier)}\`-এর পরিমাণ (${p.gateway || 'cash'})-এ রেকর্ড করা হচ্ছে…`
+          : `💰 **${money(p.amount)}** from **${esc(p.identifier)}** via ${p.gateway || 'cash'} — recording…`
+        : `> ${bn ? 'পেমেন্ট রেকর্ড করা যায়নি।' : 'Could not prepare a payment record.'}`);
+      cards.push({ title: bn ? 'কালেকশন' : 'Collection', url: '/collections' });
+      break;
+    }
+    case 'assign_package': {
+      const p = action?.type === 'assign_package' ? action.payload : null;
+      body = `### ${T.customer}\n\n` + (p
+        ? `> ${bn ? `\`${esc(p.identifier)}\`-কে **${esc(p.package_name)}** প্যাকেজে স্থানান্তর করা হচ্ছে…` : `Moving \`${esc(p.identifier)}\` to package **${esc(p.package_name)}**…`}`
+        : `> ${bn ? 'প্যাকেজ পরিবর্তন করা যায়নি।' : 'Could not prepare a package change.'}`);
+      cards.push({ title: bn ? 'গ্রাহক তালিকা' : 'Subscriber list', url: '/clients' });
+      break;
+    }
+    case 'close_ticket': {
+      const p = action?.type === 'close_ticket' ? action.payload : null;
+      body = `### ${T.ticket}\n\n` + (p
+        ? `> ${bn ? `\`${esc(p.ticket_no || p.identifier || '')}\` টিকেট **${p.status === 'CLOSED' ? 'বন্ধ করা হচ্ছে…' : 'সমাধান করা হচ্ছে…'}**` : `Closing ticket **${esc(p.ticket_no || p.identifier || '')}**…`}`
+        : `> ${bn ? 'টিকেট বন্ধ করা যায়নি।' : 'Could not close the ticket.'}`);
+      cards.push({ title: bn ? 'সব টিকেট' : 'All tickets', url: '/tickets' });
+      break;
+    }
+    case 'approve_kyc': {
+      const p = action?.type === 'approve_kyc' ? action.payload : null;
+      body = `### ${T.kyc}\n\n` + (p
+        ? `> ${bn ? `\`${esc(p.identifier)}\`-এর KYC ডকুমেন্ট **অ্যাপ্রুভ করা হচ্ছে…**` : `Approving KYC document of \`${esc(p.identifier)}\`…`}`
+        : `> ${bn ? 'KYC অ্যাপ্রুভ করা যায়নি।' : 'Could not approve the KYC document.'}`);
+      cards.push({ title: bn ? 'গ্রাহক তালিকা' : 'Subscribers', url: '/clients' });
+      break;
+    }
+    case 'reject_kyc': {
+      const p = action?.type === 'reject_kyc' ? action.payload : null;
+      body = `### ${T.kyc}\n\n` + (p
+        ? `> ${bn ? `\`${esc(p.identifier)}\`-এর KYC ডকুমেন্ট **প্রত্যাখ্যাত করা হচ্ছে…**` : `Rejecting KYC document of \`${esc(p.identifier)}\`…`}`
+        : `> ${bn ? 'KYC প্রত্যাখ্যাত করা যায়নি।' : 'Could not reject the KYC document.'}`);
+      cards.push({ title: bn ? 'গ্রাহক তালিকা' : 'Subscribers', url: '/clients' });
+      break;
+    }
     default: {
       body = `### ${T.help}\n\n` + (bn
         ? 'আমি আপনার লাইভ ISP ডেটা থেকে প্রশ্নের উত্তর দিই: কালেকশন, গ্রাহক সংখ্যা, বকেয়া, মেয়াদ, রাউটার হেলথ, OLT, টিকেট, লিড, হটস্পট, ইনভেন্টরি ও প্যাকেজ রেট।\n\nকোনো গ্রাহকের নাম, কাস্টমার আইডি বা ফোন নম্বর দিতে পারেন। নেটওয়ার্ক ভূমিকায় “isa-র ONU তথ্য” বললে তার ONU-র বিবরণ দেখাব।'
@@ -793,14 +955,20 @@ const INTENT_ROLES: Record<string, string[]> = {
   reseller_wallet: [...MONEY_ROLES, 'RESELLER'],
   revenue_month: MONEY_ROLES,
   staff_collection: MONEY_ROLES,
-  router_health: [...NETWORK_ROLES, 'TECHNICIAN'],
+  router_health: [...NETWORK_ROLES, 'BILLING_OPERATOR', 'TECHNICIAN'],
   olt_health: [...NETWORK_ROLES, 'TECHNICIAN'],
   subscriber_onu: [...NETWORK_ROLES, 'TECHNICIAN'],
+  subscriber_live: [...NETWORK_ROLES, 'BILLING_OPERATOR', 'TECHNICIAN', 'RESELLER'],
   // Creating records is a SUPER_ADMIN-only AI action; others get the standard notice.
   create_subscriber: ['SUPER_ADMIN'],
   set_subscriber_status: ['SUPER_ADMIN'],
   topup_reseller_wallet: ['SUPER_ADMIN'],
   create_ticket: ['SUPER_ADMIN'],
+  record_payment: MONEY_ROLES,
+  assign_package: ['SUPER_ADMIN', 'BILLING_OPERATOR'],
+  close_ticket: CRM_ROLES,
+  approve_kyc: CRM_ROLES,
+  reject_kyc: CRM_ROLES,
   leads: CRM_ROLES,
   kyc: CRM_ROLES,
   gis_sites: [...NETWORK_ROLES, 'BILLING_OPERATOR', 'TECHNICIAN'],
@@ -820,20 +988,178 @@ function filterStatsForRole(stats: Record<string, any>, role: string) {
 }
 const TITLE_KEYS: Record<string, string> = {
   collection_today: 'collection', revenue_month: 'collection', dues: 'dues', customer_stats: 'customers',
-  online_users: 'online', expiring: 'expiring', router_health: 'router', olt_health: 'olt', subscriber_onu: 'olt', tickets: 'ticket',
+  online_users: 'online', expiring: 'expiring', router_health: 'router', olt_health: 'olt', subscriber_onu: 'olt', subscriber_live: 'online', tickets: 'ticket',
   new_connections: 'newconn', reseller_wallet: 'reseller', hotspot: 'hotspot', inventory: 'stock',
   packages: 'package', payment_gateways: 'gateway', staff_collection: 'staff', leads: 'lead', kyc: 'kyc',
   gis_sites: 'gis', customer_lookup: 'customer', ui_theme: 'theme', create_subscriber: 'customer',
   set_subscriber_status: 'customer', topup_reseller_wallet: 'reseller', create_ticket: 'ticket',
+  record_payment: 'collection', assign_package: 'customer', close_ticket: 'ticket',
+  approve_kyc: 'kyc', reject_kyc: 'kyc',
   greeting: 'help', help: 'help', free_form: 'help', sms_templates: 'help',
 };
 function pct(part: number, total: number) {
   return total > 0 ? `${Math.round((part / total) * 100)}%` : '—';
 }
+const fmtBps = (v: any) => { const n = num(v); return n > 0 ? `${(n / 1e6).toFixed(2)} Mbps` : '—'; };
+const fmtBytes = (v: any) => {
+  const n = num(v);
+  return n >= 1e9 ? `${(n / 1e9).toFixed(2)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${(n / 1e3).toFixed(1)} KB` : `${n} B`;
+};
+const fmtUptime = (sec: any) => {
+  const n = num(sec); if (!n) return '—';
+  const d = Math.floor(n / 86400), h = Math.floor((n % 86400) / 3600), m = Math.floor((n % 3600) / 60);
+  return `${d ? d + 'd ' : ''}${h ? h + 'h ' : ''}${m}m`;
+};
 
 /* ------------------------- external LLM (opt-in) ------------------------ */
 
-async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn' | 'en', s: Record<string, any>): Promise<{ reply: string; provider: 'gemini' | 'openai' | 'nim' } | null> {
+type ExtReply = { reply: string; provider: 'gemini' | 'openai' | 'nim'; action?: AIAction; intent?: string };
+
+/** External LLM intents that mutate records — the external path never gets
+ *  the full action set, and only where INTENT_ROLES allows the actor's role. */
+const LLM_MUTATION_INTENTS = ['set_subscriber_status', 'topup_reseller_wallet', 'create_ticket', 'create_subscriber'];
+const LLM_PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+
+/** Top live rows for LLM context — read-only, role-gated, bounded size. */
+async function readOnlyRows(pool: any, ctx: Ctx): Promise<Row[]> {
+  const out: Row[] = [];
+  for (const intent of ['dues', 'expiry', 'new_connections', 'router_health', 'olt_health', 'tickets', 'reseller_wallet', 'subscriber_live']) {
+    if (!intentAllowed(intent, ctx.actor.role)) continue;
+    const { rows } = await intentExtras(pool, ctx, intent, undefined);
+    out.push(...rows.slice(0, 15));
+  }
+  return out;
+}
+
+function buildExternalContext(ctx: Ctx, stats: Record<string, any>, rows: Row[]): string {
+  const samples: Row[] = [];
+  for (const r of rows) {
+    if (samples.length >= 30) break;
+    const s: Row = {};
+    for (const [k, v] of Object.entries(r || {}).slice(0, 10)) s[k] = typeof v === 'bigint' ? v.toString() : v;
+    samples.push(s);
+  }
+  return JSON.stringify({ scope: ctx.actor.role, period: 'live / current billing cycle',
+    metrics: filterStatsForRole(stats, ctx.actor.role), currency: 'BDT', samples });
+}
+
+/** Identifiers the external LLM may name — harvested from live context rows
+ *  plus what the message itself lets us extract. Nothing outside this set is
+ *  actionable; invented names fail validation and yield an answer instead. */
+function externalEntityIds(rows: Row[], message: string): Set<string> {
+  const ids = new Set<string>();
+  for (const r of rows) {
+    for (const v of Object.values(r || {})) {
+      const s = String(v ?? '').trim().toLowerCase();
+      if (s.length >= 3 && s.length <= 64 && /^[a-z0-9@._-]+$/i.test(s)) ids.add(s);
+    }
+  }
+  for (const x of [extractEntity(message), commandTarget(message)]) if (x && x.length >= 3) ids.add(x.toLowerCase());
+  return ids;
+}
+
+function isAllowlistedId(ids: Set<string>, id: string): boolean {
+  const v = String(id || '').trim().toLowerCase();
+  return v.length >= 3 && ids.has(v);
+}
+
+function statusValue(parsed: any): 'ACTIVE' | 'SUSPENDED' | undefined {
+  const s = String(parsed.status || '').trim().toUpperCase();
+  if (/SUSPEND|DEACTIVATE|DISABLE|BLOCK|STOP|OFF/i.test(s)) return 'SUSPENDED';
+  if (/ACTIVATE|ENABLE|ON|RESTORE|UNBLOCK/i.test(s)) return 'ACTIVE';
+  return undefined;
+}
+
+/** Validate an LLM-suggested action and build the closed-allowlist payload.
+ *  Every payload value is server-generated or strictly validated — the model
+ *  only picks an intent and names an entity that already exists in context. */
+export function externalActionFromLLM(llmText: string, ctx: Ctx, message: string, ids: Set<string>): { intent: string; action: AIAction } | undefined {
+  if (message.includes('?')) return undefined; // questions are answers, never commands
+  let parsed: any;
+  try { parsed = JSON.parse(String(llmText || '')); } catch { return undefined; }
+  if (!parsed || typeof parsed !== 'object') return undefined;
+  const intent = String(parsed.intent || parsed.type || '').trim();
+  if (!intent || !LLM_MUTATION_INTENTS.includes(intent) || !intentAllowed(intent, ctx.actor.role)) return undefined;
+  switch (intent) {
+    case 'set_subscriber_status': {
+      const id = String(parsed.identifier || '').trim();
+      const status = statusValue(parsed);
+      if (!status || !isAllowlistedId(ids, id)) return undefined;
+      return { intent, action: { type: 'set_subscriber_status', payload: { identifier: id, status } } };
+    }
+    case 'topup_reseller_wallet': {
+      const id = String(parsed.identifier || '').trim();
+      const amount = Number(parsed.amount);
+      if (!isAllowlistedId(ids, id) || !Number.isFinite(amount) || !(amount > 0) || amount > 100000) return undefined;
+      return { intent, action: { type: 'topup_reseller_wallet', payload: { identifier: id, amount } } };
+    }
+    case 'create_ticket': {
+      const subject = String(parsed.subject || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      const pv = String(parsed.priority || '').toUpperCase();
+      const priority = LLM_PRIORITIES.includes(pv) ? (pv as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL') : 'MEDIUM';
+      if (!subject) return undefined;
+      const id = String(parsed.identifier || '').trim();
+      return { intent, action: { type: 'create_ticket', payload: { subject, priority, ...(id && isAllowlistedId(ids, id) ? { identifier: id } : {}) } } };
+    }
+    case 'create_subscriber':
+      // Server generates the draft (username, password); the model only picks the intent.
+      return { intent, action: { type: 'create_subscriber', payload: randomSubscriberDraft() } };
+  }
+}
+
+function parseJsonReply(text: string): any {
+  const t = String(text || '').trim().replace(/^```json\s*/i, '').replace(/```\s*$/g, '').trim();
+  try { return JSON.parse(t); } catch { return undefined; }
+}
+
+function finishExternal(rawText: any, ctx: Ctx, message: string, ids: Set<string>, provider: 'gemini' | 'openai' | 'nim'): ExtReply {
+  const text = typeof rawText === 'string' ? rawText : '';
+  const parsed = parseJsonReply(text);
+  if (parsed && parsed.type === 'action') {
+    const ext = externalActionFromLLM(text, ctx, message, ids);
+    if (ext) return { provider, intent: ext.intent, action: ext.action, reply: '' };
+  }
+  const answer = (parsed && typeof parsed.text === 'string' && parsed.text.trim() ? parsed.text : text) || 'I could not process that.';
+  return { reply: String(answer).slice(0, 4000), provider };
+}
+
+/** Lightweight connection check for the configured external provider. Used by
+ *  the AI settings page — a free-form question is the real test. */
+export async function testExternalProvider(providerRaw?: string, keyRaw?: string): Promise<{ ok: boolean; message: string }> {
+  const providers = ['gemini', 'openai', 'nim'];
+  const providerName = providers.includes(String(providerRaw || '')) ? String(providerRaw) : String(await getCached('ai.provider', 'auto'));
+  if (!providers.includes(providerName)) return { ok: false, message: 'No external provider configured' };
+  const key = String(keyRaw || '').trim() || String(await getCached(`ai.${providerName}_api_key`, ''));
+  if (!key) return { ok: false, message: `No API key configured for ${providerName}` };
+  try {
+    const timeout = (AbortSignal as any).timeout(8000);
+    if (providerName === 'openai') {
+      const r = await fetch('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${key}` }, signal: timeout });
+      return { ok: r.ok, message: r.ok ? 'OpenAI connection OK' : `OpenAI returned ${r.status}` };
+    }
+    if (providerName === 'nim') {
+      const base = String(await getCached('ai.nim_base_url', 'https://integrate.api.nvidia.com/v1')).replace(/\/+$/, '');
+      const r = await fetch(`${base}/models`, { headers: { Authorization: `Bearer ${key}` }, signal: timeout });
+      if (r.ok) return { ok: true, message: 'NIM connection OK' };
+      // Some NIM builds don't serve /models — fall back to a minimal chat call.
+      const model = String(await getCached('ai.nim_model', 'nvidia/nemotron-3-ultra-550b-a55b'));
+      const r2 = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
+        signal: timeout,
+      });
+      return { ok: r2.ok, message: r2.ok ? 'NIM connection OK' : `NIM returned ${r2.status}` };
+    }
+    const model = String(await getCached('ai.gemini_model', 'gemini-3.8-flash'));
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}?key=${encodeURIComponent(key)}`, { signal: timeout });
+    return { ok: r.ok, message: r.ok ? `Gemini connection OK (${model})` : `Gemini returned ${r.status}` };
+  } catch (e: any) {
+    return { ok: false, message: `Connection failed: ${e?.message || e}` };
+  }
+}
+
+async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn' | 'en', s: Record<string, any>, history: Array<{ role: string; content: string }> = []): Promise<ExtReply | null> {
   const allow = await getCached('ai.allow_external', false);
   if (!allow) return null;
   const provider = String(await getCached('ai.provider', 'auto'));
@@ -841,29 +1167,21 @@ async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn'
   const key = String(await getCached(`ai.${provider}_api_key`, ''));
   if (!key) return null;
 
-  const safe = filterStatsForRole(s, ctx.role);
-  const context = JSON.stringify({
-    scope: ctx.actor.role,
-    period: 'live / current billing cycle',
-    metrics: {
-      total_customers: safe.total_clients, active: safe.active_clients, expired: safe.expired_clients,
-      online_users: safe.online_users, open_tickets: safe.open_tickets,
-      ...(safe.today_collection !== undefined ? { today_collection: safe.today_collection, total_dues: safe.total_dues, reseller_wallet: safe.reseller_wallet } : {}),
-      ...(safe.routers_total !== undefined ? { routers_online: safe.routers_online, routers_total: safe.routers_total } : {}),
-    },
-    currency: 'BDT',
-  });
+  const rows = await readOnlyRows(pool, ctx);
+  const context = buildExternalContext(ctx, s, rows);
+  const ids = externalEntityIds(rows, message);
+  const hist = (Array.isArray(history) ? history.slice(-6).filter((h: any) => h && typeof h.content === 'string' && h.content) : [])
+    .map((h: any) => `${h.role === 'user' ? 'User' : 'Assistant'}: ${String(h.content).slice(0, 4000)}`);
+  const histSection = hist.length ? `\n\nHistory (previous turns):\n${hist.join('\n')}` : '';
   const system = `You are IzanDesk AI Copilot, an ISP operations assistant. Reply in ${lang === 'bn' ? 'Bengali' : 'English'}. ` +
-    `Use ONLY the aggregate metrics in the provided context. Never invent numbers, never request or repeat passwords, ` +
-    `tokens, phone numbers or personal data. If the answer is not in the context, say you don't have that data and suggest ` +
-    `asking one of the supported topics. For interface/theme requests, tell the user to say "dark mode" or "light mode" ` +
-    `and the app will switch it (or use the top-bar theme button) — never claim you cannot control the interface. ` +
-    `For subscriber creation, tell a super admin to say "create a subscriber with random credentials" and the app will ` +
-    `create it through the normal validated API; otherwise point them to the Add Subscriber form. Status changes, ` +
-    `reseller wallet recharges and ticket creation are also available as direct commands to a super admin — suggest ` +
-    `the exact phrasing ("suspend <client code>", "top up <reseller> wallet <amount>", "create a ticket about …") ` +
-    `instead of claiming you cannot perform them. ` +
-    `Keep it short and practical. Context: ${context}`;
+    `Reply ONLY with valid JSON in ${lang === 'bn' ? 'Bengali' : 'English'}. Rules: ` +
+    `If the user asked a question about ISP operations data, reply with {"type":"answer","text":"<short practical answer>"} - never invent numbers; if the answer is not in the context, say you don't have that data and suggest asking one of the supported topics. ` +
+    `If the user clearly stated a command that matches one of the actions below, reply with the matching action object; otherwise reply with an answer. Actions: ` +
+    `"set_subscriber_status": {"intent":"set_subscriber_status","identifier":"<client code / username / phone / name>","status":"ACTIVE" or "SUSPENDED"} - only when the user asked to suspend/activate/restore a subscriber; ` +
+    `"topup_reseller_wallet": {"intent":"topup_reseller_wallet","identifier":"<reseller>","amount":<positive number>} - only for explicit recharge commands, amount in BDT; ` +
+    `"create_ticket": {"intent":"create_ticket","subject":"<≤120 chars, from the user's words>","priority":"LOW|MEDIUM|HIGH|CRITICAL","identifier":"<optional subscriber code>"} - only when the user asked to open/raise/file a ticket; ` +
+    `"create_subscriber": {"intent":"create_subscriber"} - only when the user explicitly asks to create a subscriber with random credentials. ` +
+    `Keep the answer text short. Identifiers must appear in the context or the user's message; never invent identifiers or numbers. Context: ${context}${histSection}`;
 
   try {
     if (provider === 'openai') {
@@ -871,13 +1189,12 @@ async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn'
       const r = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: message }], max_tokens: 600 }),
+        body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: message }], max_tokens: 500, response_format: { type: 'json_object' } }),
         signal: (AbortSignal as any).timeout(12000),
       });
       if (!r.ok) return null;
       const j: any = await r.json();
-      const text = j?.choices?.[0]?.message?.content;
-      return text ? { reply: String(text).slice(0, 4000), provider: 'openai' } : null;
+      return finishExternal(j?.choices?.[0]?.message?.content, ctx, message, ids, 'openai');
     }
     if (provider === 'nim') {
       // NVIDIA NIM exposes an OpenAI-compatible Chat Completions API, both for
@@ -887,24 +1204,22 @@ async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn'
       const r = await fetch(`${base}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: message }], max_tokens: 600, temperature: 0.2, stream: false }),
+        body: JSON.stringify({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: message }], max_tokens: 500, temperature: 0.2, stream: false, response_format: { type: 'json_object' } }),
         signal: (AbortSignal as any).timeout(20000),
       });
       if (!r.ok) return null;
       const j: any = await r.json();
-      const text = j?.choices?.[0]?.message?.content;
-      return text ? { reply: String(text).slice(0, 4000), provider: 'nim' } : null;
+      return finishExternal(j?.choices?.[0]?.message?.content, ctx, message, ids, 'nim');
     }
-    const model = String(await getCached('ai.gemini_model', 'gemini-2.0-flash'));
+    const model = String(await getCached('ai.gemini_model', 'gemini-3.8-flash'));
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: message }] }], generationConfig: { maxOutputTokens: 600 } }),
+      body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: message }] }], generationConfig: { maxOutputTokens: 500, responseMimeType: 'application/json' } }),
       signal: (AbortSignal as any).timeout(12000),
     });
     if (!r.ok) return null;
     const j: any = await r.json();
-    const text = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('\n');
-    return text ? { reply: String(text).slice(0, 4000), provider: 'gemini' } : null;
+    return finishExternal(j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('\n'), ctx, message, ids, 'gemini');
   } catch {
     return null;
   }
@@ -912,7 +1227,12 @@ async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn'
 
 /* ------------------------------- public -------------------------------- */
 
-export async function askAI(pool: any, actor: AIActor, message: string, _history: Array<{ role: string; content: string }> = []): Promise<AIResult> {
+export async function askAI(pool: any, actor: AIActor, message: string, history: Array<{ role: string; content: string }> = [], opts?: { mode?: 'auto' | 'local' | 'llm' }): Promise<AIResult> {
+  // 'local': built-in engine only — never call the external provider.
+  // 'llm': ask the external provider for free-form questions (falls back to
+  //        the local answer if the provider isn't ready).
+  // 'auto' (default): external provider when ready, else local.
+  const mode = opts?.mode === 'local' || opts?.mode === 'llm' ? opts.mode : 'auto';
   const ctx: Ctx = { role: actor.role, actor };
   const start = Date.now();
   const detected = detectIntent(message);
@@ -935,9 +1255,23 @@ export async function askAI(pool: any, actor: AIActor, message: string, _history
     // Only the deterministic local engine may emit an action — never the LLM.
     if (detected.action) action = detected.action;
     else if (detected.intent === 'ui_theme' && detected.value) action = { type: 'set_theme', value: detected.value };
-    if (detected.intent === 'free_form') {
-      const external = await freeFormExternal(pool, ctx, message, detected.lang, merged);
-      if (external) { reply = external.reply; provider = external.provider; }
+    if (detected.intent === 'free_form' || (mode === 'llm' && detected.intent === 'greeting')) {
+      // In 'local' mode the built-in engine answers directly; in 'llm' mode the
+      // provider is always tried, falling back to the local answer above when
+      // it isn't configured/allowed. Greeting is routed through the provider in
+      // 'llm' mode — a user who toggled it expects chat replies from the LLM.
+      const external = mode === 'local' ? null : await freeFormExternal(pool, ctx, message, detected.lang, merged, history);
+      if (external) {
+        reply = external.reply;
+        provider = external.provider;
+        // The external LLM may return a validated, allowlisted action — reuse
+        // the same render path as local engine actions so the client executes it.
+        if (external.action) {
+          const rr = render(external.action.type as string, detected.lang, merged, [], ctx, undefined, undefined, external.action);
+          reply = rr.reply;
+          cards = rr.cards;
+        }
+      }
     }
   }
 

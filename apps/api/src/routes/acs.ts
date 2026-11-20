@@ -4,6 +4,43 @@ import { asyncHandler, networkGuard } from './helpers';
 import { getCached } from '../integrations/settings';
 
 const router: Router = Router();
+// Per-user sliding-window throttle for mutating ACS actions. Connection
+// requests and config writes are controlled operations; bursts get 429.
+const acsWriteBuckets = new Map<string, { count: number; reset: number }>();
+function acsWriteGuard(req: any, res: any, next: any) {
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
+  const limit = Math.max(1, Number(process.env.ACS_WRITE_LIMIT_PER_MIN) || 10);
+  const key = String(req.user?.id || 'anon');
+  const now = Date.now();
+  let b = acsWriteBuckets.get(key);
+  if (!b || now >= b.reset) { b = { count: 0, reset: now + 60_000 }; acsWriteBuckets.set(key, b); }
+  if (b.count >= limit) {
+    return res.status(429).json({ ok: false, message: 'ACS mutation rate limit reached — wait a minute and retry.', retry_after_sec: Math.max(1, Math.ceil((b.reset - now) / 1000)) });
+  }
+  b.count++;
+  return next();
+}
+
+// The link route is defined above the guards: BILLING_OPERATOR passes the read
+// guard but is in this route's requireRole allowlist, so it can link devices (F4).
+router.post('/devices/:id/link', requireRole(['SUPER_ADMIN','NOC_ENGINEER','BILLING_OPERATOR']), asyncHandler(async (req, res) => {
+  const id = String(req.params.id);
+  const subscriberId = req.body?.subscriber_id || null;
+  if (subscriberId) {
+    // Link only when the target subscriber actually exists (acs_devices.subscriber_id is FK).
+    const sub = await pool.query('SELECT id FROM subscribers WHERE id=$1', [subscriberId]).catch(() => ({ rows: [] as any[] }));
+    if (!sub.rows[0]) return res.status(400).json({ ok: false, message: 'No subscriber with that id' });
+  }
+  await pool.query(
+    `INSERT INTO acs_devices(genieacs_id, subscriber_id, updated_at) VALUES($1,$2,now())
+      ON CONFLICT (genieacs_id) DO UPDATE SET subscriber_id=EXCLUDED.subscriber_id, updated_at=now()`,
+    [id, subscriberId]
+  );
+  await logAction({ device_id: id, action: 'LINK_SUBSCRIBER', payload: { subscriber_id: subscriberId }, status: 'DONE', created_by: (req as any).user?.id });
+  res.json({ ok: true });
+}));
+
+router.use(acsWriteGuard);
 router.use(networkGuard);
 
 function requireRole(roles: string[]) {
@@ -61,7 +98,7 @@ function pmeta(v: any) {
   return { value: v };
 }
 
-function flattenParams(node: any, prefix = '', out: Array<{ path: string; value: any; type?: string; timestamp?: string; writable?: boolean; object?: boolean }> = [], depth = 0): any[] {
+export function flattenParams(node: any, prefix = '', out: Array<{ path: string; value: any; type?: string; timestamp?: string; writable?: boolean; object?: boolean }> = [], depth = 0): any[] {
   if (!node || typeof node !== 'object' || depth > 20) return out;
   for (const [k, v] of Object.entries(node)) {
     if (k.startsWith('_')) continue;
@@ -84,7 +121,7 @@ function flattenParams(node: any, prefix = '', out: Array<{ path: string; value:
   return out;
 }
 
-function getPath(obj: any, path: string): any {
+export function getPath(obj: any, path: string): any {
   if (!obj) return undefined;
   const parts = path.replace(/\.$/, '').split('.').filter(Boolean);
   let cur = obj;
@@ -95,7 +132,7 @@ function getPath(obj: any, path: string): any {
   return cur;
 }
 
-function collectInstances(parent: any): Array<{ key: string; node: any }> {
+export function collectInstances(parent: any): Array<{ key: string; node: any }> {
   if (!parent || typeof parent !== 'object') return [];
   return Object.entries(parent)
     .filter(([k, v]) => /^\d+$/.test(k) && v && typeof v === 'object')
@@ -111,7 +148,7 @@ function bytesHuman(n: any) {
   return `${v >= 10 || i === 0 ? v.toFixed(0) : v.toFixed(2)} ${units[i]}`;
 }
 
-function buildDiagnostics(device: any) {
+export function buildDiagnostics(device: any) {
   const flat = flattenParams(device);
   const hosts: any[] = [];
   const hostPaths = ['InternetGatewayDevice.LANDevice.1.Hosts.Host', 'Device.Hosts.Host'];
@@ -132,7 +169,6 @@ function buildDiagnostics(device: any) {
   }
 
   const wifiAssociations: any[] = [];
-  const wlanRoots = ['InternetGatewayDevice.LANDevice.1.WLANConfiguration', 'Device.WiFi.AccessPoint'];
   // TR-098 AssociatedDevice under each WLANConfiguration instance
   for (const { key, node } of collectInstances(getPath(device, 'InternetGatewayDevice.LANDevice.1.WLANConfiguration'))) {
     const ssid = pv(node?.SSID);
@@ -232,17 +268,19 @@ function buildDiagnostics(device: any) {
   };
 }
 
-function qs(params: Record<string, any>) {
+export function qs(params: Record<string, any>) {
   const u = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
-    if (v == null || v === '') continue;
+    // connection_request must be sent even when empty — GenieACS triggers the
+    // CPE connection on presence (url.searchParams.has('connection_request')).
+    if (v == null || (v === '' && k !== 'connection_request')) continue;
     u.set(k, typeof v === 'string' ? v : JSON.stringify(v));
   }
   const s = u.toString();
   return s ? `?${s}` : '';
 }
 
-function pickDeviceSummary(d: any) {
+export function pickDeviceSummary(d: any) {
   const g = (path: string) => {
     try { return path.split('.').reduce((o: any, k) => (o && o[k] != null ? o[k] : undefined), d); } catch { return undefined; }
   };
@@ -286,7 +324,7 @@ async function logAction(args: { device_id: string; action: string; task_name?: 
   } catch {}
 }
 
-async function upsertAcsDevice(summary: any) {
+export async function upsertAcsDevice(summary: any) {
   if (!summary?.id) return;
   try {
     await pool.query(
@@ -305,7 +343,9 @@ async function upsertAcsDevice(summary: any) {
          last_inform_at=COALESCE(EXCLUDED.last_inform_at, acs_devices.last_inform_at),
          tags=EXCLUDED.tags,
          raw_summary=EXCLUDED.raw_summary,
-         status=CASE WHEN EXCLUDED.last_inform_at IS NOT NULL THEN 'ONLINE' ELSE acs_devices.status END,
+         status=CASE WHEN EXCLUDED.last_inform_at IS NOT NULL AND EXCLUDED.last_inform_at > now() - interval '24 hours' THEN 'ONLINE'
+             WHEN acs_devices.last_inform_at IS NOT NULL THEN 'STALE'
+             ELSE 'UNKNOWN' END,
          updated_at=now()`,
       [summary.id, summary.serial_number, summary.oui, summary.product_class, summary.manufacturer, summary.model_name, summary.software_version, summary.hardware_version, summary.connection_request_url, summary.ip_address, summary.last_inform_at, JSON.stringify(summary.tags || []), JSON.stringify(summary)]
     );
@@ -479,9 +519,8 @@ router.post('/devices/:id/discover-parameters', asyncHandler(async (req, res) =>
 router.post('/devices/:id/refresh', asyncHandler(async (req, res) => {
   const id = String(req.params.id);
   const objectName = String(req.body?.objectName || '');
-  const task = objectName ? { name: 'refreshObject', objectName } : { name: 'getParameterValues', parameterNames: [req.body?.parameterName || ''] .filter(Boolean) };
-  // If no specific param given, refresh common roots via getParameterValues on root-ish paths can be heavy; prefer refreshObject for InternetGatewayDevice.
-  const taskBody = objectName ? { name: 'refreshObject', objectName } : { name: 'refreshObject', objectName: req.body?.root || 'InternetGatewayDevice.' };
+  // Prefer refreshObject for broad roots (InternetGatewayDevice. by default).
+  const taskBody = objectName ? { name: 'refreshObject', objectName } : { name: 'refreshObject', objectName: String(req.body?.root || 'InternetGatewayDevice.') };
   try {
     const data = await acsFetch(`/devices/${encodeURIComponent(id)}/tasks${qs({ connection_request: '' })}`, { method: 'POST', body: JSON.stringify(taskBody) });
     await logAction({ device_id: id, action: 'REFRESH', task_name: taskBody.name, task_id: data?._id, payload: taskBody, result: data, status: 'QUEUED', created_by: (req as any).user?.id });
@@ -606,7 +645,7 @@ router.delete('/tasks/:taskId', requireRole(['SUPER_ADMIN','NOC_ENGINEER']), asy
   const cfg = await getAcsConfig();
   if (!cfg.configured) return res.status(501).json({ ok: false, configured: false, message: 'GenieACS not configured' });
   try {
-    const data = await acsFetch(`/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' }).catch(() => ({}));
+    const data = await acsFetch(`/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
     res.json({ ok: true, data });
   } catch (e: any) { res.status(e.status || 502).json({ ok: false, message: e.message }); }
 }));
@@ -650,19 +689,6 @@ router.get('/files', asyncHandler(async (_req, res) => {
   if (!cfg.configured) return res.json({ ok: true, configured: false, data: [] });
   try { const data = await acsFetch('/files/'); res.json({ ok: true, data: Array.isArray(data) ? data : [] }); }
   catch (e:any) { res.status(e.status || 502).json({ ok: false, message: e.message }); }
-}));
-
-// Local mapping/linking
-router.post('/devices/:id/link', requireRole(['SUPER_ADMIN','NOC_ENGINEER','BILLING_OPERATOR']), asyncHandler(async (req, res) => {
-  const id = String(req.params.id);
-  const subscriberId = req.body?.subscriber_id || null;
-  await pool.query(
-    `INSERT INTO acs_devices(genieacs_id, subscriber_id, updated_at) VALUES($1,$2,now())
-     ON CONFLICT (genieacs_id) DO UPDATE SET subscriber_id=EXCLUDED.subscriber_id, updated_at=now()`,
-    [id, subscriberId]
-  );
-  await logAction({ device_id: id, action: 'LINK_SUBSCRIBER', payload: { subscriber_id: subscriberId }, status: 'DONE', created_by: (req as any).user?.id });
-  res.json({ ok: true });
 }));
 
 router.get('/devices/:id/local', asyncHandler(async (req, res) => {

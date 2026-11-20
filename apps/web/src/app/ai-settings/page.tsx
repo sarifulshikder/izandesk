@@ -27,6 +27,21 @@ export default function AiSettingsPage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [testRes, setTestRes] = useState<{ ok?: boolean; message?: string } | null>(null);
+  const [testBusy, setTestBusy] = useState(false);
+
+  const testConnection = async () => {
+    setTestBusy(true); setTestRes(null);
+    const provider = String(form['ai.provider'] || 'auto');
+    const key = provider === 'gemini' ? form['ai.gemini_api_key']
+      : provider === 'openai' ? form['ai.openai_api_key']
+      : provider === 'nim' ? form['ai.nim_api_key'] : '';
+    try {
+      const res = await apiFetch<any>('/api/ai/test-provider', { method: 'POST', body: JSON.stringify({ provider, api_key: key }) }, token);
+      setTestRes({ ok: !!res.ok, message: res.message || (res.ok ? 'OK' : 'Test failed') });
+    } catch (e: any) { setTestRes({ ok: false, message: e.message }); }
+    finally { setTestBusy(false); }
+  };
 
   const load = useCallback(async () => {
     if (!token || !isAdmin) { setLoading(false); return; }
@@ -107,6 +122,14 @@ export default function AiSettingsPage() {
                   {PROVIDERS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                 </select>
                 <p className="form-hint">The built-in engine answers all supported reporting topics for free. An external provider is used only for free-form questions.</p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button className="btn btn-outline text-xs" onClick={() => void testConnection()} disabled={testBusy || (form['ai.provider'] || 'auto') === 'local'}>
+                  {testBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Gauge className="w-3 h-3" />} Test connection
+                </button>
+                {testRes?.message && (
+                  <span className={`text-xs ${testRes.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-danger'}`}>{testRes.message}</span>
+                )}
               </div>
               <label className="form-check">
                 <input type="checkbox" checked={!!form['ai.allow_external']} onChange={(e) => set('ai.allow_external', e.target.checked)} />

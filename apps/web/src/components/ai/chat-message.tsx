@@ -6,7 +6,8 @@ import { Bot, User, Copy, Volume2, Check, ExternalLink } from 'lucide-react';
 import Markdown from './markdown';
 import { useAuth } from '@/lib/auth-context';
 
-/** Allowlisted actions emitted only by the local intent engine. */
+/** Allowlisted actions emitted by the local intent engine or the external
+ *  LLM (after server-side validation). Never trust arbitrary payloads. */
 export type AiMessageAction =
   | { type: 'set_theme'; value: 'dark' | 'light' | 'toggle' }
   | { type: 'create_subscriber'; payload: {
@@ -15,7 +16,12 @@ export type AiMessageAction =
     } }
   | { type: 'set_subscriber_status'; payload: { identifier: string; status: 'ACTIVE' | 'SUSPENDED' } }
   | { type: 'topup_reseller_wallet'; payload: { identifier: string; amount: number } }
-  | { type: 'create_ticket'; payload: { subject: string; priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; identifier?: string } };
+  | { type: 'create_ticket'; payload: { subject: string; priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'; identifier?: string } }
+  | { type: 'record_payment'; payload: { identifier: string; amount: number; gateway?: string; note?: string; trx_id?: string } }
+  | { type: 'assign_package'; payload: { identifier: string; package_name: string; bandwidth_mbps?: number } }
+  | { type: 'close_ticket'; payload: { ticket_no?: string; identifier?: string; status?: 'CLOSED' | 'RESOLVED' } }
+  | { type: 'approve_kyc'; payload: { identifier: string; docId?: string } }
+  | { type: 'reject_kyc'; payload: { identifier: string; docId?: string; reason?: string } };
 
 export type AiMessage = {
   role: 'user' | 'assistant';

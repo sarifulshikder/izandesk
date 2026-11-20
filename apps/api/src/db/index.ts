@@ -102,8 +102,10 @@ export async function initDb() {
       file_name TEXT NOT NULL,
       file_path TEXT NOT NULL,
       mime_type TEXT,
-      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      status TEXT NOT NULL DEFAULT 'PENDING'
     );
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'PENDING';
 
     CREATE TABLE IF NOT EXISTS inventory_warehouses (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

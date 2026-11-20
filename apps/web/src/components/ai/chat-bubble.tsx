@@ -26,6 +26,7 @@ export default function AiChatBubble() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [voice, setVoice] = useState(false);
+  const [chatMode, setChatMode] = useState<'auto' | 'local' | 'llm'>('auto');
   const [err, setErr] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -41,6 +42,12 @@ export default function AiChatBubble() {
   // The full page supersedes the widget — don't leave its panel hanging open.
   useEffect(() => { if (pathname === '/ai-assistant') setOpen(false); }, [pathname]);
   useEffect(() => { if (open) endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, busy, open]);
+  // Chat mode toggle (shared with the full chat page via localStorage).
+  useEffect(() => {
+    const saved = window.localStorage.getItem('izandesk.aiChatMode');
+    if (saved === 'local' || saved === 'llm' || saved === 'auto') setChatMode(saved);
+  }, []);
+  useEffect(() => { window.localStorage.setItem('izandesk.aiChatMode', chatMode); }, [chatMode]);
 
   const send = useCallback(async (text: string) => {
     const msg = String(text || '').trim();
@@ -51,7 +58,7 @@ export default function AiChatBubble() {
     if (inputRef.current) inputRef.current.style.height = 'auto';
     try {
       const res = await apiFetch<any>('/api/ai/chat', {
-        method: 'POST', body: JSON.stringify({ message: msg, history }),
+        method: 'POST', body: JSON.stringify({ message: msg, history, mode: chatMode }),
       }, token);
       const reply: AiMessage = {
         role: 'assistant', content: res.reply || 'No reply returned.',
@@ -90,6 +97,18 @@ export default function AiChatBubble() {
             <div className="min-w-0 flex-1">
               <div className="font-bold text-sm truncate">AI Copilot</div>
               <div className="text-[10px] text-muted-foreground truncate">{status?.active_mode || 'Live assistant'}</div>
+            </div>
+            <div className="flex gap-1 shrink-0">
+              {(['auto', 'local', 'llm'] as const).map((m) => (
+                <button
+                  key={m}
+                  className={`px-1.5 py-0.5 rounded text-[9px] border font-medium leading-none ${chatMode === m ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'}`}
+                  onClick={() => setChatMode(m)}
+                  title={m === 'auto' ? 'External provider when ready, else local engine' : m === 'local' ? 'Built-in engine only' : 'External provider — free-form questions and greetings'}
+                >
+                  {m === 'auto' ? 'Auto' : m === 'local' ? 'Local' : 'LLM'}
+                </button>
+              ))}
             </div>
             <button className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground" onClick={() => setVoice((v) => !v)} title={voice ? 'Voice on' : 'Voice off'}>
               {voice ? <Volume2 className="w-4 h-4 text-primary" /> : <VolumeX className="w-4 h-4" />}

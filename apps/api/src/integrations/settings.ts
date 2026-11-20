@@ -111,7 +111,7 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { key: 'ai.provider', category: 'ai', label: 'Provider', type: 'select', options: ['auto', 'local', 'gemini', 'openai', 'nim'], default: 'auto', description: 'auto/local use the free built-in engine. Gemini/OpenAI/NVIDIA NIM are used only for free-form questions when external access is allowed.' },
   { key: 'ai.allow_external', category: 'ai', label: 'Allow external AI providers', type: 'boolean', default: false, description: 'OFF by default. When ON, free-form questions send aggregate-only metrics (never subscriber PII or credentials) to the configured provider.' },
   { key: 'ai.gemini_api_key', category: 'ai', label: 'Google Gemini API Key', type: 'password', default: '', secret: true, description: 'Optional free-tier key from Google AI Studio.' },
-  { key: 'ai.gemini_model', category: 'ai', label: 'Gemini Model', type: 'string', default: 'gemini-2.0-flash' },
+  { key: 'ai.gemini_model', category: 'ai', label: 'Gemini Model', type: 'string', default: 'gemini-3.8-flash' },
   { key: 'ai.openai_api_key', category: 'ai', label: 'OpenAI API Key', type: 'password', default: '', secret: true, description: 'Optional key for GPT-4o-mini.' },
   { key: 'ai.openai_model', category: 'ai', label: 'OpenAI Model', type: 'string', default: 'gpt-4o-mini' },
   { key: 'ai.nim_api_key', category: 'ai', label: 'NVIDIA NIM API Key', type: 'password', default: '', secret: true, description: 'NVIDIA API key (nvapi-…) for NIM / NVIDIA Cloud APIs.' },

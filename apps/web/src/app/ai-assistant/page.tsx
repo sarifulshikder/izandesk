@@ -34,6 +34,7 @@ export default function AiAssistantPage() {
   const [err, setErr] = useState<string | null>(null);
   const [voice, setVoice] = useState(false);
   const [usage, setUsage] = useState<any>(null);
+  const [chatMode, setChatMode] = useState<'auto' | 'local' | 'llm'>('auto');
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -49,6 +50,12 @@ export default function AiAssistantPage() {
   }, [token]);
 
   useEffect(() => { load(); }, [load]);
+  // Chat mode toggle (shared with the floating bubble via localStorage).
+  useEffect(() => {
+    const saved = window.localStorage.getItem('izandesk.aiChatMode');
+    if (saved === 'local' || saved === 'llm' || saved === 'auto') setChatMode(saved);
+  }, []);
+  useEffect(() => { window.localStorage.setItem('izandesk.aiChatMode', chatMode); }, [chatMode]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, busy]);
 
   const speak = useCallback((text: string) => speakReply(text, voice), [voice]);
@@ -62,7 +69,7 @@ export default function AiAssistantPage() {
     if (inputRef.current) inputRef.current.style.height = 'auto';
     try {
       const res = await apiFetch<any>('/api/ai/chat', {
-        method: 'POST', body: JSON.stringify({ message: msg, history }),
+        method: 'POST', body: JSON.stringify({ message: msg, history, mode: chatMode }),
       }, token);
       const reply: Msg = {
         role: 'assistant', content: res.reply || 'No reply returned.',
@@ -205,6 +212,30 @@ export default function AiAssistantPage() {
               <div className="flex justify-between gap-2"><span className="text-muted-foreground">Role</span><span className="font-medium">{ROLE_LABEL[status?.role || ''] || status?.role || '—'}</span></div>
               <div className="flex justify-between gap-2"><span className="text-muted-foreground">Limit</span><span className="font-medium">{status?.limits?.per_minute ?? 30}/min</span></div>
               <div className="flex justify-between gap-2"><span className="text-muted-foreground">Today</span><span className="font-medium">{usage?.requests ?? 0} requests</span></div>
+              <div className="flex justify-between gap-2"><span className="text-muted-foreground">Avg latency</span><span className="font-medium">{usage?.avg_latency_ms ? `${Math.round(Number(usage.avg_latency_ms))}ms` : '—'}</span></div>
+              {typeof usage?.external_requests === 'number' && usage.external_requests > 0 && (
+                <div className="flex justify-between gap-2"><span className="text-muted-foreground">Via provider</span><span className="font-medium">{usage.external_requests} requests</span></div>
+              )}
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-semibold">Chat mode:</span>
+                <div className="flex gap-1">
+                  {(['auto', 'local', 'llm'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setChatMode(m)}
+                      title={
+                        m === 'auto' ? 'External provider when ready, else the built-in engine'
+                          : m === 'local' ? 'Built-in engine only — never call the external provider'
+                            : 'Ask the external provider — free-form questions and greetings (commands and data reports still run locally)'
+                      }
+                      className={`px-2 py-1 rounded-md text-[11px] border font-medium ${chatMode === m ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-primary/40'}`}
+                    >
+                      {m === 'auto' ? 'Auto' : m === 'local' ? 'Local' : 'LLM'}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             <div className="mt-3 flex items-start gap-2 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-700 dark:text-emerald-300">
               <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5" />

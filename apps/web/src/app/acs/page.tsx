@@ -274,7 +274,7 @@ export default function AcsPage() {
              filtered.length === 0 ? <div className="p-6 text-sm text-muted-foreground">No ACS devices found.</div> :
              filtered.map(d => (
               <button key={d.id} onClick={()=>{ setSelected(d); setTab('overview'); }} className={`w-full text-left p-3 hover:bg-muted/30 ${selected?.id===d.id?'bg-primary/5':''}`}>
-                <div className="flex items-center justify-between gap-2"><div className="font-semibold text-sm truncate">{d.model_name || d.product_class || d.id}</div><span className="badge badge-outline">{d.last_inform_at ? 'Seen' : 'Unknown'}</span></div>
+                <div className="flex items-center justify-between gap-2"><div className="font-semibold text-sm truncate">{d.model_name || d.product_class || d.id}</div><span className="badge badge-outline">{d?.status === 'STALE' ? 'Stale' : d?.last_inform_at ? 'Seen' : 'Unknown'}</span></div>
                 <div className="text-xs text-muted-foreground truncate">{d.manufacturer || '-'} • {d.serial_number || 'no serial'}</div>
                 <div className="text-xs text-muted-foreground truncate">{d.ip_address || '-'} {d?.local?.client_code ? `• ${d.local.client_code}` : ''}</div>
               </button>

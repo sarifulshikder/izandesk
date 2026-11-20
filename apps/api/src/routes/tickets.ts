@@ -56,6 +56,8 @@ router.get('/', asyncHandler(async (req, res) => {
   }
   const status = String(req.query.status || '').trim();
   if (status) { params.push(status); where.push(`t.status = $${params.length}`); }
+  const q = String(req.query.q || '').trim();
+  if (q) { params.push(`%${q}%`); where.push(`(t.ticket_no ILIKE $${params.length} OR t.subject ILIKE $${params.length} OR t.id::text = $${params.length})`); }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const r = await pool.query(`
     SELECT t.*, s.full_name as subscriber_name, s.client_code, s.phone as subscriber_phone,

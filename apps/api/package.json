@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc -w --preserveWatchOutput",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "test": "node tests/ai.test.cjs && node tests/acs.test.cjs"
   },
   "dependencies": {
     "@izandesk/shared-types": "workspace:*",
