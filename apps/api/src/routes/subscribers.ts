@@ -21,6 +21,11 @@ import { removeSubscriberFromRadiusDb, syncSubscriberToRadiusDb } from '../integ
 import { applyProvisioningState } from '../integrations/billing';
 import { resellerScope, assertSubscriberOwnership } from './subscriber-scope';
 import { auditLog, reqActor } from '../integrations/audit';
+import {
+  applyKycDecision, canResellerUploadKyc, canReviewKyc, createKycDocument,
+  deleteKycDocument, normalizeDocType,
+} from '../integrations/kyc';
+import { assertAllowedKycFile, sha256File } from '../security/file-validation';
 import { execFile } from 'child_process';
 
 const router: Router = Router();
@@ -46,7 +51,6 @@ const SUBSCRIBER_TYPES = ['HOME', 'CORPORATE', 'HOTSPOT'];
 const CONNECTION_TYPES = ['PPPOE', 'STATIC_IP', 'DHCP', 'HOTSPOT', 'LEASED_LINE_CIR'];
 const STATUSES = ['PENDING', 'ACTIVE', 'SUSPENDED', 'EXPIRED', 'TERMINATED'];
 const SUSPENSION_STAGES = ['NONE', 'WARNING', 'GRACE', 'ISOLATED', 'WALLED_GARDEN', 'SUSPENDED'];
-const KYC_DOC_TYPES = ['NID', 'PASSPORT', 'CONTRACT', 'PHOTO', 'OTHER'];
 const MAX_KYC_BYTES = 5 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 
@@ -723,7 +727,8 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// KYC
+// KYC — legacy subscriber-scoped surface. The richer review workflow lives in
+// /api/kyc; these routes remain for the subscriber detail panel and integrations.
 router.get('/:id/kyc', asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const r = await pool.query('SELECT * FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [req.params.id]);
@@ -733,37 +738,75 @@ router.get('/:id/kyc', asyncHandler(async (req, res) => {
 router.post('/:id/kyc', upload.single('file'), asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   if (!req.file) return res.status(400).json({ message: 'file is required' });
-  const docType = KYC_DOC_TYPES.includes(str(req.body.doc_type).toUpperCase()) ? str(req.body.doc_type).toUpperCase() : 'OTHER';
-  const r = await pool.query(
-    'INSERT INTO kyc_documents(subscriber_id,doc_type,file_name,file_path,mime_type) VALUES($1,$2,$3,$4,$5) RETURNING *',
-    [req.params.id, docType, req.file.originalname, req.file.filename, req.file.mimetype]
-  );
-  await auditLog({ ...reqActor(req), action: 'SUBSCRIBER_KYC_UPLOAD', entity_type: 'subscriber', entity_id: req.params.id, details: { doc_type: docType, file_name: req.file.originalname } });
-  res.status(201).json(r.rows[0]);
+  if (req.user?.role === 'RESELLER' && !await canResellerUploadKyc()) {
+    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    return res.status(403).json({ message: 'Reseller KYC uploads are disabled by policy' });
+  }
+  try {
+    assertAllowedKycFile(req.file.path, req.file.mimetype);
+  } catch (e) {
+    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    throw e;
+  }
+  const b = req.body || {};
+  let doc;
+  try {
+    doc = await createKycDocument({
+      subscriberId: req.params.id,
+      docType: normalizeDocType(b.doc_type),
+      fileName: req.file.originalname,
+      filePath: req.file.filename,
+      mimeType: req.file.mimetype,
+      source: 'STAFF',
+      actor: { id: req.user?.id, name: req.user?.name || req.user?.email, role: req.user?.role, ip: req.ip },
+      checksum: sha256File(req.file.path),
+      documentNumber: b.document_number,
+      issuer: b.issuer,
+      issueDate: b.issue_date,
+      expiresAt: b.expires_at,
+      verificationMethod: b.verification_method,
+      verificationReference: b.verification_reference,
+      reuploadOf: b.reupload_of || null,
+    });
+  } catch (e) {
+    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    throw e;
+  }
+  res.status(201).json(doc);
 }));
 
 router.delete('/:id/kyc/:docId', asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
-  const r = await pool.query('SELECT * FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, req.params.id]);
-  if (r.rows[0]) {
-    const fp = path.join(uploadDir, r.rows[0].file_path);
-    if (fs.existsSync(fp)) fs.unlinkSync(fp);
-    await pool.query('DELETE FROM kyc_documents WHERE id=$1', [req.params.docId]);
+  if (req.user?.role === 'RESELLER' && !await canResellerUploadKyc()) {
+    return res.status(403).json({ message: 'Reseller KYC changes are disabled by policy' });
   }
+  const doc = await deleteKycDocument({
+    documentId: req.params.docId,
+    subscriberId: req.params.id,
+    actor: { id: req.user?.id, name: req.user?.name || req.user?.email, role: req.user?.role, ip: req.ip },
+  });
+  if (!doc) return res.status(404).json({ message: 'KYC document not found' });
   res.json({ ok: true });
 }));
 
+// Backwards-compatible status endpoint. Reasons and reviewer metadata are now
+// persisted by applyKycDecision; /api/kyc/documents/:id/decision is preferred.
 router.put('/:id/kyc/:docId/status', asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
+  if (!canReviewKyc(req)) return res.status(403).json({ message: 'KYC review is restricted to staff reviewer roles' });
   const b = req.body || {};
   const newStatus = String(b.status || '').toUpperCase();
   if (!['APPROVED', 'REJECTED'].includes(newStatus)) return res.status(400).json({ message: 'status must be APPROVED or REJECTED' });
-  const r = await pool.query('SELECT * FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, req.params.id]);
-  if (!r.rows[0]) return res.status(404).json({ message: 'KYC document not found' });
-  await pool.query('UPDATE kyc_documents SET status=$1 WHERE id=$2', [newStatus, req.params.docId]);
-  await auditLog({ ...reqActor(req), action: newStatus === 'APPROVED' ? 'SUBSCRIBER_KYC_APPROVED' : 'SUBSCRIBER_KYC_REJECTED', entity_type: 'subscriber', entity_id: req.params.id, details: { doc_id: req.params.docId, doc_type: r.rows[0].doc_type } });
-  const updated = (await pool.query('SELECT * FROM kyc_documents WHERE id=$1', [req.params.docId])).rows[0];
-  res.json({ ok: true, data: updated });
+  const found = await pool.query('SELECT id FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, req.params.id]);
+  if (!found.rows[0]) return res.status(404).json({ message: 'KYC document not found' });
+  const doc = await applyKycDecision({
+    documentId: req.params.docId,
+    decision: newStatus === 'APPROVED' ? 'APPROVE' : 'REJECT',
+    reason: b.reason || b.rejection_reason,
+    evidenceRef: b.evidence_ref,
+    actor: { id: req.user?.id, name: req.user?.name || req.user?.email, role: req.user?.role, ip: req.ip },
+  });
+  res.json({ ok: true, data: doc });
 }));
 
 // Ownership-checked KYC download. Replaces public static serving of /uploads/kyc.
@@ -779,8 +822,12 @@ router.get('/:id/kyc/:docId/file', asyncHandler(async (req, res) => {
   if (!filePath.startsWith(uploadDir + path.sep)) return res.status(400).json({ message: 'Invalid document path' });
   if (!fs.existsSync(filePath)) return res.status(404).json({ message: 'Document file not found' });
   const safeName = String(doc.file_name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
-  res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+  const mime = String(doc.mime_type || '');
+  res.setHeader('Content-Type', /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/i.test(mime) ? mime : 'application/octet-stream');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', 'sandbox');
   res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+  await auditLog({ ...reqActor(req), action: 'KYC_DOCUMENT_VIEWED', entity_type: 'kyc_document', entity_id: req.params.docId, details: { subscriber_id: req.params.id } });
   res.sendFile(filePath);
 }));
 

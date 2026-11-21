@@ -11,6 +11,7 @@ import {
   ScrollText, Briefcase, Radio, Network, Shield, ShieldCheck, Wifi, Package,
   LifeBuoy, MessageSquare, Puzzle, Smartphone, ShoppingCart, Settings, Server,
   X, ChevronDown, ChevronRight, BellRing, Building2, AlertCircle, Ban, Sparkles,
+  ClipboardCheck,
 } from 'lucide-react';
 
 interface NavGroup {
@@ -74,7 +75,7 @@ export function Sidebar() {
   useEffect(() => {
     const open = (g: string) => setOpenGroups(s => ({ ...s, [g]: true }));
     if (pathname === '/') open('Dashboard');
-    if (pathname.startsWith('/subscribers') || pathname.startsWith('/leads') || pathname.startsWith('/installation-orders')) open('Clients');
+    if (pathname.startsWith('/subscribers') || pathname.startsWith('/kyc-review') || pathname.startsWith('/leads') || pathname.startsWith('/installation-orders')) open('Clients');
     if (pathname.startsWith('/billing') || pathname.startsWith('/payments') || pathname.startsWith('/collections')) open('Billing');
     if (pathname.startsWith('/resellers')) {
       if (isReseller) { open('Reseller Portal'); open('Partner Finance'); open('Partner Operations'); open('Support'); }
@@ -155,6 +156,7 @@ export function Sidebar() {
       label: 'Clients',
       items: [
         { name: 'All Subscribers', href: '/subscribers', icon: Users, badge: 'All' },
+        { name: 'KYC Review Queue', href: '/kyc-review', icon: ClipboardCheck, badge: 'KYC' },
         { name: 'Add Subscriber', href: '/subscribers?new=1', icon: UserPlus },
         { name: 'Live Sessions', href: '/subscribers/live', icon: Activity, badge: 'Live' },
         { name: 'Leads Pipeline', href: '/leads', icon: UsersRound },

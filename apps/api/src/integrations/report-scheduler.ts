@@ -29,6 +29,13 @@ async function generateReport(key: string) {
       const r = await pool.query('SELECT period_month,status,total_amount FROM hr_payroll_runs ORDER BY period_month DESC LIMIT 12');
       return { key, rows: r.rows };
     }
+    case 'kyc-compliance': {
+      const r = await pool.query(`SELECT d.status, COUNT(*)::int AS documents,
+        COUNT(*) FILTER (WHERE d.expires_at IS NOT NULL AND d.expires_at <= CURRENT_DATE + 30)::int AS expiring_soon
+        FROM kyc_documents d GROUP BY d.status ORDER BY d.status`);
+      const profiles = await pool.query(`SELECT overall_status, COUNT(*)::int AS subscribers FROM subscriber_kyc_profiles GROUP BY overall_status`);
+      return { key, rows: r.rows, profiles: profiles.rows };
+    }
     default: return { key, rows: [], note: 'Unknown report key' };
   }
 }

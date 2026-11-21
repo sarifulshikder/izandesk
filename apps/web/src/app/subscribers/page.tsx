@@ -9,7 +9,8 @@ import { SubscriberFormWizard } from '@/components/subscribers/subscriber-form-w
 import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, Download, Upload as UploadIcon, Eye, History, FileSpreadsheet, AlertCircle, CheckCircle, MinusCircle, Package, MessageSquare, Phone, Mail, Activity, Users, UserCheck, UserX, Clock3 } from 'lucide-react';
 
 export default function SubscribersPage() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const canReviewKyc = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'TECHNICIAN'].includes(String(user?.role));
   const searchParams = useSearchParams();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -31,6 +32,7 @@ export default function SubscribersPage() {
   const [routers, setRouters] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [kycUploading, setKycUploading] = useState(false);
+  const [kycProfile, setKycProfile] = useState<any>(null);
   const [fupBusy, setFupBusy] = useState(false);
   const [fupLogs, setFupLogs] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
@@ -106,17 +108,19 @@ export default function SubscribersPage() {
     const d = await apiFetch<any>(`/api/subscribers/${id}`, {}, token);
     setDetail(d);
     try {
-      const [fl, hist, eq, comm] = await Promise.all([
+      const [fl, hist, eq, comm, kyc] = await Promise.all([
         apiFetch<any>(`/api/billing/fup/logs?subscriber_id=${id}`, {}, token),
         apiFetch<any>(`/api/subscribers/${id}/history`, {}, token),
         apiFetch<any>(`/api/subscriber-equipment/subscriber/${id}`, {}, token),
         apiFetch<any>(`/api/subscriber-communications/subscriber/${id}?limit=50`, {}, token),
+        apiFetch<any>(`/api/kyc/profiles/${id}`, {}, token).catch(() => ({ data: null })),
       ]);
       setFupLogs(fl?.data || []);
       setHistory(hist?.data?.status_changes || []);
       setEquipment(eq?.data || []);
       setCommunications(comm?.data || []);
-    } catch { setFupLogs([]); setHistory([]); setEquipment([]); setCommunications([]); }
+      setKycProfile(kyc?.data || null);
+    } catch { setFupLogs([]); setHistory([]); setEquipment([]); setCommunications([]); setKycProfile(null); }
   };
 
   const downloadCaf = async (id: string) => {
@@ -160,6 +164,22 @@ export default function SubscribersPage() {
       await openDetail(detail.id);
     } catch (e: any) { setError(e.message); }
     finally { setKycUploading(false); }
+  };
+
+  const decideKyc = async (docId: string, decision: 'APPROVE' | 'REJECT' | 'REQUEST_RESUBMISSION') => {
+    if (!token || !detail || !canReviewKyc) return;
+    let reason = '';
+    if (decision !== 'APPROVE') {
+      const answer = window.prompt('Reason (stored in the review trail and shown to the subscriber):');
+      if (answer === null || !answer.trim()) return;
+      reason = answer.trim();
+    }
+    try {
+      await apiFetch(`/api/kyc/documents/${docId}/decision`, {
+        method: 'POST', body: JSON.stringify({ decision, reason: reason || null }),
+      }, token);
+      await openDetail(detail.id);
+    } catch (e: any) { setError(e.message); }
   };
 
   const handleImportPreview = async (file: File) => {
@@ -651,22 +671,43 @@ export default function SubscribersPage() {
                     </div>
                   </div>
                   <div className="pt-2 border-t border-border">
-                    <div className="font-semibold text-sm flex items-center gap-2 mb-2"><FileText className="w-4 h-4 text-primary"/>KYC Documents</div>
+                    <div className="font-semibold text-sm flex items-center gap-2 mb-2"><FileText className="w-4 h-4 text-primary"/>KYC Documents
+                      <Link href="/kyc-review" className="text-[11px] font-normal text-primary hover:underline ml-auto">Review queue →</Link>
+                    </div>
+                    {kycProfile && <div className="text-[11px] text-muted-foreground mb-2">Profile: <span className="font-semibold text-foreground">{String(kycProfile.overall_status || 'INCOMPLETE').replaceAll('_', ' ')}</span> · {kycProfile.service_type || 'FIXED_BROADBAND'} · lawful basis {kycProfile.lawful_basis || 'CONTRACT'}</div>}
                     <div className="space-y-2">
                       {(detail.kyc_documents || []).length === 0 ? <div className="text-xs text-muted-foreground">No KYC documents uploaded.</div> :
-                        detail.kyc_documents.map((d: any) => (
-                          <button key={d.id} onClick={() => viewKyc(d.id)} className="w-full flex items-center justify-between p-2 rounded-lg border border-border hover:bg-muted/40 text-xs text-left">
-                            <span><span className="font-medium">{d.doc_type}</span> — {d.file_name}</span><span className="text-muted-foreground">View</span>
-                          </button>
-                        ))}
+                        detail.kyc_documents.map((d: any) => {
+                          const tone = d.status === 'APPROVED' ? 'badge-success' : d.status === 'REJECTED' ? 'badge-danger' : d.status === 'EXPIRED' ? 'badge-secondary' : d.status === 'UNDER_REVIEW' ? 'badge-info' : 'badge-warning';
+                          return (
+                            <div key={d.id} className="p-2 rounded-lg border border-border" data-testid={`subscriber-kyc-${d.id}`}>
+                              <div className="flex items-center justify-between gap-2 text-xs">
+                                <button onClick={() => viewKyc(d.id)} className="text-left hover:text-primary"><span className="font-medium">{d.doc_type}</span> — {d.file_name}</button>
+                                <span className={`badge ${tone}`}>{String(d.status || 'PENDING').replaceAll('_', ' ')}</span>
+                              </div>
+                              <div className="text-[11px] text-muted-foreground mt-1">
+                                Uploaded {d.uploaded_at ? new Date(d.uploaded_at).toLocaleString() : '—'} · Expires {d.expires_at ? new Date(d.expires_at).toLocaleDateString() : '—'}
+                                {d.reviewed_by_name ? ` · Reviewed by ${d.reviewed_by_name}` : ''}
+                              </div>
+                              {d.rejection_reason && <div className="text-[11px] text-danger mt-1">Reason: {d.rejection_reason}</div>}
+                              {d.checksum && <div className="text-[10px] mono text-muted-foreground truncate" title={d.checksum}>SHA-256 {String(d.checksum).slice(0, 16)}…</div>}
+                              {canReviewKyc && <div className="flex gap-1 mt-2 flex-wrap">
+                                <button className="btn btn-outline btn-sm" disabled={d.status === 'APPROVED'} onClick={() => void decideKyc(d.id, 'APPROVE')}>Approve</button>
+                                <button className="btn btn-outline btn-sm" onClick={() => void decideKyc(d.id, 'REQUEST_RESUBMISSION')}>Resubmit</button>
+                                <button className="btn btn-outline btn-sm" onClick={() => void decideKyc(d.id, 'REJECT')}>Reject</button>
+                              </div>}
+                            </div>
+                          );
+                        })}
                     </div>
                     <div className="mt-3 p-3 rounded-xl bg-muted/30 border border-border space-y-2">
                       <div className="text-xs font-semibold flex items-center gap-2"><Upload className="w-3.5 h-3.5"/>Upload KYC</div>
                       <div className="flex gap-2">
-                        <select id="kyc-type" className="form-select !w-auto min-w-[92px] !h-8 !text-[11px]" defaultValue="NID">{['NID','PASSPORT','CONTRACT','PHOTO','OTHER'].map(t=><option key={t} value={t}>{t}</option>)}</select>
+                        <select id="kyc-type" className="form-select !w-auto min-w-[92px] !h-8 !text-[11px]" defaultValue="NID">{['NID','PASSPORT','CONTRACT','PHOTO','UTILITY_BILL','TRADE_LICENSE','OTHER'].map(t=><option key={t} value={t}>{t}</option>)}</select>
                         <input type="file" className="text-xs flex-1" onChange={e=>{ const f=e.target.files?.[0]; const t=(document.getElementById('kyc-type') as HTMLSelectElement)?.value || 'OTHER'; if(f){ uploadKyc(f,t); e.currentTarget.value=''; } }} disabled={kycUploading} />
                       </div>
                       {kycUploading && <div className="text-xs text-muted-foreground">Uploading...</div>}
+                      <div className="text-[10px] text-muted-foreground">PNG, JPEG, WebP, GIF or PDF only. Files are content-checked, checksummed and access-controlled. Identity numbers are masked.</div>
                     </div>
                   </div>
                 </>

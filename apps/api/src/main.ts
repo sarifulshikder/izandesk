@@ -34,6 +34,9 @@ import procurementRouter from './routes/procurement';
 import hotspotRouter from './routes/hotspot';
 import reportsRouter from './routes/reports';
 import auditRouter, { runAuditRetention } from './routes/audit';
+import kycRouter from './routes/kyc';
+import complianceRouter from './routes/compliance';
+import { runKycMaintenance } from './integrations/kyc';
 import leadsRouter from './routes/leads';
 import installationOrdersRouter from './routes/installation-orders';
 import subscriberEquipmentRouter from './routes/subscriber-equipment';
@@ -353,6 +356,9 @@ async function bootstrap() {
   // KYC files are served through the ownership-checked route in subscribers.ts
   // (GET /api/subscribers/:id/kyc/:docId/file), never as public static files.
   app.use('/api/subscribers', authMiddleware, subscribersRouter);
+  // KYC review queue, decisions, legal holds and BTRC/PDPA export pack.
+  app.use('/api/kyc', authMiddleware, kycRouter);
+  app.use('/api/compliance', authMiddleware, complianceRouter);
   app.use('/api/topology', authMiddleware, topologyRouter);
   app.use('/api/inventory', authMiddleware, inventoryRouter);
   app.use('/api/gis', authMiddleware, gisRouter);
@@ -475,9 +481,14 @@ async function bootstrap() {
     startBillingScheduler();
     startBackupScheduler();
     startReportScheduler();
-    // Compliance retention sweep once per day (setting: security.audit_retention_days).
+    // Compliance retention sweep once per day (settings: audit_retention_days,
+    // kyc.expiry_warning_days, kyc.document_retention_days). Legal holds win.
     void runAuditRetention();
-    setInterval(() => { void runAuditRetention(); }, 24 * 60 * 60 * 1000).unref();
+    void runKycMaintenance();
+    setInterval(() => {
+      void runAuditRetention();
+      void runKycMaintenance();
+    }, 24 * 60 * 60 * 1000).unref();
   }
 }
 

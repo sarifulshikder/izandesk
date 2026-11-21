@@ -212,10 +212,10 @@ export async function executeAiAction(
       const docs = (sub.kyc_documents || []) as any[];
       const doc = docs.find((d) => p.docId ? d.id === p.docId : (!d.status || d.status === 'PENDING'));
       if (!doc) throw new Error('No matching KYC document found for this subscriber');
-      const result: any = await api(config, actor, `/api/subscribers/${sub.id}/kyc/${doc.id}/status`, {
-        method: 'PUT',
+      const result: any = await api(config, actor, `/api/kyc/documents/${doc.id}/decision`, {
+        method: 'POST',
         body: {
-          status: action.type === 'approve_kyc' ? 'APPROVED' : 'REJECTED',
+          decision: action.type === 'approve_kyc' ? 'APPROVE' : 'REJECT',
           ...(p.reason ? { reason: p.reason } : {}),
         },
       });

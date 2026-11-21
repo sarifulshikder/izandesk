@@ -523,7 +523,9 @@ async function intentExtras(pool: any, ctx: Ctx, intent: string, entity?: string
     }
     case 'kyc': {
       if (can(CRM_ROLES)) {
-        stats.kyc_pending = num((await one(pool, `SELECT COUNT(*)::int n FROM kyc_documents WHERE status IN ('PENDING','UNDER_REVIEW')`)).n);
+        stats.kyc_pending = num((await one(pool, `SELECT COUNT(*)::int n FROM kyc_documents WHERE status IN ('PENDING','UNDER_REVIEW','RESUBMISSION_REQUIRED')`)).n);
+        stats.kyc_expiring = num((await one(pool, `SELECT COUNT(*)::int n FROM kyc_documents WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_DATE + 30 AND status NOT IN ('EXPIRED','NOT_APPLICABLE')`)).n);
+        stats.kyc_attention = num((await one(pool, `SELECT COUNT(*)::int n FROM subscriber_kyc_profiles WHERE overall_status='ATTENTION'`)).n);
       }
       break;
     }
@@ -776,8 +778,11 @@ export function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>
     }
     case 'kyc': {
       if (!CRM_ROLES.includes(ctx.actor.role)) { body = `### ${T.kyc}\n\n${denyText(bn)}`; break; }
-      body = `### ${T.kyc}\n\n` + (bn ? `🪪 **${s.kyc_pending ?? 0}** টি KYC ডকুমেন্ট পেন্ডিং আছে।` : `🪪 **${s.kyc_pending ?? 0}** KYC documents pending.`);
+      body = `### ${T.kyc}\n\n` + (bn
+        ? `🪪 **${s.kyc_pending ?? 0}** টি KYC ডকুমেন্ট পেন্ডিং, **${s.kyc_expiring ?? 0}** টি শীঘ্রই মেয়াদোত্তীর্ণ, **${s.kyc_attention ?? 0}** টি প্রোফাইলে মনোযোগ প্রয়োজন।`
+        : `🪪 **${s.kyc_pending ?? 0}** KYC documents pending, **${s.kyc_expiring ?? 0}** expiring within 30 days, **${s.kyc_attention ?? 0}** profiles need attention.`);
       cards.push({ title: bn ? 'গ্রাহক তালিকা' : 'Subscribers', url: '/clients' });
+      cards.push({ title: bn ? 'KYC রিভিউ কুইয়ু' : 'KYC review queue', url: '/kyc-review' });
       break;
     }
     case 'gis_sites': {

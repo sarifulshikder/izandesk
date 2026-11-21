@@ -263,7 +263,7 @@ export const MCP_TOOLS: McpTool[] = [
   },
   {
     name: 'izandesk_kyc_queue', title: 'KYC queue',
-    description: 'Pending KYC documents and verification status.',
+    description: 'Read-only KYC workload: pending, under-review and resubmission-requested documents, identities expiring within 30 days, and subscriber profiles needing attention. Reviewer roles only; no document images are returned.',
     category: 'crm', kind: 'query', intent: 'kyc',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
@@ -375,7 +375,7 @@ export const MCP_TOOLS: McpTool[] = [
   },
   {
     name: 'izandesk_approve_kyc', title: 'Approve KYC document',
-    description: 'Approve the pending KYC document for a subscriber. Billing and technicians. Requires confirm:true.',
+    description: 'Approve the pending KYC document for a subscriber. SUPER_ADMIN, BILLING_OPERATOR or TECHNICIAN only. Writes a review event and audit entry. Requires confirm:true.',
     category: 'actions', kind: 'action', actionType: 'approve_kyc', intent: 'approve_kyc',
     annotations: { readOnlyHint: false, destructiveHint: false },
     inputSchema: {
@@ -386,7 +386,7 @@ export const MCP_TOOLS: McpTool[] = [
   },
   {
     name: 'izandesk_reject_kyc', title: 'Reject KYC document',
-    description: 'Reject the pending KYC document for a subscriber. Requires a reason and confirm:true.',
+    description: 'Reject the pending KYC document for a subscriber. A reason is mandatory and is stored in the review trail and shown to the subscriber. Reviewer roles only. Requires confirm:true.',
     category: 'actions', kind: 'action', actionType: 'reject_kyc', intent: 'reject_kyc',
     annotations: { readOnlyHint: false, destructiveHint: true },
     inputSchema: {

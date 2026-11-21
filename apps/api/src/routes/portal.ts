@@ -6,6 +6,7 @@ import multer = require('multer');
 import path = require('path');
 import fs = require('fs');
 import { pool } from '../db';
+import { auditLog } from '../integrations/audit';
 import { asyncHandler } from './helpers';
 import { getInvoiceWithItems } from '../integrations/billing';
 import { getKernel } from '../kernel/kernel-instance';
@@ -13,6 +14,8 @@ import { renderSimpleInvoicePdf } from '../integrations/pdf';
 import { nextTicketNo } from '../utils/ticket-no';
 import { hashPassword, verifyPassword, isHashed } from '../utils/password';
 import { validatePasswordPolicy } from '../integrations/settings';
+import { createKycDocument, normalizeDocType } from '../integrations/kyc';
+import { assertAllowedKycFile, sha256File } from '../security/file-validation';
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
@@ -365,7 +368,12 @@ router.post('/package-request', portalAuth, asyncHandler(async (req, res) => {
 
 router.get('/documents', portalAuth, asyncHandler(async (req, res) => {
   const id = (req as any).portal.sub;
-  const r = await pool.query('SELECT id, doc_type, file_name, mime_type, uploaded_at FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [id]);
+  const r = await pool.query(
+    `SELECT id, doc_type, file_name, mime_type, uploaded_at, status, rejection_reason,
+      expires_at, reviewed_at, verification_method, source
+     FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC`,
+    [id]
+  );
   res.json({ ok: true, data: r.rows });
 }));
 
@@ -383,6 +391,7 @@ router.get('/documents/:docId/download', portalAuth, asyncHandler(async (req, re
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Content-Security-Policy', 'sandbox');
   res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+  await auditLog({ actor_id: id, actor_role: 'PORTAL_SUBSCRIBER', action: 'KYC_DOCUMENT_DOWNLOADED', entity_type: 'kyc_document', entity_id: doc.id, details: { subscriber_id: id }, ip_address: req.ip });
   fs.createReadStream(fp).pipe(res);
 }));
 
@@ -390,12 +399,35 @@ router.post('/documents', portalAuth, upload.single('file'), asyncHandler(async 
   const id = (req as any).portal.sub;
   if (!(req as any).file) return res.status(400).json({ message: 'file is required' });
   const f = (req as any).file;
-  const docType = String(req.body.doc_type || 'OTHER');
-  const r = await pool.query(
-    'INSERT INTO kyc_documents(subscriber_id,doc_type,file_name,file_path,mime_type) VALUES($1,$2,$3,$4,$5) RETURNING id,doc_type,file_name,mime_type,uploaded_at',
-    [id, docType, f.originalname, f.filename, f.mimetype]
-  );
-  res.status(201).json({ ok: true, data: r.rows[0] });
+  try {
+    assertAllowedKycFile(f.path, f.mimetype);
+  } catch (e) {
+    if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
+    throw e;
+  }
+  const sub = await pool.query('SELECT client_code, full_name FROM subscribers WHERE id=$1', [id]);
+  let doc;
+  try {
+    doc = await createKycDocument({
+      subscriberId: id,
+      docType: normalizeDocType(req.body.doc_type),
+      fileName: f.originalname,
+      filePath: f.filename,
+      mimeType: f.mimetype,
+      source: 'PORTAL',
+      actor: { id, name: sub.rows[0]?.full_name || sub.rows[0]?.client_code || id, role: 'PORTAL_SUBSCRIBER', ip: req.ip },
+      checksum: sha256File(f.path),
+      documentNumber: req.body.document_number,
+      issuer: req.body.issuer,
+      issueDate: req.body.issue_date,
+      expiresAt: req.body.expires_at,
+      reuploadOf: req.body.reupload_of || null,
+    });
+  } catch (e) {
+    if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
+    throw e;
+  }
+  res.status(201).json({ ok: true, data: doc });
 }));
 
 router.get('/notifications', portalAuth, asyncHandler(async (req, res) => {

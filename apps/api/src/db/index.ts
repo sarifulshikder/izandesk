@@ -107,6 +107,134 @@ export async function initDb() {
     );
     ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'PENDING';
 
+    -- KYC compliance extension. Only masked identity numbers are stored; scans
+    -- stay in the ownership-checked local file store with a SHA-256 checksum.
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS document_number_masked TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS issuer TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS issue_date DATE;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS expires_at DATE;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS checksum TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS scan_status TEXT NOT NULL DEFAULT 'PENDING';
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS storage_key TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'STAFF';
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS verification_method TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS verification_reference TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS privacy_notice_version TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS reviewed_by TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS reviewed_by_name TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS reupload_of UUID REFERENCES kyc_documents(id) ON DELETE SET NULL;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS retention_until DATE;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS legal_hold_until DATE;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+    CREATE INDEX IF NOT EXISTS idx_kyc_documents_subscriber ON kyc_documents(subscriber_id);
+    CREATE INDEX IF NOT EXISTS idx_kyc_documents_status ON kyc_documents(status);
+    CREATE INDEX IF NOT EXISTS idx_kyc_documents_expires ON kyc_documents(expires_at) WHERE expires_at IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_kyc_documents_reupload ON kyc_documents(reupload_of) WHERE reupload_of IS NOT NULL;
+
+    DO $$ BEGIN
+      ALTER TABLE kyc_documents ADD CONSTRAINT kyc_documents_status_check
+        CHECK (status IN ('PENDING','UNDER_REVIEW','APPROVED','REJECTED','RESUBMISSION_REQUIRED','EXPIRED','NOT_APPLICABLE'));
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE kyc_documents ADD CONSTRAINT kyc_documents_scan_status_check
+        CHECK (scan_status IN ('PENDING','CLEAN','FLAGGED','NOT_SCANNED'));
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE kyc_documents ADD CONSTRAINT kyc_documents_source_check
+        CHECK (source IN ('STAFF','PORTAL','MCP','IMPORT'));
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+    -- Append-only review history. Kept separate from audit_logs so reviewer
+    -- notes/evidence can be queried without parsing JSON details.
+    CREATE TABLE IF NOT EXISTS kyc_review_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id UUID NOT NULL REFERENCES kyc_documents(id) ON DELETE CASCADE,
+      subscriber_id UUID NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+      actor_id TEXT,
+      actor_name TEXT,
+      actor_role TEXT,
+      action TEXT NOT NULL,
+      from_status TEXT,
+      to_status TEXT,
+      reason TEXT,
+      evidence_ref TEXT,
+      ip_address TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_kyc_review_events_document ON kyc_review_events(document_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_kyc_review_events_subscriber ON kyc_review_events(subscriber_id, created_at DESC);
+
+    -- One KYC profile per subscriber: identity class, consent/lawful basis and
+    -- overall completion state (derived from the mandatory document set).
+    CREATE TABLE IF NOT EXISTS subscriber_kyc_profiles (
+      subscriber_id UUID PRIMARY KEY REFERENCES subscribers(id) ON DELETE CASCADE,
+      service_type TEXT NOT NULL DEFAULT 'FIXED_BROADBAND',
+      identity_type TEXT NOT NULL DEFAULT 'INDIVIDUAL',
+      legal_name TEXT,
+      date_of_birth DATE,
+      occupation TEXT,
+      business_registration_number TEXT,
+      tax_id TEXT,
+      nid_number_masked TEXT,
+      present_address TEXT,
+      permanent_address TEXT,
+      verified_mobile TEXT,
+      email TEXT,
+      privacy_notice_version TEXT,
+      lawful_basis TEXT NOT NULL DEFAULT 'CONTRACT',
+      consent_at TIMESTAMPTZ,
+      consent_withdrawn_at TIMESTAMPTZ,
+      overall_status TEXT NOT NULL DEFAULT 'INCOMPLETE',
+      last_reviewed_at TIMESTAMPTZ,
+      last_reviewed_by TEXT,
+      risk_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_kyc_profiles_status ON subscriber_kyc_profiles(overall_status);
+    CREATE INDEX IF NOT EXISTS idx_kyc_profiles_service ON subscriber_kyc_profiles(service_type);
+
+    -- Authority/LEA preservation requests override automatic retention sweeps.
+    CREATE TABLE IF NOT EXISTS kyc_legal_holds (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE CASCADE,
+      document_id UUID REFERENCES kyc_documents(id) ON DELETE CASCADE,
+      case_reference TEXT NOT NULL,
+      authority TEXT NOT NULL,
+      requested_by TEXT NOT NULL,
+      start_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      end_at TIMESTAMPTZ NOT NULL,
+      released_at TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_kyc_legal_holds_active ON kyc_legal_holds(end_at) WHERE released_at IS NULL;
+
+    -- Evidence of what was filed in BTRC DIS/ISPMS, including acknowledgement.
+    CREATE TABLE IF NOT EXISTS compliance_submissions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      portal TEXT NOT NULL DEFAULT 'DIS',
+      report_type TEXT NOT NULL DEFAULT 'MONTHLY',
+      period_label TEXT NOT NULL,
+      period_start DATE,
+      period_end DATE,
+      file_name TEXT,
+      file_path TEXT,
+      checksum TEXT,
+      submitted_at TIMESTAMPTZ,
+      acknowledgement_ref TEXT,
+      status TEXT NOT NULL DEFAULT 'DRAFT',
+      rejection_reason TEXT,
+      submitted_by TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_compliance_submissions_period ON compliance_submissions(period_label, portal);
+
     CREATE TABLE IF NOT EXISTS inventory_warehouses (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL UNIQUE,

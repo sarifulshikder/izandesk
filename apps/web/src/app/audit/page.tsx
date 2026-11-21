@@ -100,6 +100,7 @@ export default function AuditPage() {
               <div className="toolbar">
                 <button onClick={() => applyFilter('')} className={`filter-chip ${!entityFilter ? 'active' : ''}`}>All events</button>
                 <button onClick={() => applyFilter('mcp')} className={`filter-chip ${entityFilter === 'mcp' ? 'active' : ''}`}>MCP</button>
+                <button onClick={() => applyFilter('kyc_document')} className={`filter-chip ${entityFilter === 'kyc_document' ? 'active' : ''}`}>KYC</button>
                 <button onClick={() => applyFilter('settings')} className={`filter-chip ${entityFilter === 'settings' ? 'active' : ''}`}>Settings</button>
               </div>
             </div>

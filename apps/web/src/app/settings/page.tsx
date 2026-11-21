@@ -7,7 +7,7 @@ import McpAdmin from '@/components/settings/mcp-admin';
 import { SecurityAdmin } from '@/components/settings/security-admin';
 import {
   Settings as SettingsIcon, Shield, Bell, Palette, Receipt, Network as NetworkIcon,
-  Save, RotateCcw, KeyRound, Send, AlertTriangle, CheckCircle2, Building2, Bot,
+  Save, RotateCcw, KeyRound, Send, AlertTriangle, CheckCircle2, Building2, Bot, ClipboardCheck,
 } from 'lucide-react';
 
 type Field = {
@@ -17,7 +17,7 @@ type Field = {
 type CategoryMeta = { label: string; description: string };
 
 const TAB_ICONS: Record<string, any> = {
-  general: Building2, security: Shield, notifications: Bell, branding: Palette, billing: Receipt, network: NetworkIcon, acs: NetworkIcon, mcp: Bot,
+  general: Building2, security: Shield, notifications: Bell, branding: Palette, billing: Receipt, network: NetworkIcon, acs: NetworkIcon, mcp: Bot, kyc: ClipboardCheck,
 };
 
 export default function SettingsPage() {
@@ -46,7 +46,8 @@ export default function SettingsPage() {
       setSchema({ categories: s.categories, fields: s.fields });
       setValues(v.data || {});
       const cat = Object.keys(v.data || {})[0] || 'general';
-      setTab((t) => (v.data[t] ? t : cat));
+      const requested = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tab') : null;
+      setTab((t) => (requested && s.categories?.[requested] ? requested : (v.data[t] ? t : cat)));
     } catch (e: any) { setErr(e.message); }
   }, [token]);
 

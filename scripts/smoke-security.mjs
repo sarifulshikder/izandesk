@@ -4,6 +4,8 @@
  */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -69,4 +71,31 @@ assert.equal(rl.check('ip-1').allowed, true);
 assert.equal(rl.check('ip-1').allowed, false);
 assert.equal(rl.check('ip-2').allowed, true);
 
-console.log('security smoke: guards, TOTP, secret encryption, rate limiter OK');
+// 5. KYC/compliance upload guards: declared MIME type is not trusted, and
+//    identity numbers are masked before they reach the database.
+const files = require('../apps/api/dist/security/file-validation.js');
+const tmpDir = fs.mkdtempSync(path.join('/tmp/opencode', 'kyc-smoke-'));
+try {
+  const pdf = path.join(tmpDir, 'real.pdf');
+  fs.writeFileSync(pdf, '%PDF-1.7\n% IzanDesk smoke\n%%EOF');
+  files.assertAllowedKycFile(pdf, 'application/pdf');
+  assert.match(files.sha256File(pdf), /^[a-f0-9]{64}$/);
+
+  const fake = path.join(tmpDir, 'fake.pdf');
+  fs.writeFileSync(fake, 'not actually a pdf');
+  assert.throws(() => files.assertAllowedKycFile(fake, 'application/pdf'), /File content does not match/);
+  assert.throws(() => files.assertAllowedKycFile(pdf, 'text/html'), /Only PNG/);
+
+  const csv = path.join(tmpDir, 'report.csv');
+  fs.writeFileSync(csv, 'period,count\n2026-11,3\n');
+  files.assertAllowedSubmissionFile(csv, 'text/csv');
+  assert.throws(() => files.assertAllowedSubmissionFile(fake, 'application/pdf'), /not a valid PDF/);
+
+  assert.equal(files.maskIdentityNumber('1234567890'), '******7890');
+  assert.equal(files.maskIdentityNumber('AB-1234567'), 'AB-***4567');
+  assert.equal(files.maskIdentityNumber(''), null);
+} finally {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+}
+
+console.log('security smoke: guards, TOTP, secret encryption, rate limiter, KYC file validation OK');
