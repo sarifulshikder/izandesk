@@ -79,6 +79,45 @@ if (!DEMO_ACCOUNTS_DISABLED && process.env.NODE_ENV === 'production') {
   console.warn('[Auth] WARNING: demo accounts with well-known passwords are ENABLED in production. Set DISABLE_DEMO_ACCOUNTS=true for real deployments.');
 }
 
+/**
+ * With demo accounts disabled there are no built-in users, so an operator must
+ * supply one bootstrap SUPER_ADMIN. Prefer BOOTSTRAP_ADMIN_PASSWORD_HASH (a
+ * bcrypt hash) so no plaintext password sits in the container env / router
+ * config. BOOTSTRAP_ADMIN_PASSWORD is accepted for convenience and is hashed
+ * in memory at boot. A password changed later via Settings → Security is
+ * persisted in `security.password_overrides` and takes precedence on restart.
+ */
+async function addBootstrapAdmin(): Promise<void> {
+  if (!DEMO_ACCOUNTS_DISABLED) return;
+  const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
+  const hash = String(process.env.BOOTSTRAP_ADMIN_PASSWORD_HASH || '').trim();
+  const plaintext = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
+  if (!hash && !plaintext) {
+    console.warn('[Auth] demo accounts disabled and no BOOTSTRAP_ADMIN_* account configured: no user can sign in.');
+    return;
+  }
+  if (!email) {
+    throw new Error('BOOTSTRAP_ADMIN_EMAIL is required when a bootstrap admin password/hash is provided');
+  }
+  if (users.some((u) => u.email.toLowerCase() === email)) return;
+  let passwordHash = hash;
+  if (!passwordHash) passwordHash = await bcrypt.hash(plaintext, 12);
+  if (!/^\$2[aby]\$\d{2}\$/.test(passwordHash)) {
+    throw new Error('BOOTSTRAP_ADMIN_PASSWORD_HASH must be a bcrypt hash ($2a$/$2b$/$2y$)');
+  }
+  users.push({
+    id: 'usr-bootstrap-admin',
+    name: String(process.env.BOOTSTRAP_ADMIN_NAME || 'Administrator').trim() || 'Administrator',
+    email,
+    password: '',
+    password_hash: passwordHash,
+    role: 'SUPER_ADMIN',
+    tenantId: 'tnt-primary-01',
+    permissions: ['ALL'],
+  });
+  console.log(`[Auth] bootstrap SUPER_ADMIN configured: ${email}`);
+}
+
 function toSession(u: AuthUser): UserSession { const { password, password_hash, ...rest } = u as any; return rest; }
 function issueToken(user: UserSession, minutes = 720, jti?: string) {
   return jwt.sign({ sub: user.id, role: user.role, email: user.email, ...(jti ? { jti } : {}) }, JWT_SECRET, { expiresIn: `${Math.max(5, minutes)}m` });
@@ -133,6 +172,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
 }
 
 async function bootstrap() {
+  await addBootstrapAdmin();
   const app = express();
   const allowedOrigins = WEB_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean);
   app.use(cors({
