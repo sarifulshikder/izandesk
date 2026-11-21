@@ -139,6 +139,39 @@ pnpm --filter api start   # http://localhost:4000
 pnpm --filter web dev     # http://localhost:3000
 ```
 
+### Multi-arch container images (amd64 / arm64 / arm/v7)
+
+Two production images are built for `linux/amd64`, `linux/arm64` and `linux/arm/v7`
+(the last one is what MikroTik RouterOS `arm` devices such as the RB1100AHx4 run):
+
+- `ghcr.io/<owner>/<repo>-api` — API on port `4000`
+- `ghcr.io/<owner>/<repo>-web` — web UI on port `3000`
+
+Images are published by `.github/workflows/docker-multiarch.yml` on pushes to `main`,
+on `v*` tags and via manual dispatch. To pin an immutable build, release with a `v*` tag
+and deploy that tag rather than `latest`.
+
+```bash
+# Build locally (requires Docker Buildx + QEMU for non-native platforms)
+docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
+  -f docker/api/Dockerfile -t izandesk-api:local --load .
+docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
+  -f docker/web/Dockerfile -t izandesk-web:local --load .
+```
+
+Notes:
+
+- All images use **Node.js 22**: Node 24 no longer ships `linux/arm/v7` binaries.
+- The API is compiled natively per platform so native modules (`bcrypt`) load correctly.
+- Next.js 16 has no `linux/arm/v7` SWC binary, so the web build runs on the host
+  architecture and only its architecture-independent `standalone` output is copied into
+  the target runtime.
+- The web rewrite target is baked in at build time. Pass `--build-arg INTERNAL_API_URL=http://<api-host>:4000`
+  if the API container is not reachable at `http://localhost:4000`.
+- Mount persistent data (Postgres, `apps/uploads` KYC ciphertext) outside the container.
+  These images do not bundle Postgres/Redis/FreeRADIUS; use `docker/docker-compose.yml`
+  for a full stack or run those as separate containers.
+
 ### Environment configuration (no hardcoded deployment hosts)
 
 - **Web:** copy `apps/web/.env.example` to `apps/web/.env.local`

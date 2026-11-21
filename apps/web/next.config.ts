@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import type { NextConfig } from 'next';
 
 const allowedDevOrigins = (process.env.ALLOWED_DEV_ORIGINS || '')
@@ -6,6 +7,9 @@ const allowedDevOrigins = (process.env.ALLOWED_DEV_ORIGINS || '')
   .filter(Boolean);
 
 const nextConfig: NextConfig = {
+  // Standalone output is used by the multi-arch container image.
+  output: 'standalone',
+  outputFileTracingRoot: join(process.cwd(), '../..'),
   // Allow remote/NAT public access during development via env: ALLOWED_DEV_ORIGINS=host1,host2
   ...(allowedDevOrigins.length ? { allowedDevOrigins } : {}),
   // Allow isolated verification builds when a dev server owns the default .next dir.
