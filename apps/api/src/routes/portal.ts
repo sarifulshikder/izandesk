@@ -14,8 +14,9 @@ import { renderSimpleInvoicePdf } from '../integrations/pdf';
 import { nextTicketNo } from '../utils/ticket-no';
 import { hashPassword, verifyPassword, isHashed } from '../utils/password';
 import { validatePasswordPolicy } from '../integrations/settings';
-import { createKycDocument, normalizeDocType } from '../integrations/kyc';
-import { assertAllowedKycFile, sha256File } from '../security/file-validation';
+import { createKycDocument, normalizeDocType, readKycDocument } from '../integrations/kyc';
+import { assertAllowedKycFileBuffer, sha256Buffer } from '../security/file-validation';
+import { encryptKycBuffer, secureUnlinkKycFile } from '../security/file-encryption';
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
@@ -23,17 +24,10 @@ const uploadDir = path.resolve(__dirname, '../../../uploads/kyc');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const MAX_KYC_BYTES = 5 * 1024 * 1024;
 const KYC_MIME_RE = /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/i;
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    // Unguessable, extension-bounded name — no original filename is persisted.
-    const ext = path.extname(file.originalname).toLowerCase();
-    const safeExt = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.pdf'].includes(ext) ? ext : '';
-    cb(null, crypto.randomUUID() + safeExt);
-  },
-});
+// KYC uploads stay in memory until encrypted; plaintext never lands in the document store.
+const kycStorage = multer.memoryStorage();
 const upload = multer({
-  storage,
+  storage: kycStorage,
   limits: { fileSize: MAX_KYC_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
     if (!KYC_MIME_RE.test(file.mimetype)) {
@@ -382,49 +376,47 @@ router.get('/documents/:docId/download', portalAuth, asyncHandler(async (req, re
   const r = await pool.query('SELECT * FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, id]);
   const doc = r.rows[0];
   if (!doc) return res.status(404).json({ message: 'Document not found' });
-  const fp = path.resolve(uploadDir, String(doc.file_path || ''));
-  if (!fp.startsWith(uploadDir + path.sep)) return res.status(400).json({ message: 'Invalid document path' });
-  if (!fs.existsSync(fp)) return res.status(404).json({ message: 'File not found' });
+  const plain = readKycDocument(doc); // decrypted and authenticated before anything is sent
   const mime = String(doc.mime_type || '');
   const safeName = String(doc.file_name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
   res.setHeader('Content-Type', KYC_MIME_RE.test(mime) ? mime : 'application/octet-stream');
+  res.setHeader('Content-Length', String(plain.length));
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Content-Security-Policy', 'sandbox');
   res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
   await auditLog({ actor_id: id, actor_role: 'PORTAL_SUBSCRIBER', action: 'KYC_DOCUMENT_DOWNLOADED', entity_type: 'kyc_document', entity_id: doc.id, details: { subscriber_id: id }, ip_address: req.ip });
-  fs.createReadStream(fp).pipe(res);
+  res.end(plain);
 }));
 
 router.post('/documents', portalAuth, upload.single('file'), asyncHandler(async (req, res) => {
   const id = (req as any).portal.sub;
   if (!(req as any).file) return res.status(400).json({ message: 'file is required' });
   const f = (req as any).file;
-  try {
-    assertAllowedKycFile(f.path, f.mimetype);
-  } catch (e) {
-    if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
-    throw e;
-  }
+  assertAllowedKycFileBuffer(f.buffer, f.mimetype);
   const sub = await pool.query('SELECT client_code, full_name FROM subscribers WHERE id=$1', [id]);
+  let encrypted: ReturnType<typeof encryptKycBuffer> | null = null;
   let doc;
   try {
+    const checksum = sha256Buffer(f.buffer); // checksum of plaintext before encryption
+    encrypted = encryptKycBuffer(f.buffer, uploadDir);
     doc = await createKycDocument({
       subscriberId: id,
       docType: normalizeDocType(req.body.doc_type),
       fileName: f.originalname,
-      filePath: f.filename,
+      filePath: path.basename(encrypted.filePath),
       mimeType: f.mimetype,
       source: 'PORTAL',
       actor: { id, name: sub.rows[0]?.full_name || sub.rows[0]?.client_code || id, role: 'PORTAL_SUBSCRIBER', ip: req.ip },
-      checksum: sha256File(f.path),
+      checksum,
       documentNumber: req.body.document_number,
       issuer: req.body.issuer,
       issueDate: req.body.issue_date,
       expiresAt: req.body.expires_at,
       reuploadOf: req.body.reupload_of || null,
+      encryption: encrypted,
     });
   } catch (e) {
-    if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
+    secureUnlinkKycFile(encrypted?.filePath);
     throw e;
   }
   res.status(201).json({ ok: true, data: doc });

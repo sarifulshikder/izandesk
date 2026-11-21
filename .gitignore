@@ -1,4 +1,5 @@
 apps/api/uploads/
+apps/uploads/
 dist/
 .DS_Store
 *.log

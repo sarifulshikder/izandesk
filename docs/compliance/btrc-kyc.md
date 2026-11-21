@@ -81,6 +81,30 @@ The richer endpoint is `POST /api/kyc/documents/:docId/decision`.
   identity documents are part of the same sweep.
 - Traffic/log preservation under cl. 25.4 is a separate concern from KYC document retention.
 
+### 4.1 File encryption and key rotation
+
+KYC scans are encrypted at rest with AES-256-GCM before the upload request completes. Uploads are
+held in memory, encrypted straight to a `0600` ciphertext file, and never written as plaintext to the
+document store. The plaintext SHA-256 checksum is kept for evidence; downloads are decrypted and
+authenticated in memory before being sent to an ownership-checked viewer. Deleted and superseded
+files are overwritten with random bytes before unlink (best effort on journaling/SSD filesystems).
+
+Configure versioned keys in the API environment:
+
+```bash
+KYC_ENCRYPTION_KEYS=v1:<base64-32-bytes>,v2:<base64-32-bytes>
+KYC_ENCRYPTION_ACTIVE_KEY_ID=v2
+```
+
+- Keep old key ids in `KYC_ENCRYPTION_KEYS` until rotation finishes. The daily maintenance sweep
+  (also run at startup) migrates legacy plaintext files and re-keys documents to the active id,
+  writing `KYC_FILE_ENCRYPTED` / `KYC_FILE_REKEYED` audit events.
+- Strict/production bootstrap fails until a dedicated `KYC_ENCRYPTION_KEYS` value is present. Without
+  it, local/demo installs derive a key from `JWT_SECRET`, which is intentionally not a production
+  key-separation strategy.
+- Backups of `uploads/kyc` remain confidential only while the corresponding keys are protected;
+  retain key material with the same care as database backups.
+
 ## 5. DIS / ISPMS submission evidence
 
 `POST /api/compliance/submissions` records the portal (`DIS`, `ISPMS`, `EMAIL`, `MANUAL`), report type

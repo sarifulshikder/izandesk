@@ -108,7 +108,8 @@ export async function initDb() {
     ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'PENDING';
 
     -- KYC compliance extension. Only masked identity numbers are stored; scans
-    -- stay in the ownership-checked local file store with a SHA-256 checksum.
+    -- stay in an ownership-checked, AES-256-GCM encrypted local file store with
+    -- a SHA-256 checksum of the plaintext.
     ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS document_number_masked TEXT;
     ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS issuer TEXT;
     ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS issue_date DATE;
@@ -128,6 +129,12 @@ export async function initDb() {
     ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS retention_until DATE;
     ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS legal_hold_until DATE;
     ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ;
+    -- AES-256-GCM file encryption. NULL metadata means a legacy plaintext file;
+    -- the maintenance sweep migrates it on startup.
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS encryption_alg TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS encryption_iv TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS encryption_auth_tag TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS encryption_key_id TEXT;
     ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
     CREATE INDEX IF NOT EXISTS idx_kyc_documents_subscriber ON kyc_documents(subscriber_id);

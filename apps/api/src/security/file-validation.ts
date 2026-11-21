@@ -32,9 +32,9 @@ function fail(message: string): never {
 const KYC_MIME_RE = /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/i;
 const SUBMISSION_MIME_RE = /^(application\/pdf|text\/csv|application\/csv|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|application\/zip)$/i;
 
-export function assertAllowedKycFile(filePath: string, mimetype: string): void {
+export function assertAllowedKycFileBuffer(buffer: Buffer, mimetype: string): void {
   if (!KYC_MIME_RE.test(mimetype)) fail('Only PNG, JPEG, WebP, GIF or PDF files are allowed');
-  const head = magic(filePath);
+  const head = buffer.subarray(0, 16);
   const ok =
     (/png$/i.test(mimetype) && starts(head, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) ||
     (/jpeg$/i.test(mimetype) && starts(head, [0xff, 0xd8, 0xff])) ||
@@ -42,6 +42,10 @@ export function assertAllowedKycFile(filePath: string, mimetype: string): void {
     (/webp$/i.test(mimetype) && starts(head, 'RIFF') && head.subarray(8, 12).toString('ascii') === 'WEBP') ||
     (/pdf$/i.test(mimetype) && starts(head, '%PDF-'));
   if (!ok) fail('File content does not match the declared image/PDF type');
+}
+
+export function assertAllowedKycFile(filePath: string, mimetype: string): void {
+  assertAllowedKycFileBuffer(magic(filePath), mimetype);
 }
 
 export function assertAllowedSubmissionFile(filePath: string, mimetype: string): void {
@@ -59,7 +63,11 @@ export function assertAllowedSubmissionFile(filePath: string, mimetype: string):
 }
 
 export function sha256File(filePath: string): string {
-  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+  return sha256Buffer(fs.readFileSync(filePath));
+}
+
+export function sha256Buffer(buffer: Buffer): string {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
 /** Mask all but the last 4 characters, preserving separators for human review. */

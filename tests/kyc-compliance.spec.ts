@@ -116,6 +116,17 @@ test.describe('KYC compliance API', () => {
     const invalidHold = await request.post('/api/kyc/legal-holds', { headers: auth(adminToken), data: { authority: 'only-authority' } });
     expect(invalidHold.status()).toBe(400);
   });
+
+  test('maintenance reports file encryption and re-key counts', async ({ request }) => {
+    const token = await loginToken(request, admin);
+    const res = await request.post('/api/kyc/maintenance/run', { headers: { Authorization: `Bearer ${token}` } });
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    expect(typeof body.encrypted).toBe('number');
+    expect(typeof body.reencrypted).toBe('number');
+    expect(body.encrypted).toBeGreaterThanOrEqual(0);
+    expect(body.reencrypted).toBeGreaterThanOrEqual(0);
+  });
 });
 
 test.describe('KYC compliance UI', () => {
@@ -194,6 +205,11 @@ test.describe('KYC upload hardening (opt-in)', () => {
     const created = await good.json();
     expect(created.document_number_masked).toBe('******7890');
     expect(created.checksum).toMatch(/^[a-f0-9]{64}$/);
+    expect(created.encryption_alg).toBe('aes-256-gcm');
+    expect(created.encryption_iv).toBeTruthy();
+    expect(created.encryption_auth_tag).toBeTruthy();
+    expect(created.encryption_key_id).toBeTruthy();
+    expect(created.file_path).toMatch(/\.enc$/);
 
     const hold = await request.post('/api/kyc/legal-holds', {
       headers,
@@ -214,6 +230,7 @@ test.describe('KYC upload hardening (opt-in)', () => {
       expect(file.ok()).toBeTruthy();
       expect(file.headers()['x-content-type-options']).toBe('nosniff');
       expect(file.headers()['content-security-policy']).toBe('sandbox');
+      expect(await file.body()).toEqual(Buffer.from('%PDF-1.7\n% IzanDesk KYC smoke test\n%%EOF'));
     } finally {
       expect((await request.post(`/api/kyc/legal-holds/${holdId}/release`, { headers })).ok()).toBeTruthy();
       const removed = await request.delete(`/api/subscribers/${target.id}/kyc/${created.id}`, { headers });

@@ -23,9 +23,10 @@ import { resellerScope, assertSubscriberOwnership } from './subscriber-scope';
 import { auditLog, reqActor } from '../integrations/audit';
 import {
   applyKycDecision, canResellerUploadKyc, canReviewKyc, createKycDocument,
-  deleteKycDocument, normalizeDocType,
+  deleteKycDocument, normalizeDocType, readKycDocument,
 } from '../integrations/kyc';
-import { assertAllowedKycFile, sha256File } from '../security/file-validation';
+import { assertAllowedKycFileBuffer, sha256Buffer } from '../security/file-validation';
+import { encryptKycBuffer, secureUnlinkKycFile } from '../security/file-encryption';
 import { execFile } from 'child_process';
 
 const router: Router = Router();
@@ -54,16 +55,10 @@ const SUSPENSION_STAGES = ['NONE', 'WARNING', 'GRACE', 'ISOLATED', 'WALLED_GARDE
 const MAX_KYC_BYTES = 5 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    // Unguessable name: KYC documents must not be reachable by file enumeration.
-    const safe = crypto.randomUUID() + '-' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    cb(null, safe);
-  },
-});
+// KYC uploads stay in memory until they are encrypted; plaintext never lands in the document store.
+const kycStorage = multer.memoryStorage();
 const upload = multer({
-  storage,
+  storage: kycStorage,
   limits: { fileSize: MAX_KYC_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
     if (!/^(image\/(png|jpeg|webp|gif)|application\/pdf)$/i.test(file.mimetype)) {
@@ -739,27 +734,24 @@ router.post('/:id/kyc', upload.single('file'), asyncHandler(async (req, res) => 
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   if (!req.file) return res.status(400).json({ message: 'file is required' });
   if (req.user?.role === 'RESELLER' && !await canResellerUploadKyc()) {
-    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     return res.status(403).json({ message: 'Reseller KYC uploads are disabled by policy' });
   }
-  try {
-    assertAllowedKycFile(req.file.path, req.file.mimetype);
-  } catch (e) {
-    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-    throw e;
-  }
+  assertAllowedKycFileBuffer(req.file.buffer, req.file.mimetype);
   const b = req.body || {};
+  let encrypted: ReturnType<typeof encryptKycBuffer> | null = null;
   let doc;
   try {
+    const checksum = sha256Buffer(req.file.buffer); // checksum of plaintext before encryption
+    encrypted = encryptKycBuffer(req.file.buffer, uploadDir);
     doc = await createKycDocument({
       subscriberId: req.params.id,
       docType: normalizeDocType(b.doc_type),
       fileName: req.file.originalname,
-      filePath: req.file.filename,
+      filePath: path.basename(encrypted.filePath),
       mimeType: req.file.mimetype,
       source: 'STAFF',
       actor: { id: req.user?.id, name: req.user?.name || req.user?.email, role: req.user?.role, ip: req.ip },
-      checksum: sha256File(req.file.path),
+      checksum,
       documentNumber: b.document_number,
       issuer: b.issuer,
       issueDate: b.issue_date,
@@ -767,9 +759,10 @@ router.post('/:id/kyc', upload.single('file'), asyncHandler(async (req, res) => 
       verificationMethod: b.verification_method,
       verificationReference: b.verification_reference,
       reuploadOf: b.reupload_of || null,
+      encryption: encrypted,
     });
   } catch (e) {
-    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+    secureUnlinkKycFile(encrypted?.filePath);
     throw e;
   }
   res.status(201).json(doc);
@@ -813,22 +806,22 @@ router.put('/:id/kyc/:docId/status', asyncHandler(async (req, res) => {
 router.get('/:id/kyc/:docId/file', asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const r = await pool.query(
-    'SELECT file_path, file_name, mime_type FROM kyc_documents WHERE id=$1 AND subscriber_id=$2',
+    `SELECT file_path, file_name, mime_type, encryption_alg, encryption_iv, encryption_auth_tag, encryption_key_id
+     FROM kyc_documents WHERE id=$1 AND subscriber_id=$2`,
     [req.params.docId, req.params.id],
   );
   const doc = r.rows[0];
   if (!doc) return res.status(404).json({ message: 'Document not found' });
-  const filePath = path.resolve(uploadDir, doc.file_path);
-  if (!filePath.startsWith(uploadDir + path.sep)) return res.status(400).json({ message: 'Invalid document path' });
-  if (!fs.existsSync(filePath)) return res.status(404).json({ message: 'Document file not found' });
+  const plain = readKycDocument(doc); // decrypted and authenticated before anything is sent
   const safeName = String(doc.file_name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
   const mime = String(doc.mime_type || '');
   res.setHeader('Content-Type', /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/i.test(mime) ? mime : 'application/octet-stream');
+  res.setHeader('Content-Length', String(plain.length));
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Content-Security-Policy', 'sandbox');
   res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
   await auditLog({ ...reqActor(req), action: 'KYC_DOCUMENT_VIEWED', entity_type: 'kyc_document', entity_id: req.params.docId, details: { subscriber_id: req.params.id } });
-  res.sendFile(filePath);
+  res.end(plain);
 }));
 
 /* ------------------------------------------------------------------ */

@@ -4,6 +4,10 @@ import { pool } from '../db';
 import { auditLog } from './audit';
 import { getCached } from './settings';
 import { maskIdentityNumber } from '../security/file-validation';
+import {
+  activeKycKey, decryptKycFile, EncryptedKycFile, KycEncryptionMeta,
+  reencryptKycFile, secureUnlinkKycFile,
+} from '../security/file-encryption';
 
 export const KYC_DOC_TYPES = ['NID', 'PASSPORT', 'CONTRACT', 'PHOTO', 'UTILITY_BILL', 'TRADE_LICENSE', 'OTHER'] as const;
 export const KYC_STATUSES = ['PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED', 'RESUBMISSION_REQUIRED', 'EXPIRED', 'NOT_APPLICABLE'] as const;
@@ -26,6 +30,32 @@ export const DECISION_STATUS: Record<string, string> = {
 export const KYC_DECISIONS = Object.keys(DECISION_STATUS);
 
 const uploadDir = path.resolve(__dirname, '../../../uploads/kyc');
+
+export function kycMetaFromRow(row: any): KycEncryptionMeta | null {
+  if (!row?.encryption_alg) return null; // legacy plaintext document
+  return {
+    algorithm: String(row.encryption_alg),
+    iv: String(row.encryption_iv || ''),
+    authTag: String(row.encryption_auth_tag || ''),
+    keyId: String(row.encryption_key_id || ''),
+  };
+}
+
+/** Read and verify a stored KYC document before it is sent to an authorized viewer. */
+export function readKycDocument(row: any): Buffer {
+  const fp = path.resolve(uploadDir, String(row?.file_path || ''));
+  if (!fp.startsWith(uploadDir + path.sep)) {
+    const err: any = new Error('Invalid document path'); err.status = 400; throw err;
+  }
+  if (!fs.existsSync(fp)) {
+    const err: any = new Error('Document file not found'); err.status = 404; throw err;
+  }
+  try {
+    return decryptKycFile(fp, kycMetaFromRow(row));
+  } catch {
+    const err: any = new Error('KYC document could not be decrypted'); err.status = 500; throw err;
+  }
+}
 
 export interface KycActor {
   id?: string | null;
@@ -149,6 +179,7 @@ export async function createKycDocument(input: {
   verificationMethod?: string | null;
   verificationReference?: string | null;
   reuploadOf?: string | null;
+  encryption?: EncryptedKycFile | null;
 }): Promise<any> {
   const allowed = await allowedKycDocTypes();
   const docType = normalizeDocType(input.docType);
@@ -168,13 +199,16 @@ export async function createKycDocument(input: {
     `INSERT INTO kyc_documents(
       subscriber_id,doc_type,file_name,file_path,mime_type,status,checksum,storage_key,scan_status,source,
       document_number_masked,issuer,issue_date,expires_at,verification_method,verification_reference,
-      privacy_notice_version,reupload_of,retention_until,updated_at)
-     VALUES($1,$2,$3,$4,$5,'PENDING',$6,$7,'PENDING',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now())
+      privacy_notice_version,reupload_of,retention_until,
+      encryption_alg,encryption_iv,encryption_auth_tag,encryption_key_id,updated_at)
+     VALUES($1,$2,$3,$4,$5,'PENDING',$6,$7,'PENDING',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,now())
      RETURNING *`,
     [input.subscriberId, docType, input.fileName, input.filePath, input.mimeType, input.checksum || null,
       input.filePath, input.source, maskIdentityNumber(input.documentNumber), input.issuer || null,
       input.issueDate || null, input.expiresAt || null, input.verificationMethod || null,
-      input.verificationReference || null, notice, input.reuploadOf || null, retention]
+      input.verificationReference || null, notice, input.reuploadOf || null, retention,
+      input.encryption?.algorithm || null, input.encryption?.iv || null,
+      input.encryption?.authTag || null, input.encryption?.keyId || null]
   );
   const doc = r.rows[0];
   await recordKycEvent({ documentId: doc.id, subscriberId: doc.subscriber_id, actor: input.actor, action: 'UPLOADED', toStatus: 'PENDING' });
@@ -183,7 +217,7 @@ export async function createKycDocument(input: {
     action: 'KYC_DOCUMENT_UPLOADED',
     entity_type: 'kyc_document',
     entity_id: doc.id,
-    details: { subscriber_id: doc.subscriber_id, doc_type: doc.doc_type, source: doc.source, checksum: doc.checksum, file_name: doc.file_name },
+    details: { subscriber_id: doc.subscriber_id, doc_type: doc.doc_type, source: doc.source, checksum: doc.checksum, file_name: doc.file_name, encryption_key_id: doc.encryption_key_id || null },
   });
   await recomputeKycProfile(input.subscriberId);
   return doc;
@@ -206,9 +240,7 @@ export async function deleteKycDocument(input: {
   await recordKycEvent({ documentId: doc.id, subscriberId: doc.subscriber_id, actor: input.actor, action: 'DELETED', fromStatus: doc.status });
   await pool.query('DELETE FROM kyc_documents WHERE id=$1', [doc.id]);
   const fp = path.resolve(uploadDir, String(doc.file_path || ''));
-  if (fp.startsWith(uploadDir + path.sep) && fs.existsSync(fp)) {
-    try { fs.unlinkSync(fp); } catch { /* best effort */ }
-  }
+  if (fp.startsWith(uploadDir + path.sep)) secureUnlinkKycFile(fp);
   await auditLog({
     ...input.actor,
     action: 'KYC_DOCUMENT_DELETED',
@@ -273,9 +305,55 @@ export async function applyKycDecision(input: {
   return doc;
 }
 
+/** Encrypt legacy plaintext files and re-key documents after a key rotation. */
+export async function migrateKycFileEncryption(limit = 200): Promise<{ encrypted: number; reencrypted: number }> {
+  const result = { encrypted: 0, reencrypted: 0 };
+  const activeId = activeKycKey().id;
+  const rows = await pool.query(
+    `SELECT * FROM kyc_documents
+     WHERE file_path IS NOT NULL AND (encryption_alg IS NULL OR encryption_key_id IS DISTINCT FROM $1)
+     ORDER BY uploaded_at ASC LIMIT $2`,
+    [activeId, limit]
+  );
+  for (const doc of rows.rows) {
+    const fp = path.resolve(uploadDir, String(doc.file_path || ''));
+    if (!fp.startsWith(uploadDir + path.sep) || !fs.existsSync(fp)) continue;
+    const meta = kycMetaFromRow(doc);
+    const wasPlain = !meta?.algorithm;
+    let next: (EncryptedKycFile & { previousPath: string }) | null = null;
+    try {
+      next = reencryptKycFile(fp, meta);
+      if (!next) continue;
+      const relativePath = path.relative(uploadDir, next.filePath).split(path.sep).join('/');
+      await pool.query(
+        `UPDATE kyc_documents SET file_path=$2, storage_key=$2, encryption_alg=$3, encryption_iv=$4,
+         encryption_auth_tag=$5, encryption_key_id=$6, updated_at=now() WHERE id=$1`,
+        [doc.id, relativePath, next.algorithm, next.iv, next.authTag, next.keyId]
+      );
+      secureUnlinkKycFile(next.previousPath); // remove the superseded ciphertext only after the row is updated
+      await auditLog({
+        actor_role: 'SYSTEM',
+        action: wasPlain ? 'KYC_FILE_ENCRYPTED' : 'KYC_FILE_REKEYED',
+        entity_type: 'kyc_document',
+        entity_id: doc.id,
+        details: { key_id: next.keyId, from_key_id: meta?.keyId || null, subscriber_id: doc.subscriber_id },
+      });
+      if (wasPlain) result.encrypted += 1;
+      else result.reencrypted += 1;
+    } catch (e: any) {
+      if (next) secureUnlinkKycFile(next.filePath); // avoid leaving an orphaned re-keyed file
+      await auditLog({
+        actor_role: 'SYSTEM', action: 'KYC_FILE_ENCRYPTION_ERROR', entity_type: 'kyc_document', entity_id: doc.id,
+        details: { message: String(e?.message || e).slice(0, 300) },
+      });
+    }
+  }
+  return result;
+}
+
 /** Daily expiry/reminder/retention sweep. Legal holds always win. */
-export async function runKycMaintenance(): Promise<{ expired: number; reminded: number; deleted: number }> {
-  const result = { expired: 0, reminded: 0, deleted: 0 };
+export async function runKycMaintenance(): Promise<{ expired: number; reminded: number; deleted: number; encrypted: number; reencrypted: number }> {
+  const result = { expired: 0, reminded: 0, deleted: 0, encrypted: 0, reencrypted: 0 };
   const warningDays = Number(await getCached('kyc.expiry_warning_days', 30)) || 0;
   try {
     const expired = await pool.query(
@@ -293,11 +371,11 @@ export async function runKycMaintenance(): Promise<{ expired: number; reminded: 
       const soon = await pool.query(
         `UPDATE kyc_documents SET last_reminder_at=now(), updated_at=now()
          WHERE expires_at IS NOT NULL AND expires_at >= CURRENT_DATE
-           AND expires_at <= CURRENT_DATE + $1
+           AND expires_at <= CURRENT_DATE + ($1)::integer
            AND status NOT IN ('EXPIRED','NOT_APPLICABLE','APPROVED')
            AND (last_reminder_at IS NULL OR last_reminder_at < now() - interval '7 days')
          RETURNING *`,
-        [String(warningDays)]
+        [Math.trunc(warningDays)]
       );
       for (const doc of soon.rows) {
         await auditLog({ actor_role: 'SYSTEM', action: 'KYC_EXPIRY_REMINDER', entity_type: 'kyc_document', entity_id: doc.id,
@@ -320,6 +398,10 @@ export async function runKycMaintenance(): Promise<{ expired: number; reminded: 
       }
       result.deleted = stale.rows.length;
     }
+
+    const migrated = await migrateKycFileEncryption();
+    result.encrypted = migrated.encrypted;
+    result.reencrypted = migrated.reencrypted;
   } catch (e: any) {
     await auditLog({ actor_role: 'SYSTEM', action: 'KYC_MAINTENANCE_ERROR', entity_type: 'kyc', details: { message: String(e?.message || e).slice(0, 300) } });
   }
