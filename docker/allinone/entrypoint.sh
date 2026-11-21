@@ -40,13 +40,24 @@ su-exec postgres pg_ctl -D /data/postgres -w -o \
    -c max_connections=30 \
    -c work_mem=1MB \
    -c maintenance_work_mem=32MB \
-   -c logging_collector=off" start
+   -c logging_collector=off \
+   -c log_min_error_statement=none \
+   -c log_statement=none" start
 
 echo "[postgres] ensuring role and database"
-if ! su-exec postgres psql -X -v ON_ERROR_STOP=1 -d postgres \
-  -c "CREATE ROLE \"$POSTGRES_USER\" SUPERUSER LOGIN PASSWORD '$POSTGRES_PASSWORD'" 2>/dev/null; then
+# Check first: a failed CREATE ROLE would make PostgreSQL log the statement,
+# including the password, to stderr (and therefore into container logs).
+if su-exec postgres psql -X -tAc \
+  "SELECT 1 FROM pg_roles WHERE rolname='$POSTGRES_USER'" | grep -q 1; then
   su-exec postgres psql -X -v ON_ERROR_STOP=1 -d postgres \
-    -c "ALTER ROLE \"$POSTGRES_USER\" WITH SUPERUSER LOGIN PASSWORD '$POSTGRES_PASSWORD'"
+    -v pw="$POSTGRES_PASSWORD" <<SQL
+ALTER ROLE "$POSTGRES_USER" WITH SUPERUSER LOGIN PASSWORD :'pw';
+SQL
+else
+  su-exec postgres psql -X -v ON_ERROR_STOP=1 -d postgres \
+    -v pw="$POSTGRES_PASSWORD" <<SQL
+CREATE ROLE "$POSTGRES_USER" SUPERUSER LOGIN PASSWORD :'pw';
+SQL
 fi
 if ! su-exec postgres psql -X -tAc \
   "SELECT 1 FROM pg_database WHERE datname='$POSTGRES_DB'" | grep -q 1; then
