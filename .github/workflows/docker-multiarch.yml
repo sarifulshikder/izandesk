@@ -12,16 +12,30 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
+  IMAGE_API: ghcr.io/${{ github.repository }}-api
+  IMAGE_WEB: ghcr.io/${{ github.repository }}-web
 
 jobs:
-  images:
+  api:
+    name: API (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
+          - platform: linux/arm/v7
+            arch: armv7
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up QEMU
+        if: matrix.arch != 'amd64'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -34,48 +48,115 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: API image metadata
-        id: api-meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}-api
-          tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Sanitize tag
+        id: tag
+        run: echo "value=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push API image
+      - name: Build and push API (${{ matrix.arch }})
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/api/Dockerfile
-          platforms: ${{ env.PLATFORMS }}
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.api-meta.outputs.tags }}
-          labels: ${{ steps.api-meta.outputs.labels }}
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,mode=max,scope=api
+          tags: ${{ env.IMAGE_API }}:${{ steps.tag.outputs.value }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=api-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=api-${{ matrix.arch }}
 
-      - name: Web image metadata
-        id: web-meta
-        uses: docker/metadata-action@v5
+  web:
+    name: Web (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+          - platform: linux/arm64
+            arch: arm64
+          - platform: linux/arm/v7
+            arch: armv7
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch != 'amd64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}-web
-          tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push web image
+      - name: Sanitize tag
+        id: tag
+        run: echo "value=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push web (${{ matrix.arch }})
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/web/Dockerfile
-          platforms: ${{ env.PLATFORMS }}
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.web-meta.outputs.tags }}
-          labels: ${{ steps.web-meta.outputs.labels }}
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,mode=max,scope=web
+          tags: ${{ env.IMAGE_WEB }}:${{ steps.tag.outputs.value }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=web-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=web-${{ matrix.arch }}
+
+  manifest:
+    name: Publish multi-arch manifests
+    needs: [api, web]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sanitize tag
+        id: tag
+        run: echo "value=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Create API manifest
+        run: |
+          REF='${{ steps.tag.outputs.value }}'
+          docker buildx imagetools create \
+            -t "$IMAGE_API:$REF" \
+            "$IMAGE_API:$REF-amd64" \
+            "$IMAGE_API:$REF-arm64" \
+            "$IMAGE_API:$REF-armv7"
+
+      - name: Create web manifest
+        run: |
+          REF='${{ steps.tag.outputs.value }}'
+          docker buildx imagetools create \
+            -t "$IMAGE_WEB:$REF" \
+            "$IMAGE_WEB:$REF-amd64" \
+            "$IMAGE_WEB:$REF-arm64" \
+            "$IMAGE_WEB:$REF-armv7"
+
+      - name: Tag latest on main
+        if: github.ref == 'refs/heads/main'
+        run: |
+          REF='${{ steps.tag.outputs.value }}'
+          docker buildx imagetools create -t "$IMAGE_API:latest" "$IMAGE_API:$REF"
+          docker buildx imagetools create -t "$IMAGE_WEB:latest" "$IMAGE_WEB:$REF"
+
+      - name: Verify manifests
+        run: |
+          REF='${{ steps.tag.outputs.value }}'
+          docker buildx imagetools inspect "$IMAGE_API:$REF"
+          docker buildx imagetools inspect "$IMAGE_WEB:$REF"
