@@ -2,7 +2,7 @@ name: Build and publish single-container RouterOS image
 
 on:
   push:
-    tags: ['v*']
+    tags: ['router-*']
   workflow_dispatch:
 
 permissions:
