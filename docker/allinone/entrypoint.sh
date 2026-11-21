@@ -41,7 +41,7 @@ su-exec postgres pg_ctl -D /data/postgres -w -o \
    -c work_mem=1MB \
    -c maintenance_work_mem=32MB \
    -c logging_collector=off \
-   -c log_min_error_statement=none \
+   -c log_min_error_statement=panic \
    -c log_statement=none" start
 
 echo "[postgres] ensuring role and database"
