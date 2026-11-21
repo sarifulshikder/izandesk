@@ -195,11 +195,11 @@ test.describe('reseller mobile bottom nav', () => {
 
     await nav.getByRole('link', { name: 'Complaints' }).click();
     await expect(page).toHaveURL(/tab=complaints/);
-    await expect(nav.getByRole('link', { name: 'Complaints' })).toHaveClass(/bg-primary\/10/);
+    await expect(nav.getByRole('link', { name: 'Complaints' })).toHaveClass(/active/);
 
     await nav.getByRole('link', { name: 'Parental' }).click();
     await expect(page).toHaveURL(/tab=parental/);
-    await expect(nav.getByRole('link', { name: 'Parental' })).toHaveClass(/bg-primary\/10/);
+    await expect(nav.getByRole('link', { name: 'Parental' })).toHaveClass(/active/);
 
     const overflow = await nav.evaluate(el => el.scrollWidth > el.clientWidth);
     expect(overflow, 'bottom nav should fit a phone viewport').toBe(false);
@@ -312,7 +312,7 @@ test.describe('GIS authorization', () => {
     page.on('response', r => { if (r.status() >= 400 && r.url().includes('/api/')) apiErrors.push(`${r.status()}: ${r.url()}`); });
     await login(page, admin);
     await gotoStable(page, '/gis');
-    await expect(page.getByRole('heading', { name: 'Fiber GIS Map & Topology' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Fiber GIS Map' })).toBeVisible();
     await expect(page.getByText('Geo coverage')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Zoom to fit' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Export GeoJSON' })).toBeVisible();

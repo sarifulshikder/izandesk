@@ -11,6 +11,7 @@ import { getAllSettings, getCached, invalidateCache } from '../integrations/sett
 import { auditLog } from '../integrations/audit';
 import { handleMcpRpc, validateModernRequest, MCP_TOOLS, type McpContext, MCP_SERVER_VERSION } from '../integrations/mcp';
 import { hashMcpSecret, type McpKeyRecord } from '../integrations/mcp-auth';
+import { stepUpSatisfied } from '../security/step-up';
 
 // In-process sliding-window limiter, keyed by actor + credential. Protects
 // against runaway agents without punishing other users behind the same NAT.
@@ -107,6 +108,22 @@ export function createMcpRouter(pool: any): Router {
   }
 
   // ── Dedicated MCP key management (interactive admin JWT only) ─────────────
+  // Tool catalog for the admin key form. Kept separate from tools/list so the
+  // configuration UI does not need an MCP client handshake.
+  router.get('/tools', async (req: Request, res: Response) => {
+    if (!adminSession(req, res)) return;
+    res.json({
+      data: MCP_TOOLS.map((t) => ({
+        name: t.name,
+        title: t.title,
+        description: t.description,
+        category: t.category,
+        read_only: t.annotations?.readOnlyHint !== false,
+        destructive: t.annotations?.destructiveHint === true,
+      })),
+    });
+  });
+
   router.get('/keys', async (req: Request, res: Response) => {
     if (!adminSession(req, res)) return;
     const keys = await readKeys();
@@ -116,6 +133,10 @@ export function createMcpRouter(pool: any): Router {
   router.post('/keys', async (req: Request, res: Response) => {
     const admin = adminSession(req, res);
     if (!admin) return;
+    if (!await stepUpSatisfied(req, admin)) {
+      await auditLog({ actor_id: admin.id, actor_role: admin.role, action: 'auth.step_up_required', entity_type: 'mcp', ip_address: req.ip || null });
+      return res.status(403).json({ message: 'MFA step-up required to create MCP keys', step_up_required: true });
+    }
     const b = req.body || {};
     const name = String(b.name || '').trim();
     const role = String(b.role || 'SUPER_ADMIN');
@@ -162,6 +183,10 @@ export function createMcpRouter(pool: any): Router {
   router.delete('/keys/:keyId', async (req: Request, res: Response) => {
     const admin = adminSession(req, res);
     if (!admin) return;
+    if (!await stepUpSatisfied(req, admin)) {
+      await auditLog({ actor_id: admin.id, actor_role: admin.role, action: 'auth.step_up_required', entity_type: 'mcp', entity_id: req.params.keyId, ip_address: req.ip || null });
+      return res.status(403).json({ message: 'MFA step-up required to revoke MCP keys', step_up_required: true });
+    }
     const keyId = String(req.params.keyId);
     const keys = await readKeys();
     const key = keys[keyId];

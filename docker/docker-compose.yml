@@ -36,6 +36,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:-izandesk-dev-secret-change-me}
       WEB_ORIGIN: ${WEB_ORIGIN:-}
       ALLOW_LAN_ORIGINS: ${ALLOW_LAN_ORIGINS:-true}
+      DISABLE_DEMO_ACCOUNTS: ${DISABLE_DEMO_ACCOUNTS:-true}
+      SECURITY_STRICT_MODE: ${SECURITY_STRICT_MODE:-false}
+      SECURITY_ALLOW_INSECURE_DEMO: ${SECURITY_ALLOW_INSECURE_DEMO:-false}
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: ${POSTGRES_DB:-izandesk}

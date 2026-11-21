@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { LoginResponse, UserRole, UserSession } from '@izandesk/shared-types';
 import { apiFetch } from './api';
 
@@ -10,6 +10,9 @@ interface AuthContextType {
   loading: boolean;
   error: string | null;
   login: (email: string, password: string, remember?: boolean) => Promise<void>;
+  mfaRequired: boolean;
+  mfaToken: string | null;
+  verifyMfa: (code: string) => Promise<void>;
   logout: () => void;
   theme: 'dark' | 'light';
   setTheme: (theme: 'dark' | 'light') => void;
@@ -34,6 +37,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const rememberRef = useRef(true);
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaToken, setMfaToken] = useState<string | null>(null);
   // Read the saved theme during the first render: an effect read raced with the
   // mount write of the stale 'light' value (StrictMode re-ran the read after
   // localStorage had already been overwritten), so a saved 'dark' reverted to
@@ -101,21 +107,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     init();
   }, []);
 
+  const applySession = (nextToken: string, nextUser: UserSession, remember: boolean) => {
+    setToken(nextToken);
+    setUser(nextUser);
+    setActiveRole(nextUser.role);
+    setMfaRequired(false);
+    setMfaToken(null);
+    if (typeof window !== 'undefined') {
+      if (remember) localStorage.setItem(TOKEN_KEY, nextToken);
+      else localStorage.removeItem(TOKEN_KEY);
+    }
+  };
+
   const login = async (email: string, password: string, remember = true) => {
     setError(null);
     setLoading(true);
     try {
-      const res = await apiFetch<LoginResponse>('/api/auth/login', {
+      const res = await apiFetch<LoginResponse & { mfa_required?: boolean; mfa_token?: string }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       });
-      setToken(res.token);
-      setUser(res.user);
-      setActiveRole(res.user.role);
-      if (typeof window !== 'undefined') {
-        if (remember) localStorage.setItem(TOKEN_KEY, res.token);
-        else localStorage.removeItem(TOKEN_KEY);
+      if (res.mfa_required) {
+        rememberRef.current = remember;
+        setMfaToken(res.mfa_token || null);
+        setMfaRequired(true);
+        return;
       }
+      applySession(res.token, res.user, remember);
     } catch (e: any) {
       setError(e?.message || 'Login failed');
       throw e;
@@ -124,10 +142,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const verifyMfa = async (code: string) => {
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await apiFetch<LoginResponse>('/api/auth/mfa/verify', {
+        method: 'POST',
+        body: JSON.stringify({ mfa_token: mfaToken, code }),
+      });
+      applySession(res.token, res.user, rememberRef.current);
+    } catch (e: any) {
+      setError(e?.message || 'Verification failed');
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const logout = () => {
+    if (token) void apiFetch('/api/auth/logout', { method: 'POST' }, token).catch(() => {});
     setUser(null);
     setToken(null);
     setActiveRole(null);
+    setMfaRequired(false);
+    setMfaToken(null);
     if (typeof window !== 'undefined') localStorage.removeItem(TOKEN_KEY);
   };
 
@@ -145,6 +183,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loading,
     error,
     login,
+    mfaRequired,
+    mfaToken,
+    verifyMfa,
     logout,
     theme,
     setTheme,
@@ -157,7 +198,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     activeRole,
     switchRole: (role: UserRole) => setActiveRole(role),
     can,
-  }), [user, token, loading, error, theme, isCommandPaletteOpen, isMobileMenuOpen, activeRole]);
+  }), [user, token, loading, error, mfaRequired, mfaToken, theme, isCommandPaletteOpen, isMobileMenuOpen, activeRole]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

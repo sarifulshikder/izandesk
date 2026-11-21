@@ -1628,6 +1628,30 @@ export async function initDb() {
   // Seed it from the highest numeric suffix already present so new codes never collide.
   await pool.query('CREATE SEQUENCE IF NOT EXISTS subscriber_client_code_seq').catch(() => {});
   await pool.query(`SELECT setval('subscriber_client_code_seq', GREATEST(COALESCE((SELECT MAX((substring(client_code from '-([0-9]+)$'))::int) FROM subscribers), 0), 1), true)`).catch(() => {});
+
+  // Staff session revocation and TOTP enrollment (security hardening).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      id UUID PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      revoked_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS user_mfa (
+      user_id TEXT PRIMARY KEY,
+      secret_enc TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT false,
+      recovery_hashes JSONB NOT NULL DEFAULT '[]'::jsonb,
+      enrolled_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      verified_at TIMESTAMPTZ,
+      disabled_at TIMESTAMPTZ
+    );
+  `).catch(e => console.error('[DB] security schema error', e.message));
 }
 
 export { pool };

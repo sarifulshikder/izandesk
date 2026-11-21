@@ -116,9 +116,14 @@ curl -s http://localhost:4000/api/mcp \
 
 Clients that cannot send Basic auth can use `Authorization: Bearer izmc_0123456789abcdef.izsk_...`.
 
+### Option C — use the admin UI (recommended for most teams)
+
+Go to **Admin → Settings → MCP Server**. Super admins can create keys, choose a role, switch on read-only mode, pick individual tools or allow all tools visible to that role, copy a ready-made client config, revoke keys, and jump to the filtered MCP audit trail. The secret is shown once in a copy dialog.
+
 Other key endpoints:
 
 ```text
+GET    /api/mcp/tools             tool catalog for the admin allowlist picker
 GET    /api/mcp/keys              list key metadata (never returns secrets)
 DELETE /api/mcp/keys/:key_id      revoke a key
 ```

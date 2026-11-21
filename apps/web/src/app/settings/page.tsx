@@ -3,9 +3,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
+import McpAdmin from '@/components/settings/mcp-admin';
+import { SecurityAdmin } from '@/components/settings/security-admin';
 import {
   Settings as SettingsIcon, Shield, Bell, Palette, Receipt, Network as NetworkIcon,
-  Save, RotateCcw, KeyRound, Send, AlertTriangle, CheckCircle2, Building2,
+  Save, RotateCcw, KeyRound, Send, AlertTriangle, CheckCircle2, Building2, Bot,
 } from 'lucide-react';
 
 type Field = {
@@ -15,7 +17,7 @@ type Field = {
 type CategoryMeta = { label: string; description: string };
 
 const TAB_ICONS: Record<string, any> = {
-  general: Building2, security: Shield, notifications: Bell, branding: Palette, billing: Receipt, network: NetworkIcon, acs: NetworkIcon,
+  general: Building2, security: Shield, notifications: Bell, branding: Palette, billing: Receipt, network: NetworkIcon, acs: NetworkIcon, mcp: Bot,
 };
 
 export default function SettingsPage() {
@@ -224,6 +226,8 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {tab === 'mcp' && <McpAdmin token={token} isAdmin={isAdmin} />}
+
       {tab === 'security' && (
         <div className="card p-4 space-y-3">
           <div className="text-xs uppercase font-bold text-muted-foreground tracking-wider flex items-center gap-2"><KeyRound className="w-4 h-4"/>Change my password</div>
@@ -237,9 +241,11 @@ export default function SettingsPage() {
             {pwMsg && <span className="text-xs text-success">{pwMsg}</span>}
             {pwErr && <span className="text-xs text-danger">{pwErr}</span>}
           </div>
-          <div className="text-[11px] text-muted-foreground">Policy enforced from Security tab: min {values.security?.password_min_length ?? 8} chars, upper {String(values.security?.password_require_upper ?? true)}, lower {String(values.security?.password_require_lower ?? true)}, digit {String(values.security?.password_require_digit ?? true)}, symbol {String(values.security?.password_require_symbol ?? false)}. Passwords are stored bcrypt-hashed and survive restarts.</div>
+          <div className="text-[11px] text-muted-foreground">Policy enforced from Security tab: min {values.security?.password_min_length ?? 8} chars, upper {String(values.security?.password_require_upper ?? true)}, lower {String(values.security?.password_require_lower ?? true)}, digit {String(values.security?.password_require_digit ?? true)}, symbol {String(values.security?.password_require_symbol ?? false)}. Passwords are stored bcrypt-hashed and survive restarts. Changing your password signs out other sessions.</div>
         </div>
       )}
+
+      {tab === 'security' && <SecurityAdmin token={token} isSuperAdmin={isAdmin} />}
 
     </div>
   );

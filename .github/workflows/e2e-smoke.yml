@@ -29,9 +29,26 @@ jobs:
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Build shared types
+        run: pnpm --filter @izandesk/shared-types build
+
+      - name: Typecheck API and web
+        run: |
+          pnpm --filter api exec tsc --noEmit
+          pnpm --filter web exec tsc --noEmit
+
+      - name: Build API and smoke-test security primitives
+        run: |
+          pnpm --filter api build
+          node scripts/smoke-security.mjs
+
       - name: Start the app stack
         run: |
           docker compose -f docker/docker-compose.yml up -d postgres redis api web
+        env:
+          # CI exercises the public demo profile, not a production deployment.
+          DISABLE_DEMO_ACCOUNTS: 'false'
+          SECURITY_ALLOW_INSECURE_DEMO: 'true'
 
       - name: Wait for web and API
         run: |
@@ -48,6 +65,14 @@ jobs:
           echo "Timed out waiting for the stack."
           docker compose -f docker/docker-compose.yml logs --tail=200 api web postgres
           exit 1
+
+      - name: MCP protocol smoke
+        run: pnpm test:mcp
+        env:
+          WEB_URL: http://localhost:3000
+          API_URL: http://localhost:4000
+          DEMO_EMAIL: admin@izandesk.com
+          DEMO_PASSWORD: admin123
 
       - name: Run smoke suite
         run: pnpm test:e2e

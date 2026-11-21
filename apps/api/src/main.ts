@@ -33,7 +33,7 @@ import hrRouter from './routes/hr';
 import procurementRouter from './routes/procurement';
 import hotspotRouter from './routes/hotspot';
 import reportsRouter from './routes/reports';
-import auditRouter from './routes/audit';
+import auditRouter, { runAuditRetention } from './routes/audit';
 import leadsRouter from './routes/leads';
 import installationOrdersRouter from './routes/installation-orders';
 import subscriberEquipmentRouter from './routes/subscriber-equipment';
@@ -42,14 +42,19 @@ import settingsRouter from './routes/settings';
 import aiRouter from './routes/ai';
 import { createMcpRouter } from './routes/mcp';
 import { createMcpAuth } from './integrations/mcp-auth';
+import { assertProductionSecurity, ipAllowed } from './security/guards';
+import { mfaEnabled, mfaRequiredFor } from './security/mfa';
+import { createRateLimiter } from './security/rate-limit';
+import { createSession, newSessionId, revokeAllSessions, sessionActive, touchSession } from './security/sessions';
+import { createAuthSecurityRouter } from './routes/auth-security';
 import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
 
 const PORT = Number(process.env.API_PORT || 4000);
-if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
-  throw new Error('JWT_SECRET must be set in production');
-}
+// Fail loudly before any route is mounted when the deployment is insecure.
+// The public demo can opt into the known-credentials profile explicitly.
+assertProductionSecurity();
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
 const WEB_ORIGIN = process.env.WEB_ORIGIN || '';
 const ALLOW_LAN_ORIGINS = (process.env.ALLOW_LAN_ORIGINS || 'true').toLowerCase() !== 'false';
@@ -72,29 +77,43 @@ if (!DEMO_ACCOUNTS_DISABLED && process.env.NODE_ENV === 'production') {
 }
 
 function toSession(u: AuthUser): UserSession { const { password, password_hash, ...rest } = u as any; return rest; }
-function issueToken(user: UserSession, minutes = 720) { return jwt.sign({ sub: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: `${Math.max(5, minutes)}m` }); }
+function issueToken(user: UserSession, minutes = 720, jti?: string) {
+  return jwt.sign({ sub: user.id, role: user.role, email: user.email, ...(jti ? { jti } : {}) }, JWT_SECRET, { expiresIn: `${Math.max(5, minutes)}m` });
+}
 
 async function checkPassword(user: AuthUser, pw: string): Promise<boolean> {
   if (user.password_hash) { try { return await bcrypt.compare(pw, user.password_hash); } catch { return false; } }
   return pw === user.password;
 }
 
-// in-memory login lockout (per email), limits come from settings
+// in-memory login lockout (per identifier + source IP), limits come from settings
 interface LoginAttempt { fails: number; lockedUntil: number }
 const loginAttempts = new Map<string, LoginAttempt>();
+const loginLimiter = createRateLimiter('login', 30, 60_000);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
   (async () => {
     const header = req.headers.authorization;
     if (!header?.startsWith('Bearer ')) { res.status(401).json({ message: 'Missing bearer token' }); return; }
-    let payload: { sub: string; role: UserRole };
+    let payload: { sub: string; role: UserRole; jti?: string };
     try {
-      payload = jwt.verify(header.slice(7), JWT_SECRET) as { sub: string; role: UserRole };
+      payload = jwt.verify(header.slice(7), JWT_SECRET) as { sub: string; role: UserRole; jti?: string };
     } catch {
       res.status(401).json({ message: 'Invalid or expired token' }); return;
     }
     const user = users.find((u) => u.id === payload.sub);
     if (!user) { res.status(401).json({ message: 'Invalid session' }); return; }
+    // Revocable sessions: a jti is present on interactive logins. Tokens without
+    // one (service/MCP executor tokens) keep the legacy JWT-only behaviour.
+    if (payload.jti && !await sessionActive(payload.jti)) {
+      res.status(401).json({ message: 'Session has been revoked. Please sign in again.' }); return;
+    }
+    // Admin IP allowlist (configured in Settings → Security).
+    const adminAllowlist = await getCached('security.admin_ip_allowlist', []);
+    if (user.role === 'SUPER_ADMIN' && !ipAllowed(req.ip || String(req.headers['x-forwarded-for'] || ''), adminAllowlist)) {
+      res.status(403).json({ message: 'Admin access from this IP is not allowed' }); return;
+    }
+    if (payload.jti) void touchSession(payload.jti);
     // maintenance mode: only SUPER_ADMIN passes while enabled
     try {
       if (await getCached('security.maintenance_mode', false)) {
@@ -161,11 +180,19 @@ async function bootstrap() {
       const body = req.body as LoginRequest & { username?: string; identifier?: string };
       const identifier = String(body.identifier || body.email || body.username || '').trim().toLowerCase();
       const pw = String(body.password || '');
+      const sourceIp = String(req.ip || req.headers['x-forwarded-for'] || '');
+      const throttle = loginLimiter.check(sourceIp || identifier || 'unknown', 30);
+      if (!throttle.allowed) {
+        res.setHeader('Retry-After', String(throttle.retryAfterSec));
+        return res.status(429).json({ message: 'Too many login attempts. Try again shortly.' });
+      }
       const now = Date.now();
       const maxAttempts = Number(await getCached('security.login_max_attempts', 5)) || 5;
       const lockMinutes = Number(await getCached('security.login_lockout_minutes', 15)) || 15;
-      const att = loginAttempts.get(identifier);
+      const lockKey = `${identifier}|${sourceIp}`;
+      const att = loginAttempts.get(lockKey);
       if (att && att.lockedUntil > now) {
+        res.setHeader('Retry-After', String(Math.ceil((att.lockedUntil - now) / 1000)));
         return res.status(429).json({ message: `Too many failed attempts. Locked — try again in ${Math.ceil((att.lockedUntil - now) / 60000)} min.` });
       }
       // Support login by email or local-part username (e.g. "admin" for admin@izandesk.com)
@@ -176,22 +203,36 @@ async function bootstrap() {
       });
       const ok = user ? await checkPassword(user, pw) : false;
       if (!user || !ok) {
-        const a = loginAttempts.get(identifier) || { fails: 0, lockedUntil: 0 };
+        const a = loginAttempts.get(lockKey) || { fails: 0, lockedUntil: 0 };
         a.fails += 1;
         if (a.fails >= maxAttempts) {
           a.lockedUntil = now + lockMinutes * 60000; a.fails = 0;
-          loginAttempts.set(identifier, a);
+          loginAttempts.set(lockKey, a);
           await auditLog({ action: 'auth.lockout', entity_type: 'auth', entity_id: identifier, details: { lockout_minutes: lockMinutes, max_attempts: maxAttempts }, ip_address: req.ip });
+          res.setHeader('Retry-After', String(lockMinutes * 60));
           return res.status(429).json({ message: `Too many failed attempts. Account locked for ${lockMinutes} min.` });
         }
-        loginAttempts.set(identifier, a);
+        loginAttempts.set(lockKey, a);
         return res.status(401).json({ message: 'Invalid email/username or password' });
       }
-      loginAttempts.delete(identifier);
+      loginAttempts.delete(lockKey);
       const session = toSession(user);
+      const enrolled = await mfaEnabled(user.id);
+      const required = await mfaRequiredFor(user.role);
+      if (enrolled) {
+        const challenge = jwt.sign({ sub: user.id, purpose: 'mfa' }, JWT_SECRET, { expiresIn: '5m' });
+        return res.json({ mfa_required: true, mfa_token: challenge, methods: ['totp', 'recovery_code'] });
+      }
+      // Policy requires TOTP but the account has not enrolled yet: let them in
+      // so they can complete enrollment in Settings → Security, and record it.
+      if (required) {
+        await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.mfa_enrollment_required', entity_type: 'auth' });
+      }
       const sessionMinutes = Number(await getCached('security.session_timeout_minutes', 720)) || 720;
+      const jti = newSessionId();
+      await createSession({ id: jti, userId: user.id, minutes: sessionMinutes, ip: req.ip, userAgent: String(req.headers['user-agent'] || '').slice(0, 300) });
       await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.login', entity_type: 'auth', ip_address: req.ip });
-      res.json({ token: issueToken(session, sessionMinutes), user: session } as LoginResponse);
+      res.json({ token: issueToken(session, sessionMinutes, jti), user: session, ...(required ? { mfa_enrollment_required: true } : {}) } as LoginResponse);
     } catch (e: any) {
       res.status(500).json({ message: e.message || 'Login failed' });
     }
@@ -217,14 +258,27 @@ async function bootstrap() {
         [JSON.stringify(overrides), user.name]
       );
       invalidateCache();
-      await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.change_password', entity_type: 'auth', entity_id: user.id, details: { via: 'settings-security' }, ip_address: req.ip });
-      res.json({ ok: true, message: 'Password updated and stored hashed (survives restarts).' });
+      const currentJti = (jwt.decode(String(req.headers.authorization || '').slice(7)) as any)?.jti;
+      const revoked = await revokeAllSessions(user.id, currentJti);
+      await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.change_password', entity_type: 'auth', entity_id: user.id, details: { via: 'settings-security', other_sessions_revoked: revoked }, ip_address: req.ip });
+      res.json({ ok: true, message: revoked ? `Password updated. ${revoked} other session(s) were signed out.` : 'Password updated and stored hashed (survives restarts).' });
     } catch (e: any) {
       res.status(500).json({ message: e.message || 'Failed to change password' });
     }
   });
 
   app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: (req as any).user as UserSession }));
+  // Revocable sessions + TOTP enrollment (mounted after the legacy auth routes).
+  app.use('/api/auth', (req, res, next) => {
+    // MFA verification uses the short-lived challenge token, not a staff JWT.
+    if (req.path === '/mfa/verify') return next();
+    return authMiddleware(req, res, next);
+  }, createAuthSecurityRouter({
+    findUser: (id) => users.find((u) => u.id === id),
+    checkPassword,
+    issueToken,
+  }));
+
   app.get('/api/auth/roles', (_req, res) => res.json({ roles: [
     { role: 'SUPER_ADMIN', label: 'Super Admin', desc: 'Full ISP ownership & ledger' },
     { role: 'NOC_ENGINEER', label: 'NOC Engineer', desc: 'Routers, OLTs & AAA policies' },
@@ -421,6 +475,9 @@ async function bootstrap() {
     startBillingScheduler();
     startBackupScheduler();
     startReportScheduler();
+    // Compliance retention sweep once per day (setting: security.audit_retention_days).
+    void runAuditRetention();
+    setInterval(() => { void runAuditRetention(); }, 24 * 60 * 60 * 1000).unref();
   }
 }
 

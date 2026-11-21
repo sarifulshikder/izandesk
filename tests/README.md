@@ -9,7 +9,9 @@ dev containers) first.
 ```bash
 pnpm test:e2e                 # safe, read-only smoke checks
 pnpm test:e2e:mutations       # also runs the opt-in create/edit/delete/drag flows
-                              # (subscriber, GIS box, GIS area)
+                              # (subscriber, GIS box, GIS area, MCP key lifecycle)
+pnpm test:mcp                 # standalone MCP JSON-RPC protocol smoke test
+node scripts/smoke-security.mjs  # guards, TOTP, secret encryption, rate limiter (after api build)
 ```
 
 Target a different host with `E2E_BASE_URL=https://your-host`.
@@ -17,8 +19,11 @@ Target a different host with `E2E_BASE_URL=https://your-host`.
 CI (`.github/workflows/e2e-smoke.yml`) boots `postgres`, `redis`, `api` and `web`
 from `docker/docker-compose.yml`, waits for `/api/health` and the web root, then
 runs the default (non-mutating) suite against `http://localhost:3000` on every
-push to `master`, pull request and manual dispatch. The opt-in mutating test is
-not run in CI.
+push to `master`, pull request and manual dispatch. CI also typechecks both apps
+and runs the standalone `pnpm test:mcp` protocol smoke plus `scripts/smoke-security.mjs`.
+The opt-in mutating Playwright tests are not run in CI. CI opts into the demo
+security profile (`DISABLE_DEMO_ACCOUNTS=false`, `SECURITY_ALLOW_INSECURE_DEMO=true`);
+real deployments must leave that flag unset.
 
 ## Configuration
 
@@ -46,6 +51,15 @@ not run in CI.
   returns only pins in view, direct URL navigation shows the access-restricted
   page, and the admin workbench renders its KPIs, layers, Satellite/Streets
   switch, heatmap and live toggles without API errors or phone-width overflow.
+- The MCP Server settings tab renders key management, tool allowlisting and a
+  client-config template; `/api/mcp/tools` returns the role-safe catalog; and the
+  audit deep link filters to MCP events.
+- (Opt-in) A scoped, read-only MCP key can be created, used for `tools/list` and
+  revoked.
+- Security settings render TOTP enrollment and active sessions; the audit CSV
+  export requires a session and honours the `entity_type` filter; unknown
+  accounts hit progressive lockout with `Retry-After`; and logout revokes the
+  current session.
 - (Opt-in) A reseller can create and delete a subscriber through the wizard.
 - (Opt-in) An admin can create, edit, drag, undo a drag and delete a GIS box,
   create, rename and delete a GIS area, and bulk-import boxes/routes from a

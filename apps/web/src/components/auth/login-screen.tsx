@@ -17,10 +17,11 @@ const demoAccounts = [
 ];
 
 export function LoginScreen() {
-  const { login, loading, error, theme, toggleTheme } = useAuth();
+  const { login, verifyMfa, mfaRequired, loading, error, theme, toggleTheme } = useAuth();
   const [email, setEmail] = useState('admin@izandesk.com');
   const [password, setPassword] = useState('admin123');
   const [remember, setRemember] = useState(true);
+  const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
@@ -32,6 +33,19 @@ export function LoginScreen() {
       await login(email, password, remember);
     } catch (err: any) {
       setLocalError(err?.message || 'Login failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const submitMfa = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setSubmitting(true);
+    setLocalError(null);
+    try {
+      await verifyMfa(code.trim());
+    } catch (err: any) {
+      setLocalError(err?.message || 'Verification failed');
     } finally {
       setSubmitting(false);
     }
@@ -130,33 +144,53 @@ export function LoginScreen() {
               <p className="text-[12px] text-muted-foreground mt-1.5">Sign in to your IzanDesk operations workspace.</p>
             </div>
 
-            <form onSubmit={submit} className="space-y-4">
-              <div>
-                <label className="form-label" htmlFor="login-username">Username or email</label>
-                <div className="input-icon">
-                  <User />
-                  <input id="login-username" value={email} onChange={(e) => setEmail(e.target.value)} type="text" autoComplete="username" className="form-control" placeholder="you@company.com" required />
+            {mfaRequired ? (
+              <form onSubmit={submitMfa} className="space-y-4" data-testid="mfa-challenge">
+                <div className="alert alert-primary">
+                  <ShieldCheck className="w-4 h-4" /> Two-factor verification is required for this account.
                 </div>
-              </div>
-              <div>
-                <div className="flex items-center justify-between">
-                  <label className="form-label" htmlFor="login-password">Password</label>
-                  <Link href="/forgot-password" className="text-[10.5px] text-primary font-semibold hover:underline underline-offset-2">Forgot password?</Link>
+                <div>
+                  <label className="form-label" htmlFor="mfa-code">Authenticator or recovery code</label>
+                  <div className="input-icon">
+                    <Lock />
+                    <input id="mfa-code" value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" className="form-control tracking-[0.3em] font-mono" placeholder="000000" required autoFocus />
+                  </div>
+                  <p className="text-[10.5px] text-muted-foreground mt-1.5">Enter the current 6-digit code, or a saved one-time recovery code.</p>
                 </div>
-                <div className="input-icon">
-                  <Lock />
-                  <input id="login-password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" className="form-control" placeholder="Your password" required />
+                {(localError || error) && <div className="alert alert-danger">{localError || error}</div>}
+                <button disabled={submitting || loading} type="submit" className="btn btn-primary w-full !h-[42px]">
+                  <ShieldCheck className="w-4 h-4" /> {submitting ? 'Verifying…' : 'Verify and sign in'}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={submit} className="space-y-4">
+                <div>
+                  <label className="form-label" htmlFor="login-username">Username or email</label>
+                  <div className="input-icon">
+                    <User />
+                    <input id="login-username" value={email} onChange={(e) => setEmail(e.target.value)} type="text" autoComplete="username" className="form-control" placeholder="you@company.com" required />
+                  </div>
                 </div>
-              </div>
-              <label className="form-check cursor-pointer select-none">
-                <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-                Keep me signed in on this device
-              </label>
-              {(localError || error) && <div className="alert alert-danger">{localError || error}</div>}
-              <button disabled={submitting || loading} type="submit" className="btn btn-primary w-full !h-[42px]">
-                <LogIn className="w-4 h-4" /> {submitting ? 'Signing in…' : 'Sign in to workspace'}
-              </button>
-            </form>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label className="form-label" htmlFor="login-password">Password</label>
+                    <Link href="/forgot-password" className="text-[10.5px] text-primary font-semibold hover:underline underline-offset-2">Forgot password?</Link>
+                  </div>
+                  <div className="input-icon">
+                    <Lock />
+                    <input id="login-password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" className="form-control" placeholder="Your password" required />
+                  </div>
+                </div>
+                <label className="form-check cursor-pointer select-none">
+                  <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+                  Keep me signed in on this device
+                </label>
+                {(localError || error) && <div className="alert alert-danger">{localError || error}</div>}
+                <button disabled={submitting || loading} type="submit" className="btn btn-primary w-full !h-[42px]">
+                  <LogIn className="w-4 h-4" /> {submitting ? 'Signing in…' : 'Sign in to workspace'}
+                </button>
+              </form>
+            )}
 
             <div className="mt-5 pt-4 border-t border-border flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
               Customer? <Link href="/portal" className="text-primary font-semibold hover:underline underline-offset-2 inline-flex items-center gap-0.5">Open the self-care portal <ArrowUpRight className="w-3 h-3" /></Link>

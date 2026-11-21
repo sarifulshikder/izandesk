@@ -122,6 +122,7 @@
   --card-radius: 14px;
   --shadow-card: 0 1px 2px rgb(12 28 22 / 0.05), 0 1px 3px rgb(12 28 22 / 0.03);
   --card-watermark: none;
+  --overlay: rgb(8 22 17 / 0.58);
 
   /* Dark navigation rail, present in both themes */
   --rail-bg: #081310;
@@ -172,6 +173,7 @@
   --card-cap: #0c1815;
   --shadow-card: 0 1px 0 rgb(255 255 255 / 0.025) inset, 0 10px 24px -16px rgb(0 0 0 / 0.8);
   --card-watermark: none;
+  --overlay: rgb(2 10 8 / 0.74);
   --rail-bg: #06110e;
   --rail-bg-2: #0a1713;
 
@@ -1199,6 +1201,11 @@
     background: var(--primary-soft);
     color: var(--primary);
     font-weight: 600;
+  }
+  .modal-backdrop {
+    background: var(--overlay);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
   }
   .glass-panel {
     background: color-mix(in srgb, var(--card) 86%, transparent);

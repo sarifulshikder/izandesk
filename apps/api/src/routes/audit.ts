@@ -2,24 +2,56 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { auditLog, reqActor } from '../integrations/audit';
+import { getCached } from '../integrations/settings';
 
 const router: Router = Router();
 function guard(req:any,res:any){ if(!['SUPER_ADMIN','BILLING_OPERATOR','NOC_ENGINEER','TECHNICIAN'].includes(String((req as any).user?.role||''))){ res.status(403).json({message:'Forbidden'}); return false;} return true; }
 
-router.get('/', asyncHandler(async (req,res)=>{
-  if(!guard(req,res)) return;
+function auditFilter(req: any): { sql: string; params: any[] } {
   const { entity_type, entity_id, action, q } = req.query as any;
   const where:string[]=[]; const params:any[]=[];
   if(entity_type){ params.push(entity_type); where.push(`entity_type=$${params.length}`); }
   if(entity_id){ params.push(entity_id); where.push(`entity_id=$${params.length}`); }
   if(action){ params.push(action); where.push(`action=$${params.length}`); }
   if(q){ params.push(`%${String(q).toLowerCase()}%`); where.push(`(lower(COALESCE(action,'')) LIKE $${params.length} OR lower(COALESCE(actor_name,'')) LIKE $${params.length} OR lower(COALESCE(entity_type,'')) LIKE $${params.length})`); }
-  const sql=where.length?`WHERE ${where.join(' AND ')}`:'';
+  return { sql: where.length?`WHERE ${where.join(' AND ')}`:'', params };
+}
+
+function toCsv(rows:any[]): string {
+  const cols = ['created_at','actor_id','actor_name','actor_role','action','entity_type','entity_id','details','ip_address'];
+  const esc=(v:any)=>{ const s=v==null?'':(typeof v==='object'?JSON.stringify(v):String(v)); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+  return [cols.join(','), ...rows.map((r)=>cols.map((c)=>esc(r[c])).join(','))].join('\n');
+}
+
+router.get('/', asyncHandler(async (req,res)=>{
+  if(!guard(req,res)) return;
+  const { sql, params } = auditFilter(req);
   const r=await pool.query(`SELECT * FROM audit_logs ${sql} ORDER BY created_at DESC LIMIT 1000`, params);
   res.json({ok:true,data:r.rows});
 }));
 
+// CSV export for compliance reviews; Bearer token is required by the router mount.
+router.get('/export.csv', asyncHandler(async (req,res)=>{
+  if(!guard(req,res)) return;
+  const { sql, params } = auditFilter(req);
+  const r=await pool.query(`SELECT * FROM audit_logs ${sql} ORDER BY created_at DESC LIMIT 10000`, params);
+  res.setHeader('Content-Type','text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition','attachment; filename="izandesk-audit.csv"');
+  res.send(toCsv(r.rows));
+}));
+
+/** Daily retention sweep driven by the API bootstrap timer. */
+export async function runAuditRetention(): Promise<number> {
+  try {
+    const days = Number(await getCached('security.audit_retention_days', 365)) || 0;
+    if (!days) return 0;
+    const r = await pool.query('DELETE FROM audit_logs WHERE created_at < now() - ($1 || \' days\')::interval', [String(days)]);
+    return r.rowCount || 0;
+  } catch { return 0; }
+}
+
 router.post('/', asyncHandler(async (req,res)=>{
+  if(!guard(req,res)) return;
   const b=req.body||{}; if(!b.action) return res.status(400).json({message:'action required'});
   await auditLog({ ...reqActor(req), actor_name: b.actor_name, actor_role: b.actor_role, action: b.action, entity_type: b.entity_type, entity_id: b.entity_id, details: b.details||{} });
   res.status(201).json({ok:true});
