@@ -297,22 +297,6 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS notes TEXT;
   `);
 
-  // Phase 3.1: dual-mode provisioning (API/REST direct router vs RADIUS pool)
-  await pool.query(`
-    ALTER TABLE network_routers
-      ADD COLUMN IF NOT EXISTS integration_mode TEXT NOT NULL DEFAULT 'API',
-      ADD COLUMN IF NOT EXISTS radius_secret TEXT,
-      ADD COLUMN IF NOT EXISTS coa_port INT DEFAULT 3799,
-      ADD COLUMN IF NOT EXISTS nas_identifier TEXT;
-  `);
-  await pool.query(`ALTER TABLE network_routers ALTER COLUMN api_port DROP NOT NULL;`).catch(() => {});
-  await pool.query(`
-    ALTER TABLE subscribers
-      ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'RADIUS',
-      ADD COLUMN IF NOT EXISTS router_id UUID REFERENCES network_routers(id) ON DELETE SET NULL;
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscribers_router_id ON subscribers(router_id);`);
-
   // FreeRADIUS SQL schema (integrated in IzanDesk DB) for real AAA
   await pool.query(`
     CREATE TABLE IF NOT EXISTS radcheck (
@@ -423,7 +407,6 @@ export async function initDb() {
       ros_version TEXT NOT NULL DEFAULT 'v7',
       use_ssl BOOLEAN NOT NULL DEFAULT false,
       site TEXT,
-      wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL,
       is_enabled BOOLEAN NOT NULL DEFAULT true,
       last_seen_at TIMESTAMPTZ,
       status TEXT NOT NULL DEFAULT 'UNKNOWN',
@@ -501,7 +484,6 @@ export async function initDb() {
       password TEXT,
       snmp_community TEXT DEFAULT 'public',
       site TEXT,
-      wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL,
       is_enabled BOOLEAN NOT NULL DEFAULT true,
       status TEXT NOT NULL DEFAULT 'UNKNOWN',
       last_seen_at TIMESTAMPTZ,
@@ -583,13 +565,6 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_inventory_serials_source ON inventory_serials(source);
   `);
 
-  // Phase 3.3: bind OLT to WireGuard peer for tunnel-aware management/routing
-  await pool.query(`
-    ALTER TABLE olts ADD COLUMN IF NOT EXISTS wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL;
-    CREATE INDEX IF NOT EXISTS idx_olts_wg_peer_id ON olts(wg_peer_id);
-  `);
-
-
   // Phase 3.2: WireGuard hub-and-spoke overlay (for NAT/CGNAT sites and OLTs behind routers)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wg_hub_config (
@@ -635,6 +610,29 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_wg_peers_router_id ON wg_peers(router_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wg_peers_tunnel_ip ON wg_peers(tunnel_ip);
   `);
+
+  // Cross-table columns are added after both tables exist so a fresh database
+  // can bootstrap without depending on a pre-existing schema snapshot.
+  await pool.query(`ALTER TABLE network_routers ADD COLUMN IF NOT EXISTS wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE olts ADD COLUMN IF NOT EXISTS wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_olts_wg_peer_id ON olts(wg_peer_id);`);
+
+  // Phase 3.1: dual-mode provisioning (API/REST direct router vs RADIUS pool)
+  await pool.query(`
+    ALTER TABLE network_routers
+      ADD COLUMN IF NOT EXISTS integration_mode TEXT NOT NULL DEFAULT 'API',
+      ADD COLUMN IF NOT EXISTS radius_secret TEXT,
+      ADD COLUMN IF NOT EXISTS coa_port INT DEFAULT 3799,
+      ADD COLUMN IF NOT EXISTS nas_identifier TEXT;
+  `);
+  await pool.query(`ALTER TABLE network_routers ALTER COLUMN api_port DROP NOT NULL;`).catch(() => {});
+  await pool.query(`
+    ALTER TABLE subscribers
+      ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'RADIUS',
+      ADD COLUMN IF NOT EXISTS router_id UUID REFERENCES network_routers(id) ON DELETE SET NULL;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscribers_router_id ON subscribers(router_id);`);
+
   await pool.query(`INSERT INTO wg_hub_config(id) VALUES(1) ON CONFLICT (id) DO NOTHING`);
 
   // seed Phase 3 sample data
@@ -911,25 +909,6 @@ export async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fup_logs_sub ON fup_enforcement_logs(subscriber_id, created_at DESC)`).catch(()=>{});
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS reseller_share_entries (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      reseller_id UUID NOT NULL REFERENCES resellers(id) ON DELETE CASCADE,
-      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
-      payment_ref TEXT,
-      wallet_transaction_id UUID,
-      retail_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
-      partner_share NUMERIC(12,2) NOT NULL DEFAULT 0,
-      isp_share NUMERIC(12,2) NOT NULL DEFAULT 0,
-      margin_percent NUMERIC(8,2) NOT NULL DEFAULT 0,
-      package_name TEXT,
-      period_month DATE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      metadata JSONB DEFAULT '{}'::jsonb
-    );
-  `).catch(()=>{});
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_reseller_share_entries_reseller ON reseller_share_entries(reseller_id, created_at DESC)`).catch(()=>{});
-
-  await pool.query(`
     CREATE TABLE IF NOT EXISTS saved_payment_methods (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       subscriber_id UUID NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
@@ -1121,6 +1100,26 @@ export async function initDb() {
         ('daily_revenue_summary_telegram', 'TELEGRAM', 'DAILY_REVENUE_SUMMARY', NULL, '📊 Daily Revenue Summary ({{date}})\nCollections: {{collections}}\nInvoices: {{invoices}}\nDue Outstanding: {{outstanding}}', '["date","collections","invoices","outstanding"]'::jsonb)
       ON CONFLICT DO NOTHING;
   `).catch(e => console.error('[DB] Phase 5 schema extension error', e.message));
+
+  // Depends on resellers, so it is created after the Phase 5 block above.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reseller_share_entries (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      reseller_id UUID NOT NULL REFERENCES resellers(id) ON DELETE CASCADE,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      payment_ref TEXT,
+      wallet_transaction_id UUID,
+      retail_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      partner_share NUMERIC(12,2) NOT NULL DEFAULT 0,
+      isp_share NUMERIC(12,2) NOT NULL DEFAULT 0,
+      margin_percent NUMERIC(8,2) NOT NULL DEFAULT 0,
+      package_name TEXT,
+      period_month DATE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      metadata JSONB DEFAULT '{}'::jsonb
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_reseller_share_entries_reseller ON reseller_share_entries(reseller_id, created_at DESC)`);
 
   // Phase 7: Finance, HRM, Procurement/Assets, Hotspot, Reporting & Audit foundations
   await pool.query(`
