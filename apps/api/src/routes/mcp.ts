@@ -62,6 +62,22 @@ function contextFor(req: Request, pool: any): McpContext {
 
 export function createMcpRouter(pool: any): Router {
   const router = Router();
+  // Applies to the JSON-RPC endpoint and key management alike: a disabled MCP
+  // server must not leave usable/key-creation surfaces behind.
+  router.use(async (_req, res, next) => {
+    try {
+      if (!await getCached('mcp.enabled', true)) {
+        return res.status(503).json({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'MCP server is disabled by the administrator' },
+        });
+      }
+    } catch {
+      // Fail open here only for settings cache outages; the POST handler below
+      // repeats the check with the same fallback.
+    }
+    return next();
+  });
   const KEY_ROLES = ['SUPER_ADMIN', 'NOC_ENGINEER', 'BILLING_OPERATOR', 'TECHNICIAN', 'RESELLER'];
   const toolNames = new Set(MCP_TOOLS.map((t) => t.name));
 
@@ -257,9 +273,10 @@ export function createMcpRouter(pool: any): Router {
       if (response.body === undefined) return res.end();
       return res.json(response.body);
     } catch (e: any) {
+      console.error('[MCP] request failed:', e);
       return res.status(500).json({
         jsonrpc: '2.0',
-        error: { code: -32603, message: e?.message || 'MCP internal error' },
+        error: { code: -32603, message: 'MCP internal error' },
       });
     }
   });

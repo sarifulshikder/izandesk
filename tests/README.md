@@ -14,7 +14,9 @@ pnpm test:mcp                 # standalone MCP JSON-RPC protocol smoke test
 node scripts/smoke-security.mjs  # guards, TOTP, secret encryption, rate limiter (after api build)
 ```
 
-Target a different host with `E2E_BASE_URL=https://your-host`.
+Tests target `http://localhost:3000` by default. Point at another host explicitly
+with `E2E_BASE_URL=https://your-host` (only do this for a disposable environment
+when running `test:e2e:mutations`).
 
 CI (`.github/workflows/e2e-smoke.yml`) boots `postgres`, `redis`, `api` and `web`
 from `docker/docker-compose.yml`, waits for `/api/health` and the web root, then
@@ -29,7 +31,7 @@ real deployments must leave that flag unset.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `E2E_BASE_URL` | `https://izandesk.duckdns.org` | App under test |
+| `E2E_BASE_URL` | `http://localhost:3000` | App under test |
 | `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` | `admin@izandesk.com` / `admin123` | Admin login |
 | `E2E_RESELLER_EMAIL` / `E2E_RESELLER_PASSWORD` | `reseller@cybernet.bd` / `reseller123` | Partner login |
 | `E2E_RESELLER_ID` | resolved from `/api/resellers` | Partner id for scoping assertions |

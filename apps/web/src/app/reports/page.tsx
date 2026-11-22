@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { apiFetch, getApiBaseUrl } from '@/lib/api';
+import { apiFetch, downloadAuthenticatedFile } from '@/lib/api';
 import { RefreshCw, BarChart3, Download, Users, Wallet, CreditCard, Ticket, Store } from 'lucide-react';
 
 function money(v: any) { const n = Number(v || 0); return `৳${n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`; }
@@ -55,7 +55,10 @@ export default function ReportsPage() {
   useEffect(()=>{ load(); }, [load]);
 
   const exportJson = (name:string, data:any) => { const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download=`${name}.json`; a.click(); URL.revokeObjectURL(url); };
-  const dlCsv = (path:string, name:string) => { const base=getApiBaseUrl(); const a=document.createElement('a'); a.href=`${base}${path}?format=csv`; a.download=name; a.click(); };
+  const dlCsv = async (path:string, name:string) => {
+    try { await downloadAuthenticatedFile(`${path}?format=csv`, name, token); }
+    catch (e:any) { setErr(e.message); }
+  };
   const createSchedule = async () => { if(!token) return; try { await apiFetch('/api/reports/schedules', { method:'POST', body: JSON.stringify(sched) }, token); await load(); } catch(e:any){ setErr(e.message);} };
 
   const ov = overview || {};

@@ -561,10 +561,15 @@ export async function oltDiscoverOnus(olt: OltRow) {
       try {
         const lines = await snmpWalk(host, community, oid, 5);
         if (lines.length) {
-          return { ok: true, mode: 'snmp', onus: lines.slice(0, 64).map((v, i) => {
-            const sn = String(v.split(/\s+/).slice(1).join(' ') || v).replace(/[^A-Za-z0-9]/g, '').toUpperCase() || `ONU${i+1}`;
-            return { pon_port: `0/1/${(i%8)+1}`, onu_id: String(i+1), serial_number: sn.slice(0,16), name: `Discovered-${sn.slice(-4) || i+1}`, status: 'DISCOVERED', rx_power_dbm: null, tx_power_dbm: null };
-          }), note: `Discovered via enterprise OID ${oid}` };
+          // Do not fabricate ONUs from unparsed vendor text. A raw OID walk can
+          // contain arbitrary config strings; persisting index-derived rows
+          // would create fake topology. Require a real vendor parser above.
+          return {
+            ok: false,
+            mode: 'snmp-unsupported',
+            onus: [],
+            note: `SNMP enterprise OID ${oid} responded, but IzanDesk has no parser for this vendor table. No ONUs were created.`,
+          };
         }
       } catch {}
     }

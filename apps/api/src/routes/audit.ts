@@ -53,7 +53,7 @@ export async function runAuditRetention(): Promise<number> {
 router.post('/', asyncHandler(async (req,res)=>{
   if(!guard(req,res)) return;
   const b=req.body||{}; if(!b.action) return res.status(400).json({message:'action required'});
-  await auditLog({ ...reqActor(req), actor_name: b.actor_name, actor_role: b.actor_role, action: b.action, entity_type: b.entity_type, entity_id: b.entity_id, details: b.details||{} });
+  await auditLog({ ...reqActor(req), action: b.action, entity_type: b.entity_type, entity_id: b.entity_id, details: b.details||{} });
   res.status(201).json({ok:true});
 }));
 

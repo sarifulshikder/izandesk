@@ -42,6 +42,9 @@ jobs:
           pnpm --filter api build
           node scripts/smoke-security.mjs
 
+      - name: Run API unit tests
+        run: pnpm --filter api test
+
       - name: Start the app stack
         run: |
           docker compose -f docker/docker-compose.yml up -d postgres redis api web

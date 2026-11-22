@@ -1,12 +1,16 @@
+# Rendered at container start by docker-compose (see the freeradius service).
+# __POSTGRES_USER__ / __POSTGRES_PASSWORD__ / __POSTGRES_DB__ are replaced with
+# the same values the Postgres service uses, so changing POSTGRES_PASSWORD in
+# .env does not silently break RADIUS authentication.
 sql {
     driver = "rlm_sql_postgresql"
     dialect = "postgresql"
 
     server = "izandesk-postgres"
     port = 5432
-    login = "izandesk_user"
-    password = "izandesk_secret_password"
-    radius_db = "izandesk"
+    login = "__POSTGRES_USER__"
+    password = "__POSTGRES_PASSWORD__"
+    radius_db = "__POSTGRES_DB__"
 
     acct_table1 = "radacct"
     acct_table2 = "radacct"

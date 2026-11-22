@@ -22,7 +22,9 @@ export class PluginKernel extends EventEmitter {
 
   constructor(pluginsDir?: string) {
     super();
-    this.pluginsDir = pluginsDir || path.resolve(__dirname, '../../../../plugins');
+    // In source this resolves to <repo>/plugins; in a deployed image the built
+    // files live in <app>/dist, so allow an explicit path (set in the images).
+    this.pluginsDir = pluginsDir || process.env.PLUGINS_DIR || path.resolve(__dirname, '../../../../plugins');
     (['onLoad', 'onReload', 'onUnload', 'onError'] as PluginHookName[]).forEach((h) =>
       this.hooks.set(h, new Set())
     );

@@ -22,8 +22,8 @@ const INSECURE_DB_PASSWORDS = new Set([
   'password',
 ]);
 
-function enabled(value: string | undefined): boolean {
-  return value === 'true' || value === '1' || value === 'yes';
+export function enabled(value: string | undefined): boolean {
+  return ['true', '1', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
 export type SecurityStatus = {

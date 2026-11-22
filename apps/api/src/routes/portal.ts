@@ -17,6 +17,7 @@ import { validatePasswordPolicy } from '../integrations/settings';
 import { createKycDocument, normalizeDocType, readKycDocument } from '../integrations/kyc';
 import { assertAllowedKycFileBuffer, sha256Buffer } from '../security/file-validation';
 import { encryptKycBuffer, secureUnlinkKycFile } from '../security/file-encryption';
+import { getPortalAcsStatus, updatePortalSubscriberWifi } from './acs';
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
@@ -44,14 +45,14 @@ const upload = multer({
 function tokenVersion(password: any) {
   return crypto.createHash('sha256').update(String(password || '')).digest('hex').slice(0, 16);
 }
-/** Check a portal password against the dedicated bcrypt hash, with fallbacks
- *  for legacy rows that still rely on the cleartext NAS password field. */
+/** Check a portal password against the dedicated portal credential only.
+ *  Client codes, usernames and phone numbers are identifiers, never passwords. */
 async function verifyPortalPassword(pass: string, row: any): Promise<boolean> {
   const portalHash = row.portal_password ? String(row.portal_password) : '';
   if (portalHash) return isHashed(portalHash) ? verifyPassword(pass, portalHash) : portalHash === pass;
   const legacy = row.password ? String(row.password) : '';
   if (legacy) return isHashed(legacy) ? verifyPassword(pass, legacy) : legacy === pass;
-  return pass === String(row.client_code || '') || pass === String(row.username || '') || pass === String(row.phone || '');
+  return false;
 }
 function issuePortalToken(sub: any) {
   return jwt.sign({ type: 'PORTAL_SUBSCRIBER', sub: sub.id, client_code: sub.client_code, ver: tokenVersion(sub.portal_password || sub.password) }, JWT_SECRET, { expiresIn: '7d' });
@@ -504,6 +505,19 @@ router.delete('/payment-methods/:id', portalAuth, asyncHandler(async (req, res) 
   const subId = (req as any).portal.sub;
   await pool.query('DELETE FROM saved_payment_methods WHERE id=$1 AND subscriber_id=$2', [req.params.id, subId]);
   res.json({ ok: true });
+}));
+
+// Customer-scoped TR-069 status and Wi-Fi update. The staff /api/acs routes
+// remain admin-only; these endpoints never accept a staff token.
+router.get('/acs/status', portalAuth, asyncHandler(async (req, res) => {
+  const subId = (req as any).portal.sub;
+  res.json(await getPortalAcsStatus(subId));
+}));
+
+router.post('/acs/wifi', portalAuth, asyncHandler(async (req, res) => {
+  const subId = (req as any).portal.sub;
+  const result = await updatePortalSubscriberWifi(subId, req.body || {});
+  res.json(result);
 }));
 
 

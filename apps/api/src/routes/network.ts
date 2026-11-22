@@ -544,19 +544,31 @@ router.get('/sessions/stream', asyncHandler(async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
   let closed = false;
-  req.on('close', () => { closed = true; });
+  let inFlight = false;
+  let iv: NodeJS.Timeout | undefined;
+  const stop = () => { closed = true; if (iv) clearInterval(iv); };
+  req.on('close', stop);
   const send = async () => {
-    if (closed) return;
-    let rows = (await pool.query(`SELECT ss.username, ss.rx_bps, ss.tx_bps, ss.status, ss.ip_address, ss.uptime_sec, r.name as router_name, r.integration_mode, s.full_name, s.provisioning_mode
-      FROM subscriber_sessions ss LEFT JOIN network_routers r ON r.id=ss.router_id LEFT JOIN subscribers s ON s.id=ss.subscriber_id
-      ORDER BY ss.updated_at DESC LIMIT 50`)).rows;
-    rows = rows.map((x:any) => ({ ...x, uptime: formatUptimeSec(Number(x.uptime_sec || 0)) }));
-    const payload = { t: Date.now(), sessions: rows, summary: { online: rows.filter((r:any)=>r.status==='ONLINE').length, aggRxBps: rows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: rows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } };
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    if (closed || inFlight) return;
+    inFlight = true;
+    try {
+      const rows = (await pool.query(`SELECT ss.username, ss.rx_bps, ss.tx_bps, ss.status, ss.ip_address, ss.uptime_sec, r.name as router_name, r.integration_mode, s.full_name, s.provisioning_mode
+        FROM subscriber_sessions ss LEFT JOIN network_routers r ON r.id=ss.router_id LEFT JOIN subscribers s ON s.id=ss.subscriber_id
+        ORDER BY ss.updated_at DESC LIMIT 50`)).rows;
+      if (closed || res.writableEnded || res.destroyed) return;
+      const safeRows = rows.map((x:any) => ({ ...x, uptime: formatUptimeSec(Number(x.uptime_sec || 0)) }));
+      const payload = { t: Date.now(), sessions: safeRows, summary: { online: safeRows.filter((r:any)=>r.status==='ONLINE').length, aggRxBps: safeRows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: safeRows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } };
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch (e) {
+      console.error('[network] SSE tick failed:', e);
+      stop();
+      try { res.end(); } catch {}
+    } finally {
+      inFlight = false;
+    }
   };
   await send();
-  const iv = setInterval(send, 3000);
-  req.on('close', () => clearInterval(iv));
+  if (!closed) iv = setInterval(() => { void send().catch(() => stop()); }, 3000);
 }));
 
 export default router;

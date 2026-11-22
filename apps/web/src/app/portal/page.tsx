@@ -59,7 +59,7 @@ export default function CustomerPortalPage() {
         pfetch('/api/portal/invoices', {}, tkn),
         pfetch('/api/portal/payments', {}, tkn),
         fetch(`${getApiBaseUrl()}/api/portal/gateways`).then(r=>r.json()).catch(()=>({data:[]})),
-        fetch(`${getApiBaseUrl()}/api/acs/status`).then(r=>r.json()).catch(()=>({configured:false})),
+        pfetch('/api/portal/acs/status', {}, tkn).catch(()=>({ configured:false, devices:[] })),
         pfetch('/api/portal/tickets', {}, tkn).catch(()=>({data:[]})),
         pfetch('/api/portal/usage', {}, tkn).catch(()=>({sessions:[],daily:[]})),
         fetch(`${getApiBaseUrl()}/api/portal/announcements`).then(r=>r.json()).catch(()=>({data:[]})),
@@ -143,10 +143,9 @@ export default function CustomerPortalPage() {
   const saveWifi = async () => {
     setBusy(true); setErr(null); setMsg(null);
     try {
-      const r = await fetch(`${getApiBaseUrl()}/api/acs/wifi`, { method:'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(wifi) });
-      const d = await r.json().catch(()=>({}));
-      if (!r.ok) throw new Error(d?.message || 'Failed to update Wi-Fi');
-      setMsg('Wi-Fi update task submitted via TR-069/GenieACS (if configured and device reachable).');
+      if (!token) throw new Error('Portal session expired. Sign in again.');
+      await pfetch('/api/portal/acs/wifi', { method:'POST', body: JSON.stringify(wifi) }, token);
+      setMsg('Wi-Fi update task submitted via TR-069/GenieACS for your linked device.');
     } catch(e:any){ setErr(e.message); } finally { setBusy(false); }
   };
 
@@ -171,7 +170,7 @@ export default function CustomerPortalPage() {
           <label className="block"><div className="form-label">Client Code / Username / Phone</div><input className="form-control" value={login.id} onChange={e=>setLogin({...login,id:e.target.value})} /></label>
           <label className="block"><div className="form-label">Password</div><input type="password" className="form-control" value={login.password} onChange={e=>setLogin({...login,password:e.target.value})} /></label>
           <button onClick={doLogin} disabled={busy} className="btn btn-primary w-full">{busy?'Signing in...':'Sign in to Portal'}</button>
-          <div className="text-xs text-muted-foreground">Use your subscriber credentials. If no password is set, your client code/username/phone may be accepted.</div>
+          <div className="text-xs text-muted-foreground">Use the portal password set for your subscriber account. Client code, username and phone are identifiers only.</div>
         </div>
       </div>
     );

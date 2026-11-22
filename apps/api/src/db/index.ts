@@ -696,7 +696,9 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS balance NUMERIC(12,2) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(12,2) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS reseller_id UUID,
-      ADD COLUMN IF NOT EXISTS suspension_reason TEXT;
+      ADD COLUMN IF NOT EXISTS suspension_reason TEXT,
+      ADD COLUMN IF NOT EXISTS suspension_source TEXT NOT NULL DEFAULT 'POLICY';
+    UPDATE subscribers SET suspension_source='MANUAL' WHERE suspension_reason ILIKE 'Manual%';
 
     CREATE TABLE IF NOT EXISTS billing_policies (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -881,6 +883,17 @@ export async function initDb() {
         ('paypal', false, 'SANDBOX', '{"supports":"smart_buttons"}'::jsonb)
       ON CONFLICT (gateway) DO NOTHING;
   `).catch(e => console.error('[DB] Phase 4 schema extension error', e.message));
+
+  // Uniqueness is applied separately so legacy duplicate rows cannot abort the
+  // rest of the migration. Existing deployments with duplicates retain the old
+  // non-unique indexes and a warning; new rows are still guarded in application code.
+  for (const statement of [
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_gateway_trx ON payments(gateway, trx_id) WHERE trx_id IS NOT NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_idempotency ON payments(idempotency_key) WHERE idempotency_key IS NOT NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_sms_gateway_trx ON payment_sms_events(gateway, trx_id) WHERE trx_id IS NOT NULL`,
+  ]) {
+    await pool.query(statement).catch((e: any) => console.warn('[DB] payment idempotency index skipped:', e.message));
+  }
 
   await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS data_cap_gb NUMERIC(12,2)`).catch(()=>{});
   await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS fup_speed_mbps INTEGER`).catch(()=>{});
@@ -1100,6 +1113,25 @@ export async function initDb() {
         ('daily_revenue_summary_telegram', 'TELEGRAM', 'DAILY_REVENUE_SUMMARY', NULL, '📊 Daily Revenue Summary ({{date}})\nCollections: {{collections}}\nInvoices: {{invoices}}\nDue Outstanding: {{outstanding}}', '["date","collections","invoices","outstanding"]'::jsonb)
       ON CONFLICT DO NOTHING;
   `).catch(e => console.error('[DB] Phase 5 schema extension error', e.message));
+
+  // subscribers.reseller_id was introduced in an earlier block without a
+  // foreign key, so the later ADD COLUMN IF NOT EXISTS ... REFERENCES was a
+  // no-op. Add the constraint explicitly, but skip it if legacy orphan rows
+  // exist so a fresh migration never wipes a working deployment.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_subscribers_reseller_id')
+         AND NOT EXISTS (
+           SELECT 1 FROM subscribers s
+           WHERE s.reseller_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM resellers r WHERE r.id = s.reseller_id)
+         ) THEN
+        ALTER TABLE subscribers ADD CONSTRAINT fk_subscribers_reseller_id
+          FOREIGN KEY (reseller_id) REFERENCES resellers(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `).catch((e: any) => console.warn('[DB] subscribers.reseller_id FK skipped:', e.message));
 
   // Depends on resellers, so it is created after the Phase 5 block above.
   await pool.query(`

@@ -46,6 +46,8 @@ RUN apk add --no-cache \
 WORKDIR /app/api
 COPY --from=api-build /out/api ./
 COPY --from=web-build /app/apps/web/.next/standalone/ /app/web/
+# Bundled plugins are outside the api package and are not part of `pnpm deploy`.
+COPY plugins/ /plugins/
 COPY docker/allinone/entrypoint.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh \
  && ln -s /data/uploads /app/uploads
@@ -62,6 +64,7 @@ ENV NODE_ENV=production \
     REDIS_HOST=127.0.0.1 \
     REDIS_PORT=6379 \
     PGDATA=/data/postgres \
+    PLUGINS_DIR=/plugins \
     NODE_OPTIONS=--max-old-space-size=160
 
 VOLUME /data

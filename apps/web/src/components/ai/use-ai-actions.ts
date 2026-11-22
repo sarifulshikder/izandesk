@@ -81,9 +81,11 @@ export function useAiActions(onResult: (message: AiMessage) => void) {
       } else if (action.type === 'record_payment') {
         const { identifier, amount, gateway, note, trx_id } = action.payload;
         const sub = await one(`/api/subscribers?q=${encodeURIComponent(identifier)}`, 'subscriber', identifier);
+        // The API resolves the identifier itself (exactly-one semantics). Sending
+        // a pre-resolved subscriber_id used to fail with "identifier is required".
         const res = await apiFetch<any>('/api/billing/payments/record', {
           method: 'POST',
-          body: JSON.stringify({ subscriber_id: sub.id, amount, gateway, note, trx_id }),
+          body: JSON.stringify({ identifier, amount, gateway, note, trx_id }),
         }, token);
         const data = res?.data || {};
         ok(`✅ Payment of **৳${Number(amount).toFixed(2)}** recorded for **${sub.full_name || identifier}** (${gateway || 'cash'}).${res?.duplicate ? ' (Already recorded — not double-counted.)' : ''} Due left: **৳${Number(data.due_left || 0).toFixed(2)}**.`,
@@ -107,7 +109,9 @@ export function useAiActions(onResult: (message: AiMessage) => void) {
         ok(`✅ Ticket **${ticket.ticket_no}** closed.`, [{ title: 'Open tickets', url: '/tickets' }]);
       } else if (action.type === 'approve_kyc' || action.type === 'reject_kyc') {
         const sub = await one(`/api/subscribers?q=${encodeURIComponent(action.payload.identifier)}`, 'subscriber', action.payload.identifier);
-        const docs = (sub.kyc_documents || []) as any[];
+        // The list endpoint intentionally omits kyc_documents; fetch the detail view.
+        const detail = await apiFetch<any>(`/api/subscribers/${sub.id}`, {}, token);
+        const docs = ((detail?.kyc_documents || sub.kyc_documents || []) as any[]);
         const doc = docs.find((d) => !d.status || d.status === 'PENDING') || docs.find((d) => d.id === action.payload.docId);
         if (!doc) throw new Error('No pending KYC document found for this subscriber');
         const kycReason = (action.payload as { reason?: string }).reason;

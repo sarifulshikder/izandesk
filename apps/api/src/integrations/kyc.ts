@@ -391,7 +391,8 @@ export async function runKycMaintenance(): Promise<{ expired: number; reminded: 
          WHERE retention_until IS NOT NULL AND retention_until < CURRENT_DATE
            AND (legal_hold_until IS NULL OR legal_hold_until < now())
            AND NOT EXISTS (SELECT 1 FROM kyc_legal_holds h
-                           WHERE h.document_id=kyc_documents.id AND h.released_at IS NULL AND h.end_at > now())`
+                           WHERE (h.document_id=kyc_documents.id OR h.subscriber_id=kyc_documents.subscriber_id)
+                              AND h.released_at IS NULL AND h.end_at > now())`
       );
       for (const doc of stale.rows) {
         await deleteKycDocument({ documentId: doc.id, subscriberId: doc.subscriber_id, actor: { role: 'SYSTEM', name: 'Retention sweep' } });

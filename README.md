@@ -9,7 +9,7 @@
 All complete architectural blueprints, database schemas, and feature catalogs are available in the [`docs/`](./docs/) directory:
 
 1. **[565+ Master Feature Catalog](./docs/izandesk_500_plus_feature_catalog.md)**  
-   *Comprehensive matrix of 565 built-in, production-ready features across 18 telecom and business domains.*
+   *Design/requirements catalog of 565 features across 18 telecom and business domains. It documents the intended scope — shipped capability is tracked per phase below and in the roadmap; not every catalog entry is implemented.*
 
 2. **[Software Requirements Specification (SRS) & Architecture](./docs/izandesk_software_requirements_specification.md)**  
    *Carrier-grade FreeRADIUS 3 AAA, Dynamic CoA, TR-069 GenieACS, MikroTik RouterOS automation, OLT telemetry, and the Hot-Reload Plugin Kernel.*

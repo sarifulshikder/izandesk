@@ -24,18 +24,16 @@ export async function createSession(input: {
   ip?: string;
   userAgent?: string;
 }): Promise<void> {
-  try {
-    await pool.query(
-      `INSERT INTO auth_sessions(id, user_id, ip_address, user_agent, expires_at)
-       VALUES($1,$2,$3,$4, now() + ($5 || ' minutes')::interval)`,
-      [input.id, input.userId, input.ip || null, input.userAgent || null, String(Math.max(5, input.minutes))],
-    );
-  } catch { /* degraded mode: JWT-only auth when the DB is unavailable */ }
+  await pool.query(
+    `INSERT INTO auth_sessions(id, user_id, ip_address, user_agent, expires_at)
+     VALUES($1,$2,$3,$4, now() + ($5 || ' minutes')::interval)`,
+    [input.id, input.userId, input.ip || null, input.userAgent || null, String(Math.max(5, input.minutes))],
+  );
 }
 
-/** Returns false only when the session row explicitly exists and is revoked/expired. */
+/** Fail closed: no database means no verifiable server-side session. */
 export async function sessionActive(id: string): Promise<boolean> {
-  if (!id) return true;
+  if (!id) return false;
   try {
     const r = await pool.query(
       `SELECT 1 FROM auth_sessions
@@ -43,7 +41,7 @@ export async function sessionActive(id: string): Promise<boolean> {
       [id],
     );
     return r.rowCount > 0;
-  } catch { return true; }
+  } catch { return false; }
 }
 
 export async function touchSession(id: string): Promise<void> {

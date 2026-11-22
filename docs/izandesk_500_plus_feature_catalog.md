@@ -47,6 +47,10 @@ flowchart TD
 
 ## Complete Feature Matrix (565 Categorized Features)
 
+> **Status note:** This document is a design/requirements catalog. A feature listed
+> here is not necessarily implemented — check the phase status in `README.md` and
+> `izandesk_phase_implementation_roadmap.md` for actual shipped capability.
+
 ### Domain 1: Subscriber & Customer Lifecycle Management (Features 1 – 40)
 1. **Self-Onboarding & Fast Registration**: Automated customer intake wizard with instant duplicate check on NID, phone, and email.
 2. **Custom Client Code Generator**: Configurable prefix, zone code, and sequential zero-padded ID (e.g. `IZN-DHK-00042`).

@@ -28,7 +28,7 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
   const actor = (req: any) => req.user as { id: string; name?: string; email?: string; role: string };
   const sessionMinutes = async () => Number(await getCached('security.session_timeout_minutes', 720)) || 720;
 
-  async function startSession(req: any, res: any, user: any) {
+  async function startSession(req: any, res: any, user: any, extra: Record<string, any> = {}) {
     const minutes = await sessionMinutes();
     const jti = newSessionId();
     await createSession({
@@ -39,7 +39,7 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
       userAgent: String(req.headers['user-agent'] || '').slice(0, 300) || undefined,
     });
     await auditLog({ actor_id: user.id, actor_name: user.name || user.email, actor_role: user.role, action: 'auth.login', entity_type: 'auth', ip_address: req.ip });
-    res.json({ token: deps.issueToken(user, minutes, jti), user });
+    res.json({ token: deps.issueToken(user, minutes, jti), user, ...extra });
   }
 
   router.post('/logout', asyncHandler(async (req: any, res) => {
@@ -122,7 +122,12 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
     const hashes = await Promise.all(recoveryCodes.map((code) => bcrypt.hash(code, 10)));
     await pool.query('UPDATE user_mfa SET enabled=true, verified_at=now(), recovery_hashes=$2::jsonb WHERE user_id=$1', [user.id, JSON.stringify(hashes)]);
     await auditLog({ ...reqActor(req), action: 'auth.mfa_enabled', entity_type: 'auth', entity_id: user.id });
-    res.json({ ok: true, recovery_codes: recoveryCodes, note: 'Save these recovery codes now. Each one works once.' });
+    const extra = { ok: true, recovery_codes: recoveryCodes, note: 'Save these recovery codes now. Each one works once.' };
+    if ((req as any).authPurpose === 'mfa_enrollment') {
+      const foundUser = deps.findUser(user.id);
+      if (foundUser) return await startSession(req, res, foundUser, extra);
+    }
+    res.json(extra);
   }));
 
   router.post('/mfa/disable', asyncHandler(async (req: any, res) => {

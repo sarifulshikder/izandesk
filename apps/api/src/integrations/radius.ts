@@ -1,4 +1,5 @@
 import dgram from 'dgram';
+import dns from 'dns';
 import crypto from 'crypto';
 import { pool } from '../db';
 
@@ -130,20 +131,43 @@ export async function sendCoaPacket(opts: { host: string; port: number; secret: 
   const head = Buffer.alloc(4); head[0] = code; head[1] = id; head.writeUInt16BE(len, 2);
   const zeroAuth = Buffer.alloc(16, 0);
   // RFC 3576: Request Authenticator = MD5(Code+ID+Length+16 zero octets+Attributes+Secret)
-  const hash = crypto.createHash('md5').update(Buffer.concat([head, zeroAuth, body, Buffer.from(opts.secret, 'utf8')])).digest();
-  const packet = Buffer.concat([head, hash, body]);
+  const requestAuth = crypto.createHash('md5').update(Buffer.concat([head, zeroAuth, body, Buffer.from(opts.secret, 'utf8')])).digest();
+  const packet = Buffer.concat([head, requestAuth, body]);
+
+  // Resolve once so replies can be bound to the NAS address. Accepting any
+  // UDP packet with code 41/44 lets a local attacker spoof successful CoA.
+  const resolved = await dns.promises.lookup(opts.host, { all: true }).catch(() => [{ address: opts.host }]);
+  const addresses = new Set(resolved.map((r: any) => String(r.address)));
+  const target = resolved[0]?.address || opts.host;
 
   const once = () => new Promise<{ok:boolean; code?:number; error?:string}>((resolve) => {
     const sock = dgram.createSocket('udp4');
-    const to = setTimeout(() => { try{sock.close();}catch{} resolve({ ok: false, error: 'timeout (no CoA/Disconnect response from NAS)' }); }, 3000);
-    sock.on('message', (msg) => {
+    let settled = false;
+    const finish = (result: {ok:boolean; code?:number; error?:string}) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(to);
+      try { sock.close(); } catch {}
+      resolve(result);
+    };
+    const to = setTimeout(() => finish({ ok: false, error: 'timeout (no CoA/Disconnect response from NAS)' }), 3000);
+    sock.on('message', (msg: Buffer, rinfo) => {
+      if (!addresses.has(rinfo.address)) return; // ignore spoofed source
+      if (msg.length < 20) return;
+      const length = msg.readUInt16BE(2);
+      if (length !== msg.length || msg[1] !== id) return;
+      const responseAuth = msg.subarray(4, 20);
+      const attrs = msg.subarray(20, length);
+      const expected = crypto.createHash('md5').update(Buffer.concat([
+        msg.subarray(0, 4), requestAuth, attrs, Buffer.from(opts.secret, 'utf8'),
+      ])).digest();
+      if (responseAuth.length !== expected.length || !crypto.timingSafeEqual(responseAuth, expected)) return;
       const rcode = msg[0]; // 41 Disconnect-ACK, 42 Disconnect-NAK, 44 CoA-ACK, 45 CoA-NAK
-      try{sock.close();}catch{}
-      resolve({ ok: rcode === 41 || rcode === 44, code: rcode });
+      const expectedCode = opts.action === 'DISCONNECT' ? 41 : 44;
+      finish({ ok: rcode === expectedCode, code: rcode });
     });
-    sock.on('error', (e) => { clearTimeout(to); try{sock.close();}catch{} resolve({ ok: false, error: e.message }); });
-    sock.send(packet, opts.port, opts.host, (err) => { if (err) { clearTimeout(to); try{sock.close();}catch{} resolve({ ok:false, error: err.message }); } });
+    sock.on('error', (e) => finish({ ok: false, error: e.message }));
+    sock.send(packet, opts.port, target, (err) => { if (err) finish({ ok: false, error: err.message }); });
   });
 
   let last: any = null;

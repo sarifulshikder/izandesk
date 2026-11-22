@@ -294,6 +294,17 @@ router.post('/legal-holds', superAdminGuard, asyncHandler(async (req, res) => {
 router.post('/legal-holds/:id/release', superAdminGuard, asyncHandler(async (req, res) => {
   const r = await pool.query('UPDATE kyc_legal_holds SET released_at=now() WHERE id=$1 AND released_at IS NULL RETURNING *', [req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Active legal hold not found' });
+  const hold = r.rows[0];
+  // Clear the denormalised hold marker only when no other active hold still
+  // covers this document (directly or through its subscriber).
+  await pool.query(
+    `UPDATE kyc_documents d SET legal_hold_until=NULL, updated_at=now()
+     WHERE (($2::uuid IS NOT NULL AND d.id=$2) OR ($1::uuid IS NOT NULL AND d.subscriber_id=$1))
+       AND NOT EXISTS (SELECT 1 FROM kyc_legal_holds h
+                       WHERE (h.document_id=d.id OR h.subscriber_id=d.subscriber_id)
+                         AND h.released_at IS NULL AND h.end_at > now())`,
+    [hold.subscriber_id || null, hold.document_id || null]
+  );
   await auditLog({ ...reqActor(req), action: 'KYC_LEGAL_HOLD_RELEASED', entity_type: 'kyc', entity_id: req.params.id });
   res.json({ ok: true, data: r.rows[0] });
 }));

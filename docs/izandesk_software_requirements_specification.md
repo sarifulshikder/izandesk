@@ -3,7 +3,7 @@
 **Document Version:** 1.2.0  
 **Project:** IzanDesk ERP (ISP Billing & Network Management)  
 **Status:** Approved Master Architecture  
-**Key Features:** 565 Built-in Production Features across 18 Domains  
+**Key Features:** 565 Cataloged Features across 18 Domains (implementation status varies by phase)
 **Extensibility:** Dynamic Hot-Reload Plugin Kernel (Zero-Downtime Extensibility)  
 
 ---
@@ -15,7 +15,7 @@
 It merges **Business Support Systems (BSS)** (automated recurring billing, multi-gateway payments, reseller wallets, double-entry financial accounting, HR/payroll, and CRM ticketing) with **Operations Support Systems (OSS)** (carrier-grade FreeRADIUS 3 AAA, MikroTik RouterOS automation, OLT/FTTH optical telemetry, TR-069 GenieACS remote customer CPE Wi-Fi management, and PostGIS fiber route mapping).
 
 ### Core Architectural Pillars
-1. **565 Built-In Production Features**: Comprehensive feature matrix covering every operational requirement of modern telecom operators (refer to [izandesk_500_plus_feature_catalog.md](file:///home/server/.gemini/antigravity-cli/brain/4e3267c3-6afb-4476-8d07-d635bee4cd39/izandesk_500_plus_feature_catalog.md)).
+1. **565 Cataloged Features**: Design matrix covering the operational requirements of modern telecom operators (refer to [izandesk_500_plus_feature_catalog.md](./izandesk_500_plus_feature_catalog.md)). This is a requirements catalog, not a shipped-feature list; see the README phase status and the implementation roadmap for what is actually available.
 2. **Dynamic Hot-Reload Plugin Kernel**: New payment gateway drivers, SMS gateways, and OLT vendor CLI templates can be dropped into the `/plugins/` directory and hot-reloaded dynamically without restarting the server or interrupting active subscriber sessions.
 3. **Carrier-Grade AAA with Dynamic CoA**: FreeRADIUS 3.2 integrated with dynamic Change of Authorization (CoA RFC 3576) and Packet of Disconnect (PoD) for real-time speed transitions and instant suspension/reactivation.
 4. **Dual-Market Extensibility**: Complete regional MFS integration (bKash tokenized, Nagad PGW, Rocket, SSLCommerz, Android SMS listener app, BTRC regulatory reports) and international networks (Stripe, PayPal, M-Pesa, Twilio).
@@ -184,5 +184,5 @@ stateDiagram-v2
 
 ## 6. Complete Data Schema Synchronization
 
-All 565 features are backed by the relational PostgreSQL 16 schema detailed in:  
-📄 **[izandesk_database_schema_and_models.md](file:///home/server/.gemini/antigravity-cli/brain/4e3267c3-6afb-4476-8d07-d635bee4cd39/izandesk_database_schema_and_models.md)**
+The cataloged features are designed around the relational PostgreSQL 16 schema detailed in:
+📄 **[izandesk_database_schema_and_models.md](./izandesk_database_schema_and_models.md)**

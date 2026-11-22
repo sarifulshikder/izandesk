@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "pnpm --filter web dev",
     "dev:all": "pnpm --parallel dev",
-    "build": "pnpm --filter web build",
+    "build": "pnpm --filter @izandesk/shared-types build && pnpm --filter api build && pnpm --filter web build",
     "lint": "pnpm --recursive lint",
     "test:e2e": "playwright test",
     "test:e2e:mutations": "E2E_MUTATIONS=1 playwright test",

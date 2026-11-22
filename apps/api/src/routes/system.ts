@@ -133,7 +133,7 @@ async function redisPing(): Promise<{ ok: boolean | null; detail?: string; versi
 
 router.get('/health', asyncHandler(async (_req, res) => {
   const checks: any = { api: { ok: true }, db: { ok: false }, redis: { ok: null }, disk: { ok: null }, memory: { ok: true }, time: new Date().toISOString() };
-  try { await pool.query('SELECT 1'); checks.db = { ok: true }; } catch (e:any) { checks.db = { ok: false, error: e.message }; }
+  try { await pool.query('SELECT 1'); checks.db = { ok: true }; } catch { checks.db = { ok: false }; }
   try {
     const mu = process.memoryUsage();
     checks.memory = { ok: true, rss: mu.rss, heapUsed: mu.heapUsed, heapTotal: mu.heapTotal };
@@ -142,7 +142,7 @@ router.get('/health', asyncHandler(async (_req, res) => {
     checks.redis = await redisPing();
     // Existing health UI treats null as "N/A" rather than a failed service.
     if (checks.redis.ok === null) checks.redis = null;
-  } catch (e:any) { checks.redis = { ok: false, error: e.message }; }
+  } catch { checks.redis = { ok: false }; }
   try {
     if (typeof (fs as any).statfsSync === 'function') {
       const stat = (fs as any).statfsSync('/');
@@ -151,7 +151,7 @@ router.get('/health', asyncHandler(async (_req, res) => {
     } else {
       checks.disk = { ok: null, note: 'statfs not available in this runtime' };
     }
-  } catch (e:any) { checks.disk = { ok: null, note: e.message }; }
+  } catch { checks.disk = { ok: null, note: 'disk check unavailable' }; }
   const ok = checks.api.ok && checks.db.ok;
   res.json({ ok, checks });
 }));
