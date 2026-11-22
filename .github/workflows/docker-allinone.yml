@@ -45,7 +45,7 @@ jobs:
           provenance: false
           sbom: false
           tags: |
-            ${{ env.IMAGE }}:v1.0.2-rb1100
+            ${{ env.IMAGE }}:v1.0.3-rb1100-lite
             ${{ env.IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
