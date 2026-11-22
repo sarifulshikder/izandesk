@@ -5,6 +5,7 @@ import fs = require('fs');
 import path = require('path');
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
+import { LITE_MODE } from '../config/runtime';
 
 const router: Router = Router();
 function requireAdmin(req:any,res:any){ if (!['SUPER_ADMIN','NOC_ENGINEER'].includes(String((req as any).user?.role))) { res.status(403).json({ message: 'Forbidden' }); return false; } return true; }
@@ -82,6 +83,7 @@ async function tryAcquireBackupLock(minutes = 30) {
 }
 
 export function startBackupScheduler() {
+  if (LITE_MODE) { console.log('[BackupScheduler] disabled in lite mode (manual backups still available)'); return; }
   const cfg = getBackupConfig();
   if (!cfg.enabled) { console.log('[BackupScheduler] disabled (set BACKUP_SCHEDULE_ENABLED=true to enable)'); return; }
   const intervalMs = cfg.hours * 3600 * 1000;
@@ -99,7 +101,8 @@ export function startBackupScheduler() {
 }
 
 // Redis health via the official client (no redis-cli binary needed in the container)
-async function redisPing(): Promise<{ ok: boolean; detail?: string; version?: string }> {
+async function redisPing(): Promise<{ ok: boolean | null; detail?: string; version?: string }> {
+  if (LITE_MODE) return { ok: null, detail: 'disabled in lite mode' };
   const client = createClient({
     socket: {
       host: process.env.REDIS_HOST || '127.0.0.1',
@@ -137,6 +140,8 @@ router.get('/health', asyncHandler(async (_req, res) => {
   } catch {}
   try {
     checks.redis = await redisPing();
+    // Existing health UI treats null as "N/A" rather than a failed service.
+    if (checks.redis.ok === null) checks.redis = null;
   } catch (e:any) { checks.redis = { ok: false, error: e.message }; }
   try {
     if (typeof (fs as any).statfsSync === 'function') {

@@ -4,6 +4,7 @@ import chokidar = require('chokidar');
 import { FSWatcher } from 'chokidar';
 import { EventEmitter } from 'events';
 import { PluginKernelEvent, PluginMetadata, PluginStatus, PluginType } from '@izandesk/shared-types';
+import { LITE_MODE } from '../config/runtime';
 
 export interface LoadedPlugin extends PluginMetadata {
   instance: any;
@@ -33,7 +34,10 @@ export class PluginKernel extends EventEmitter {
       fs.mkdirSync(this.pluginsDir, { recursive: true });
     }
     await this.loadAllPlugins();
-    this.watchForChanges();
+    // chokidar keeps an inotify watch (and periodic rescan) open for the whole
+    // process lifetime. There is nothing to hot-reload in a shipped container.
+    if (!LITE_MODE) this.watchForChanges();
+    else console.log('[PluginKernel] Lite mode: hot-reload watcher disabled');
     this.ready = true;
   }
 

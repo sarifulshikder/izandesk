@@ -4,9 +4,14 @@ import { asyncHandler, sanitizeRouter, sanitizeRouters, networkGuard, hasNetwork
 import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret } from '../integrations/mikrotik';
 import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas } from '../integrations/radius';
 import { hashPassword } from '../utils/password';
+import { TELEMETRY_TTL_MS } from '../config/runtime';
 
 const router: Router = Router();
 router.use(networkGuard);
+
+// Lite mode reuses the last RouterOS telemetry for a short window so simply
+// opening the Routers page doesn't open a new API session on every navigation.
+const telemetryCache = new Map<string, { at: number; data: any }>();
 
 // Routers CRUD
 router.get('/routers', asyncHandler(async (req, res) => {
@@ -21,13 +26,21 @@ router.get('/routers', asyncHandler(async (req, res) => {
   const rows: any[] = [];
   for (const row of r.rows) {
     let t: any = null;
+    let fromCache = false;
     const imode = String(row.integration_mode || 'API').toUpperCase();
     if (row.is_enabled && (imode === 'API' || imode === 'REST')) {
-      try {
-        const live = await mikrotikTelemetry(row);
-        t = { ...live, last_seen_at: new Date().toISOString() };
-      } catch (e: any) {
-        t = { status: 'OFFLINE', last_seen_at: row.last_seen_at, last_error: e.message || 'unreachable' };
+      const cached = telemetryCache.get(row.id);
+      if (TELEMETRY_TTL_MS && cached && Date.now() - cached.at < TELEMETRY_TTL_MS) {
+        t = cached.data;
+        fromCache = true;
+      } else {
+        try {
+          const live = await mikrotikTelemetry(row);
+          t = { ...live, last_seen_at: new Date().toISOString() };
+        } catch (e: any) {
+          t = { status: 'OFFLINE', last_seen_at: row.last_seen_at, last_error: e.message || 'unreachable' };
+        }
+        if (TELEMETRY_TTL_MS) telemetryCache.set(row.id, { at: Date.now(), data: t });
       }
     } else if (row.is_enabled && imode === 'RADIUS') {
       t = { status: row.status || 'ONLINE', last_seen_at: new Date().toISOString() };
@@ -35,8 +48,10 @@ router.get('/routers', asyncHandler(async (req, res) => {
       t = { status: 'DISABLED', last_seen_at: row.last_seen_at };
     }
     const merged = { ...row, ...t };
-    await pool.query('UPDATE network_routers SET cpu_load=$1,memory_used_mb=$2,memory_total_mb=$3,rx_bps=$4,tx_bps=$5,uptime_seconds=$6,status=$7,last_seen_at=COALESCE($8,last_seen_at),identity=COALESCE($9,identity),board_name=COALESCE($10,board_name),updated_at=now() WHERE id=$11',
-      [merged.cpu_load ?? row.cpu_load ?? null, merged.memory_used_mb ?? row.memory_used_mb ?? null, merged.memory_total_mb ?? row.memory_total_mb ?? null, merged.rx_bps ?? row.rx_bps ?? 0, merged.tx_bps ?? row.tx_bps ?? 0, merged.uptime_seconds ?? row.uptime_seconds ?? null, merged.status || row.status, merged.last_seen_at || null, merged.identity || null, merged.board_name || null, row.id]);
+    if (!fromCache) {
+      await pool.query('UPDATE network_routers SET cpu_load=$1,memory_used_mb=$2,memory_total_mb=$3,rx_bps=$4,tx_bps=$5,uptime_seconds=$6,status=$7,last_seen_at=COALESCE($8,last_seen_at),identity=COALESCE($9,identity),board_name=COALESCE($10,board_name),updated_at=now() WHERE id=$11',
+        [merged.cpu_load ?? row.cpu_load ?? null, merged.memory_used_mb ?? row.memory_used_mb ?? null, merged.memory_total_mb ?? row.memory_total_mb ?? null, merged.rx_bps ?? row.rx_bps ?? 0, merged.tx_bps ?? row.tx_bps ?? 0, merged.uptime_seconds ?? row.uptime_seconds ?? null, merged.status || row.status, merged.last_seen_at || null, merged.identity || null, merged.board_name || null, row.id]);
+    }
     rows.push(merged);
   }
   res.json({ data: sanitizeRouters(rows) });
@@ -106,6 +121,7 @@ router.put('/routers/:id', asyncHandler(async (req, res) => {
       b.router_type??c.router_type,b.ros_version??c.ros_version,b.use_ssl??c.use_ssl,b.site??c.site,b.is_enabled??c.is_enabled,
       mode, b.radius_secret ?? '', Number(b.coa_port ?? c.coa_port ?? 3799), b.nas_identifier ?? c.nas_identifier, req.params.id
     ]);
+  telemetryCache.delete(req.params.id);
   try { await syncNasForRouter(r.rows[0], c.host); } catch {}
   res.json(sanitizeRouter(r.rows[0]));
 }));
@@ -113,6 +129,7 @@ router.put('/routers/:id', asyncHandler(async (req, res) => {
 router.delete('/routers/:id', asyncHandler(async (req, res) => {
   const cur = await pool.query('SELECT * FROM network_routers WHERE id=$1',[req.params.id]);
   await pool.query('DELETE FROM network_routers WHERE id=$1',[req.params.id]);
+  telemetryCache.delete(req.params.id);
   try { if (cur.rows[0]) await removeNasForRouter(cur.rows[0]); } catch {}
   res.json({ ok: true });
 }));

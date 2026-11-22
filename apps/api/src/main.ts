@@ -53,6 +53,7 @@ import { createAuthSecurityRouter } from './routes/auth-security';
 import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
+import { LITE_MODE } from './config/runtime';
 
 const PORT = Number(process.env.API_PORT || 4000);
 // Fail loudly before any route is mounted when the deployment is insecure.
@@ -210,7 +211,7 @@ async function bootstrap() {
   setKernel(kernel);
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'izandesk-api', phase: 7, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length });
+    res.json({ ok: true, service: 'izandesk-api', phase: 7, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length, lite: LITE_MODE });
   });
   app.use('/api/branding', brandingRouter);
   app.use('/api/portal', portalRouter);
