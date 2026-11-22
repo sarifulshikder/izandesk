@@ -213,6 +213,12 @@ async function validateReferences(p: any) {
 
 async function buildPayload(b: any, cur: any) {
   const get = (k: string) => (has(b, k) ? b[k] : cur?.[k]);
+  // Date fields need special handling on partial updates: `cur` comes back from
+  // Postgres as a timezone-aware ISO string (e.g. 2026-12-05T18:00Z for a local
+  // date of 2026-12-06). Re-parsing that with dateVal() would shift the stored
+  // date back one day on every unrelated PUT. Only normalize dates supplied by
+  // the caller; keep existing values byte-for-byte when the field is absent.
+  const dateField = (key: string) => has(b, key) ? dateVal(b[key], key) : (cur?.[key] ?? null);
   const p: any = {};
 
   p.full_name = str(get('full_name'));
@@ -278,7 +284,7 @@ async function buildPayload(b: any, cur: any) {
 
   p.ip_address = nullableStr(get('ip_address'));
   p.mac_address = nullableStr(get('mac_address'));
-  p.installation_date = dateVal(get('installation_date'), 'installation_date');
+  p.installation_date = dateField('installation_date');
 
   p.district = nullableStr(get('district'));
   p.thana = nullableStr(get('thana'));
@@ -292,9 +298,9 @@ async function buildPayload(b: any, cur: any) {
   p.notes = nullableStr(get('notes'));
 
   p.billing_cycle_day = intVal(get('billing_cycle_day'), 'billing_cycle_day', { min: 1, max: 31 }) ?? 1;
-  p.expiry_date = dateVal(get('expiry_date'), 'expiry_date');
-  p.due_date = dateVal(get('due_date'), 'due_date');
-  p.next_bill_date = dateVal(get('next_bill_date'), 'next_bill_date');
+  p.expiry_date = dateField('expiry_date');
+  p.due_date = dateField('due_date');
+  p.next_bill_date = dateField('next_bill_date');
   p.auto_suspend_enabled = boolVal(get('auto_suspend_enabled'), cur?.auto_suspend_enabled ?? true);
   p.auto_pay_enabled = boolVal(get('auto_pay_enabled'), cur?.auto_pay_enabled ?? false);
 
@@ -308,7 +314,7 @@ async function buildPayload(b: any, cur: any) {
   // SRZone-parity fields
   for (const key of EXTRA_SUBSCRIBER_TEXT) p[key] = nullableStr(get(key));
   for (const key of EXTRA_SUBSCRIBER_BOOL) p[key] = boolVal(get(key), cur?.[key] ?? false);
-  p.old_expiry_date = dateVal(get('old_expiry_date'), 'old_expiry_date');
+  p.old_expiry_date = dateField('old_expiry_date');
   p.excess_amount = moneyVal(get('excess_amount') ?? 0, 'excess_amount') ?? 0;
 
   await validateReferences(p);
