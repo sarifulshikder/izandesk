@@ -26,6 +26,10 @@ All complete architectural blueprints, database schemas, and feature catalogs ar
 6. **[MCP Server Setup](./docs/mcp-setup.md)**
    *Connect Claude, Cursor or ChatGPT to role-scoped, audited ISP tools at `/api/mcp`, with read-only keys and confirmation-gated writes.*
 
+7. **[Staging Deployment & Smoke Checklist](./docs/staging-smoke-checklist.md)**
+
+   *Pre-production verification for the auth, billing, network, and packaging hardening changes.*
+
 ---
 
 ## ⚡ Core Architecture Highlights
