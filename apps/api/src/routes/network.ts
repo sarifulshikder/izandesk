@@ -3,7 +3,6 @@ import { pool } from '../db';
 import { asyncHandler, sanitizeRouter, sanitizeRouters, networkGuard, hasNetworkWrite } from './helpers';
 import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret } from '../integrations/mikrotik';
 import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas } from '../integrations/radius';
-import { autoLinkOnusBulk } from '../integrations/onu-autolink';
 import { hashPassword } from '../utils/password';
 
 const router: Router = Router();
@@ -469,8 +468,9 @@ router.get('/sessions', asyncHandler(async (req, res) => {
     ORDER BY ss.status DESC, ss.updated_at DESC LIMIT 200`)).rows;
   if (q) rows = rows.filter((x:any)=>[x.username,x.full_name,x.client_code,x.ip_address,x.router_name].some(v=>String(v||'').toLowerCase().includes(q)));
   rows = rows.map((x:any) => ({ ...x, uptime: formatUptimeSec(Number(x.uptime_sec || 0)) }));
-  // Best-effort automatic ONU↔subscriber linking (name/client_code + MAC/FDB correlation)
-  try { await autoLinkOnusBulk({ allowFdb: true, limit: 30 }); } catch {}
+  // NOTE: ONU↔subscriber auto-linking is intentionally NOT run here. It performs
+  // SNMP/FDB lookups against every enabled OLT and can block this endpoint for
+  // many seconds when an OLT is unreachable. Use POST /api/olt/auto-link explicitly.
   res.json({ data: rows, summary: { online: rows.filter((r:any)=>r.status==='ONLINE').length, total: rows.length, aggRxBps: rows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: rows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } });
 }));
 

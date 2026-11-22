@@ -154,40 +154,20 @@ export async function mikrotikActiveSessions(r: RouterRow) {
   if (mode === 'REST') {
     const o = rosOpts(r, 'REST') as any;
     const arr: any[] = await restFetch(o, '/ppp/active').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/ppp/active'); throw e; }) as any;
-    const sessions = (arr || []).map(x => ({ name: x.name, address: x.address, uptime: x.uptime, caller_id: x['caller-id'] || x.caller_id, service: x.service, encoding: x.encoding, 'tx-byte': x['tx-byte'], 'rx-byte': x['rx-byte'], rx_bps: 0, tx_bps: 0 }));
-    // best-effort rates: try interface monitor-traffic for first few sessions (REST monitor-traffic support varies)
-    for (const s of sessions.slice(0, 20)) {
-      try {
-        const ifname = `<pppoe-${s.name}>`;
-        // REST monitor-traffic is not a simple GET; try interface list bytes as fallback not available; skip if unsupported
-        const mt: any = await restSend(o, 'POST', '/interface/monitor-traffic', { interface: ifname, once: true, duration: '1s' }).catch(()=>null);
-        if (mt) {
-          const m = Array.isArray(mt) ? mt[0] : mt;
-          s.rx_bps = Number(m?.['rx-bits-per-second'] || m?.rx_bits_per_second || 0);
-          s.tx_bps = Number(m?.['tx-bits-per-second'] || m?.tx_bits_per_second || 0);
-        }
-      } catch {}
-    }
-    return sessions;
+    // Do not poll monitor-traffic per session here: it issues dozens of extra
+    // RouterOS commands on every dashboard refresh and adds avoidable CPU load.
+    // Session state comes from /ppp/active; live rates are left at 0.
+    return (arr || []).map(x => ({ name: x.name, address: x.address, uptime: x.uptime, caller_id: x['caller-id'] || x.caller_id, service: x.service, encoding: x.encoding, 'tx-byte': x['tx-byte'], 'rx-byte': x['rx-byte'], rx_bps: 0, tx_bps: 0 }));
   }
   const o = rosOpts(r, 'API') as any;
   const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
   try {
     await api.connect();
     const arr: any[] = await api.write('/ppp/active/print').catch(()=>[]) as any;
-    const sessions = (arr || []).map(x => ({ name: x.name, address: x.address, uptime: x.uptime, caller_id: x['caller-id'], service: x.service, encoding: x.encoding, 'tx-byte': x['tx-byte'], 'rx-byte': x['rx-byte'], rx_bps: 0, tx_bps: 0 }));
-    // fetch real rates for active sessions (best-effort, limited to avoid long delays)
-    for (const s of sessions.slice(0, 25)) {
-      try {
-        const ifname = `<pppoe-${s.name}>`;
-        const mt: any[] = await api.write('/interface/monitor-traffic', [`=interface=${ifname}`, '=once=']).catch(()=>[]) as any;
-        if (mt && mt[0]) {
-          s.rx_bps = Number(mt[0]['rx-bits-per-second'] || 0);
-          s.tx_bps = Number(mt[0]['tx-bits-per-second'] || 0);
-        }
-      } catch {}
-    }
-    return sessions;
+    // Do not poll monitor-traffic per session here: it issues dozens of extra
+    // RouterOS commands on every dashboard refresh and adds avoidable CPU load.
+    // Session state comes from /ppp/active; live rates are left at 0.
+    return (arr || []).map(x => ({ name: x.name, address: x.address, uptime: x.uptime, caller_id: x['caller-id'], service: x.service, encoding: x.encoding, 'tx-byte': x['tx-byte'], 'rx-byte': x['rx-byte'], rx_bps: 0, tx_bps: 0 }));
   } finally { try { api.close(); } catch {} }
 }
 
