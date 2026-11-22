@@ -65,7 +65,7 @@ export default function RouterDetailPage() {
     try {
       const [r, s] = await Promise.all([
         apiFetch<any>(`/api/network/routers/${id}`, {}, token),
-        apiFetch<{ data: any[]; summary?: any }>('/api/network/sessions', {}, token).catch(() => ({ data: [], summary: null })),
+        apiFetch<{ data: any[]; summary?: any }>('/api/network/sessions?nopoll=1', {}, token).catch(() => ({ data: [], summary: null })),
       ]);
       setRouter(r);
       const all = s.data || [];

@@ -5,26 +5,17 @@ import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { MetricsGrid } from '@/components/dashboard/metrics-grid';
-import { LiveTrafficChart } from '@/components/dashboard/live-traffic-chart';
 import { NetworkHealthCard } from '@/components/dashboard/network-health-card';
 import { SystemStatusCard } from '@/components/dashboard/system-status-card';
 import { AttentionBar } from '@/components/dashboard/attention-bar';
-import { RecentSubscribersTable } from '@/components/dashboard/recent-subscribers-table';
 import {
   UserPlus, Activity, CreditCard, AlertTriangle, BellRing, Radio,
   Network as NetworkIcon, Receipt, HardDrive, ArrowUpRight, ArrowDownRight,
-  Wallet, Gauge, CircleDollarSign,
+  Wallet, CircleDollarSign,
 } from 'lucide-react';
 
 function money(v: any) {
   return `৳${Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-}
-
-function fmtBps(bps: number) {
-  const n = Number(bps || 0);
-  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} Gbps`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} Mbps`;
-  return `${Math.max(0, n / 1e3).toFixed(0)} Kbps`;
 }
 
 export default function DashboardPage() {
@@ -40,9 +31,9 @@ export default function DashboardPage() {
       const [sum, subs, sessions, billing, routers, olts, onus, health, apiHealth, diag, general] = await Promise.all([
         apiFetch<any>('/api/subscribers/summary', {}, token).catch(() => null),
         apiFetch<any>('/api/subscribers?limit=6', {}, token).catch(() => null),
-        canNetwork ? apiFetch<any>('/api/network/sessions', {}, token).catch(() => null) : Promise.resolve(null),
+        canNetwork ? apiFetch<any>('/api/network/sessions?nopoll=1', {}, token).catch(() => null) : Promise.resolve(null),
         canBilling ? apiFetch<any>('/api/billing/metrics', {}, token).catch(() => null) : Promise.resolve(null),
-        canNetwork ? apiFetch<any>('/api/network/routers', {}, token).catch(() => null) : Promise.resolve(null),
+        canNetwork ? apiFetch<any>('/api/network/routers?nopoll=1', {}, token).catch(() => null) : Promise.resolve(null),
         canNetwork ? apiFetch<any>('/api/olt/olts', {}, token).catch(() => null) : Promise.resolve(null),
         canNetwork ? apiFetch<any>('/api/olt/onus', {}, token).catch(() => null) : Promise.resolve(null),
         fetch(`${getApiBaseUrl()}/api/system/health`).then((r) => r.json()).catch(() => null),
@@ -160,14 +151,6 @@ export default function DashboardPage() {
                   <div className="hero-stat-value">{Number(s.online || 0)}</div>
                   <div className="hero-stat-hint">PPPoE & RADIUS sessions</div>
                 </div>
-                <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="hero-stat-label"><Gauge className="w-3 h-3" /> Throughput</span>
-                    <span className="live-pill"><span className="status-dot online" /></span>
-                  </div>
-                  <div className="hero-stat-value">{fmtBps(Number(s.aggRxBps || 0) + Number(s.aggTxBps || 0))}</div>
-                  <div className="hero-stat-hint">↓ {fmtBps(Number(s.aggRxBps || 0))} · ↑ {fmtBps(Number(s.aggTxBps || 0))}</div>
-                </div>
               </div>
             </div>
           </div>
@@ -260,15 +243,13 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* ── Throughput + system ──────────────────────────────────────────── */}
+      {/* ── System ──────────────────────────────────────────────────────── */}
       {d && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <div className="xl:col-span-2"><LiveTrafficChart rx={Number(s.aggRxBps || 0)} tx={Number(s.aggTxBps || 0)} online={Number(s.online || 0)} /></div>
-          <SystemStatusCard health={d.health} apiHealth={d.apiHealth} diag={d.diag} />
+          <div className="xl:col-span-3"><SystemStatusCard health={d.health} apiHealth={d.apiHealth} diag={d.diag} /></div>
         </div>
       )}
 
-      {d && <RecentSubscribersTable subscribers={d.recent} />}
     </div>
   );
 }

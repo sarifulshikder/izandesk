@@ -72,7 +72,7 @@ export default function SubscriberLivePage() {
       await load({ ping: shouldPing, silent: true });
     };
     load({ ping: true });
-    const t = setInterval(() => { tick(false); }, 1000);
+    const t = setInterval(() => { tick(false); }, 5000);
     return () => { cancelled = true; clearInterval(t); };
   }, [token, id, load]);
 

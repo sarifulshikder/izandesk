@@ -53,6 +53,7 @@ import { createAuthSecurityRouter } from './routes/auth-security';
 import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
+import { startNetworkCollector } from './integrations/network-collector';
 import { LITE_MODE } from './config/runtime';
 
 const PORT = Number(process.env.API_PORT || 4000);
@@ -522,6 +523,7 @@ async function bootstrap() {
     startBillingScheduler();
     startBackupScheduler();
     startReportScheduler();
+    startNetworkCollector();
     // Compliance retention sweep once per day (settings: audit_retention_days,
     // kyc.expiry_warning_days, kyc.document_retention_days). Legal holds win.
     void runAuditRetention();
