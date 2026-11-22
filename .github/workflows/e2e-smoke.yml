@@ -69,6 +69,14 @@ jobs:
           docker compose -f docker/docker-compose.yml logs --tail=200 api web postgres
           exit 1
 
+      - name: Seed disposable E2E fixtures
+        run: pnpm seed:e2e
+        env:
+          API_URL: http://localhost:4000
+          E2E_ADMIN_EMAIL: admin@izandesk.com
+          E2E_ADMIN_PASSWORD: admin123
+          E2E_RESELLER_EMAIL: reseller@cybernet.bd
+
       - name: MCP protocol smoke
         run: pnpm test:mcp
         env:

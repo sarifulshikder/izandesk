@@ -12,6 +12,7 @@ const { verifyStaffToken, verifyPurposeToken } = require('../dist/security/staff
 const { enabled, ipAllowed } = require('../dist/security/guards.js');
 const db = require('../dist/db/index.js');
 const billingRouter = require('../dist/routes/billing.js').default;
+const settingsRouter = require('../dist/routes/settings.js').default;
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -57,6 +58,31 @@ async function postBilling(handlers, path, payload, headers = {}, rawBody) {
     });
     const body = await res.json().catch(() => ({}));
     return { status: res.status, body, calls: fake.calls };
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    fake.restore();
+  }
+}
+
+async function getSettings(path, role) {
+  const fake = makeDb([]);
+  const app = express();
+  app.use((req, _res, next) => {
+    req.user = { id: 'u1', email: `${role.toLowerCase()}@example.com`, name: 'Test', role };
+    next();
+  });
+  app.use('/api/settings', settingsRouter);
+  const server = await new Promise((resolve) => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  try {
+    const { port } = server.address();
+    const res = await fetch(`http://127.0.0.1:${port}${path}`, {
+      headers: { connection: 'close' },
+    });
+    const body = await res.json().catch(() => ({}));
+    return { status: res.status, body };
   } finally {
     server.closeAllConnections?.();
     await new Promise((resolve) => server.close(resolve));
@@ -158,6 +184,19 @@ check('ipAllowed: CIDR miss', ipAllowed('10.78.0.15', ['10.77.0.0/24']) === fals
   check('checkout: disabled gateway returns 403', disabled.status === 403);
   check('checkout: disabled gateway explains why', /disabled/i.test(String(disabled.body.message || '')));
   check('checkout: disabled gateway creates no pending payment', !disabled.calls.some((c) => has(c, 'INSERT INTO payments')));
+
+  /* ---------------- general settings readable by every role ---------------- */
+  const generalBilling = await getSettings('/api/settings/general', 'BILLING_OPERATOR');
+  check('settings: general readable by billing role', generalBilling.status === 200);
+  check('settings: general exposes company name', generalBilling.body.data?.company_name === 'IzanDesk ISP');
+  const generalReseller = await getSettings('/api/settings/general', 'RESELLER');
+  check('settings: general readable by reseller role', generalReseller.status === 200);
+  const securityBilling = await getSettings('/api/settings/security', 'BILLING_OPERATOR');
+  check('settings: security category still admin-only', securityBilling.status === 403);
+  const aggregateBilling = await getSettings('/api/settings', 'BILLING_OPERATOR');
+  check('settings: aggregate view still admin-only', aggregateBilling.status === 403);
+  const schemaBilling = await getSettings('/api/settings/schema', 'BILLING_OPERATOR');
+  check('settings: schema still admin-only', schemaBilling.status === 403);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

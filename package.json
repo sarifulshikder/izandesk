@@ -10,7 +10,8 @@
     "lint": "pnpm --recursive lint",
     "test:e2e": "playwright test",
     "test:e2e:mutations": "E2E_MUTATIONS=1 playwright test",
-    "test:mcp": "node scripts/smoke-mcp.mjs"
+    "test:mcp": "node scripts/smoke-mcp.mjs",
+    "seed:e2e": "node scripts/seed-e2e-fixtures.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",

@@ -48,8 +48,11 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:category', asyncHandler(async (req, res) => {
-  if (!requireAdmin(req, res)) return;
   const cat = String(req.params.category || '').toLowerCase();
+  // General settings contain display/billing metadata (company name, currency,
+  // timezone) needed by every dashboard. The schema, aggregate and every other
+  // category — including secret-bearing ones — remain SUPER_ADMIN-only.
+  if (cat !== 'general' && !requireAdmin(req, res)) return;
   if (!SETTINGS_CATEGORIES[cat]) throw new ValidationError(`Unknown category: ${cat}`);
   const all = maskedView(await getAllSettings());
   const out: Record<string, any> = {};

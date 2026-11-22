@@ -63,6 +63,14 @@ docker compose -f docker/docker-compose.yml config
 docker compose -f docker/docker-compose.yml up -d --build
 ```
 
+For a **fresh disposable** local/CI stack only, seed the smoke fixtures once:
+
+```bash
+pnpm seed:e2e
+```
+
+Do not run the E2E seeder against a staging database that contains customer data.
+
 Review startup logs for:
 - no `payment idempotency index skipped` warnings (or a tracked cleanup ticket)
 - no `subscribers.reseller_id FK skipped` warning

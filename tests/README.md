@@ -11,12 +11,16 @@ pnpm test:e2e                 # safe, read-only smoke checks
 pnpm test:e2e:mutations       # also runs the opt-in create/edit/delete/drag flows
                               # (subscriber, GIS box, GIS area, MCP key lifecycle)
 pnpm test:mcp                 # standalone MCP JSON-RPC protocol smoke test
+pnpm seed:e2e                 # idempotent demo fixtures for a fresh disposable stack
 node scripts/smoke-security.mjs  # guards, TOTP, secret encryption, rate limiter (after api build)
 ```
 
 Tests target `http://localhost:3000` by default. Point at another host explicitly
 with `E2E_BASE_URL=https://your-host` (only do this for a disposable environment
-when running `test:e2e:mutations`).
+when running `test:e2e:mutations`). The smoke suite itself is read-only, but a
+fresh database lacks the reseller-owned and geocoded subscribers it asserts on;
+run `pnpm seed:e2e` once against the disposable stack first. CI does this
+automatically.
 
 CI (`.github/workflows/e2e-smoke.yml`) boots `postgres`, `redis`, `api` and `web`
 from `docker/docker-compose.yml`, waits for `/api/health` and the web root, then
