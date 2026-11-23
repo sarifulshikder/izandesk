@@ -6,6 +6,7 @@ import path = require('path');
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { LITE_MODE } from '../config/runtime';
+import { emitNocAlert } from '../integrations/noc-alerts';
 
 const router: Router = Router();
 function requireAdmin(req:any,res:any){ if (!['SUPER_ADMIN','NOC_ENGINEER'].includes(String((req as any).user?.role))) { res.status(403).json({ message: 'Forbidden' }); return false; } return true; }
@@ -93,7 +94,10 @@ export function startBackupScheduler() {
       if (!(await tryAcquireBackupLock(Math.max(10, Math.min(55, cfg.hours*60 - 5))))) return;
       const res = await runDbBackup('scheduled');
       if (res.ok) console.log(`[BackupScheduler] backup ok: ${res.backup?.name} (${res.backup?.size} bytes), pruned=${res.retention?.deleted}`);
-      else console.error('[BackupScheduler] backup failed:', res.message, res.detail || '');
+      else {
+        console.error('[BackupScheduler] backup failed:', res.message, res.detail || '');
+        await emitNocAlert({ severity: 'CRITICAL', source: 'BACKUP', title: 'Scheduled backup failed', message: String(res.message || 'Backup failed'), details: { detail: res.detail || null } }).catch(() => {});
+      }
     } catch (e:any) { console.error('[BackupScheduler] error', e.message); }
   };
   setTimeout(runOnce, 60 * 1000);
@@ -179,6 +183,25 @@ router.post('/backups/run', asyncHandler(async (req, res) => {
   const result = await runDbBackup('manual');
   if (!result.ok) return res.status(500).json({ ok: false, message: result.message, detail: result.detail });
   res.json({ ok: true, backup: result.backup, retention: result.retention });
+}));
+
+router.get('/alerts', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req,res)) return;
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+  const r = await pool.query('SELECT * FROM noc_alerts ORDER BY created_at DESC LIMIT $1', [limit]).catch(()=>({rows:[]}));
+  const unread = await pool.query('SELECT COUNT(*)::int AS c FROM noc_alerts WHERE acknowledged=false').catch(()=>({rows:[{c:0}]}));
+  res.json({ ok: true, data: r.rows, unread: unread.rows[0]?.c || 0 });
+}));
+
+router.post('/alerts/:id/ack', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req,res)) return;
+  const who = String((req as any).user?.email || (req as any).user?.id || 'admin');
+  const r = await pool.query(
+    `UPDATE noc_alerts SET acknowledged=true, acknowledged_at=now(), acknowledged_by=$2 WHERE id=$1 RETURNING *`,
+    [req.params.id, who]
+  ).catch(()=>({rows:[]}));
+  if (!r.rows[0]) return res.status(404).json({ ok: false, message: 'Alert not found' });
+  res.json({ ok: true, data: r.rows[0] });
 }));
 
 export default router;

@@ -1,5 +1,6 @@
 import { pool } from '../db';
 import { dispatchMessage } from './messaging';
+import { emitNocAlert } from './noc-alerts';
 
 async function generateReport(key: string) {
   switch (String(key)) {
@@ -93,6 +94,7 @@ export async function runReportSchedulesOnce(){
       ran++;
     } catch(e:any){
       await pool.query(`UPDATE report_schedules SET last_status=$2 WHERE id=$1`, [s.id, `ERROR:${String(e.message).slice(0,120)}`]).catch(()=>{});
+      await emitNocAlert({ severity: 'WARNING', source: 'REPORT', title: `Report schedule failed: ${s.name || s.id}`, message: String(e.message || e).slice(0, 300), details: { schedule_id: s.id, report_key: s.report_key } }).catch(() => {});
     }
   }
   return { ran, delivered, failed };

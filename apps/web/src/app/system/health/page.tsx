@@ -11,6 +11,7 @@ export default function SystemHealthPage() {
   const [diag, setDiag] = useState<any>(null);
   const [backups, setBackups] = useState<any>(null);
   const [fupLogs, setFupLogs] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<any[]>([]);
   const [msg, setMsg] = useState<string|null>(null);
   const [err, setErr] = useState<string|null>(null);
   const [busy, setBusy] = useState(false);
@@ -22,12 +23,13 @@ export default function SystemHealthPage() {
     try {
       const h = await fetch(`${getApiBaseUrl()}/api/system/health`).then(r=>r.json());
       setHealth(h);
-      const [d,b,f] = await Promise.all([
+      const [d,b,f,a] = await Promise.all([
         apiFetch<any>('/api/system/diagnostics', {}, token).catch(()=>null),
         apiFetch<any>('/api/system/backups', {}, token).catch(()=>null),
         apiFetch<any>('/api/billing/fup/logs', {}, token).catch(()=>({data:[]})),
+        apiFetch<any>('/api/system/alerts?limit=20', {}, token).catch(()=>({data:[]})),
       ]);
-      setDiag(d); setBackups(b); setFupLogs(f?.data || []);
+      setDiag(d); setBackups(b); setFupLogs(f?.data || []); setAlerts(a?.data || []);
     } catch(e:any){ setErr(e.message); }
   };
   useEffect(()=>{ load(); }, [token]);
@@ -51,6 +53,12 @@ export default function SystemHealthPage() {
       setMsg(`FUP sweep: evaluated ${r.evaluated ?? 0}, applied ${r.applied ?? 0}, cleared ${r.cleared ?? 0}, skipped ${r.skipped ?? 0}`);
       await load();
     } catch(e:any){ setErr(e.message || 'FUP evaluation failed'); } finally { setFupBusy(false); }
+  };
+
+  const ackAlert = async (id: string) => {
+    if (!token) return;
+    try { await apiFetch(`/api/system/alerts/${id}/ack`, { method:'POST' }, token); await load(); }
+    catch (e:any) { setErr(e.message || 'Failed to acknowledge alert'); }
   };
 
   const ok = (v:any) => v?.ok === true;
@@ -118,6 +126,25 @@ export default function SystemHealthPage() {
             </div>
           ))}
           {!fupLogs.length && <div className="empty-panel"><span className="empty-panel-icon"><Gauge className="w-5 h-5"/></span><div><div className="text-sm font-semibold">No FUP actions logged</div><p className="text-[11px] text-muted-foreground mt-1">Transitions appear when caps are applied/cleared.</p></div></div>}
+        </div>
+      </div>
+
+      <div className="card p-4">
+        <div className="flex items-center justify-between mb-3"><h2 className="font-bold flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-primary"/>NOC Alerts / Notification Feed</h2><span className="text-xs text-muted-foreground">{alerts.filter((a:any)=>!a.acknowledged).length} unread</span></div>
+        <div className="space-y-2 max-h-[320px] overflow-auto">
+          {alerts.map((a:any) => (
+            <div key={a.id} className="p-3 rounded-xl border border-border bg-muted/20 text-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-medium">{a.title} <span className={`badge ${a.severity==='CRITICAL'?'badge-danger':a.severity==='INFO'?'badge-secondary':'badge-warning'}`}>{a.severity}</span></div>
+                  <div className="text-xs text-muted-foreground">{a.source} • {a.created_at ? new Date(a.created_at).toLocaleString() : ''}</div>
+                  {a.message && <div className="text-xs mt-1">{a.message}</div>}
+                </div>
+                {!a.acknowledged ? <button onClick={()=>ackAlert(a.id)} className="btn btn-ghost btn-sm">Ack</button> : <span className="text-xs text-muted-foreground">Acked</span>}
+              </div>
+            </div>
+          ))}
+          {!alerts.length && <div className="empty-panel"><span className="empty-panel-icon"><ShieldCheck className="w-5 h-5"/></span><div><div className="text-sm font-semibold">No alerts</div><p className="text-[11px] text-muted-foreground mt-1">NOC alerts will appear here when emitted.</p></div></div>}
         </div>
       </div>
 

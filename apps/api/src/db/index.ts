@@ -1464,6 +1464,21 @@ export async function initDb() {
     );
     ALTER TABLE report_schedules ADD COLUMN IF NOT EXISTS interval_minutes INTEGER;
 
+    CREATE TABLE IF NOT EXISTS noc_alerts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      severity TEXT NOT NULL DEFAULT 'WARNING',
+      source TEXT NOT NULL DEFAULT 'SYSTEM',
+      title TEXT NOT NULL,
+      message TEXT,
+      details JSONB DEFAULT '{}'::jsonb,
+      acknowledged BOOLEAN NOT NULL DEFAULT false,
+      acknowledged_at TIMESTAMPTZ,
+      acknowledged_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_noc_alerts_created ON noc_alerts(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_noc_alerts_ack ON noc_alerts(acknowledged, created_at DESC);
+
     ALTER TABLE assets ADD COLUMN IF NOT EXISTS depreciation_rate NUMERIC(8,4) DEFAULT 0;
     ALTER TABLE assets ADD COLUMN IF NOT EXISTS accumulated_depreciation NUMERIC(14,2) DEFAULT 0;
     ALTER TABLE assets ADD COLUMN IF NOT EXISTS last_depreciated_at TIMESTAMPTZ;
