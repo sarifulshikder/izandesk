@@ -42,11 +42,19 @@ async function gotoStable(page: Page, url: string) {
   }
 }
 
+// The suite makes dozens of API calls as the same few identities. Cache the
+// bearer tokens so a fast CI worker does not trip the 30-login/minute limiter.
+const tokenCache = new Map<string, string>();
+
 async function loginToken(request: APIRequestContext, creds: { email: string; password: string }) {
+  const key = `${creds.email}\u0000${creds.password}`;
+  const cached = tokenCache.get(key);
+  if (cached) return cached;
   const res = await request.post('/api/auth/login', { data: creds });
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
   expect(body.token).toBeTruthy();
+  tokenCache.set(key, body.token);
   return body.token as string;
 }
 

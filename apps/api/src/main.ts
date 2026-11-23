@@ -135,7 +135,11 @@ async function checkPassword(user: AuthUser, pw: string): Promise<boolean> {
 // in-memory login lockout (per identifier + source IP), limits come from settings
 interface LoginAttempt { fails: number; lockedUntil: number }
 const loginAttempts = new Map<string, LoginAttempt>();
-const loginLimiter = createRateLimiter('login', 30, 60_000);
+// The E2E suite reuses one source IP for many UI logins. The insecure demo
+// profile already opts into known credentials, so give its limiter headroom;
+// real deployments keep the strict 30/minute default.
+const loginRateLimit = envFlag(process.env.SECURITY_ALLOW_INSECURE_DEMO) ? 300 : 30;
+const loginLimiter = createRateLimiter('login', loginRateLimit, 60_000);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
   (async () => {
@@ -249,7 +253,7 @@ async function bootstrap() {
       const identifier = String(body.identifier || body.email || body.username || '').trim().toLowerCase();
       const pw = String(body.password || '');
       const sourceIp = String(req.ip || req.headers['x-forwarded-for'] || '');
-      const throttle = loginLimiter.check(sourceIp || identifier || 'unknown', 30);
+      const throttle = loginLimiter.check(sourceIp || identifier || 'unknown', loginRateLimit);
       if (!throttle.allowed) {
         res.setHeader('Retry-After', String(throttle.retryAfterSec));
         return res.status(429).json({ message: 'Too many login attempts. Try again shortly.' });
