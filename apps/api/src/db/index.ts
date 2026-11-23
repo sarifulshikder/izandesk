@@ -1479,6 +1479,18 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_noc_alerts_created ON noc_alerts(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_noc_alerts_ack ON noc_alerts(acknowledged, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS backup_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      trigger TEXT NOT NULL DEFAULT 'manual',
+      ok BOOLEAN NOT NULL DEFAULT false,
+      file_name TEXT,
+      file_size_bytes BIGINT,
+      message TEXT,
+      detail TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_backup_runs_created ON backup_runs(created_at DESC);
+
     ALTER TABLE assets ADD COLUMN IF NOT EXISTS depreciation_rate NUMERIC(8,4) DEFAULT 0;
     ALTER TABLE assets ADD COLUMN IF NOT EXISTS accumulated_depreciation NUMERIC(14,2) DEFAULT 0;
     ALTER TABLE assets ADD COLUMN IF NOT EXISTS last_depreciated_at TIMESTAMPTZ;

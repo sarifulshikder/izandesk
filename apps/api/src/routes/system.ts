@@ -56,6 +56,13 @@ export function applyBackupRetention(cfg = getBackupConfig()) {
   return { deleted, kept: Math.max(0, files.length - deleted) };
 }
 
+async function recordBackupRun(row: { trigger: string; ok: boolean; file_name?: string|null; file_size_bytes?: number|null; message?: string|null; detail?: string|null }) {
+  await pool.query(
+    `INSERT INTO backup_runs(trigger, ok, file_name, file_size_bytes, message, detail) VALUES($1,$2,$3,$4,$5,$6)`,
+    [row.trigger, row.ok, row.file_name || null, row.file_size_bytes ?? null, row.message || null, row.detail || null]
+  ).catch(() => {});
+}
+
 export async function runDbBackup(trigger: 'manual'|'scheduled' = 'manual') {
   const dir = backupsDir();
   const ts = new Date().toISOString().replace(/[:.]/g,'-');
@@ -65,11 +72,15 @@ export async function runDbBackup(trigger: 'manual'|'scheduled' = 'manual') {
   const r = await run('pg_dump', [dbUrl, '-f', file], 120000);
   if (!r.ok) {
     try { if (fs.existsSync(file) && fs.statSync(file).size === 0) fs.unlinkSync(file); } catch {}
-    return { ok: false, trigger, message: 'Backup failed (pg_dump unavailable or DB unreachable)', detail: String(r.stderr||'').slice(0,500) };
+    const result = { ok: false as const, trigger, message: 'Backup failed (pg_dump unavailable or DB unreachable)', detail: String(r.stderr||'').slice(0,500) };
+    await recordBackupRun({ trigger, ok: false, message: result.message, detail: result.detail });
+    return result;
   }
   const st = fs.statSync(file);
   const retention = applyBackupRetention();
-  return { ok: true, trigger, backup: { name: path.basename(file), size: st.size, path: file, created_at: st.mtime }, retention };
+  const result = { ok: true as const, trigger, backup: { name: path.basename(file), size: st.size, path: file, created_at: st.mtime }, retention };
+  await recordBackupRun({ trigger, ok: true, file_name: result.backup.name, file_size_bytes: result.backup.size });
+  return result;
 }
 
 async function tryAcquireBackupLock(minutes = 30) {
@@ -93,10 +104,12 @@ export function startBackupScheduler() {
     try {
       if (!(await tryAcquireBackupLock(Math.max(10, Math.min(55, cfg.hours*60 - 5))))) return;
       const res = await runDbBackup('scheduled');
-      if (res.ok) console.log(`[BackupScheduler] backup ok: ${res.backup?.name} (${res.backup?.size} bytes), pruned=${res.retention?.deleted}`);
-      else {
-        console.error('[BackupScheduler] backup failed:', res.message, res.detail || '');
-        await emitNocAlert({ severity: 'CRITICAL', source: 'BACKUP', title: 'Scheduled backup failed', message: String(res.message || 'Backup failed'), details: { detail: res.detail || null } }).catch(() => {});
+      if (res.ok) {
+        console.log(`[BackupScheduler] backup ok: ${res.backup?.name} (${res.backup?.size} bytes), pruned=${res.retention?.deleted}`);
+      } else {
+        const fail: any = res;
+        console.error('[BackupScheduler] backup failed:', fail.message, fail.detail || '');
+        await emitNocAlert({ severity: 'CRITICAL', source: 'BACKUP', title: 'Scheduled backup failed', message: String(fail.message || 'Backup failed'), details: { detail: fail.detail || null } }).catch(() => {});
       }
     } catch (e:any) { console.error('[BackupScheduler] error', e.message); }
   };
@@ -175,13 +188,15 @@ router.get('/backups', asyncHandler(async (req, res) => {
   const dir = backupsDir();
   const files = listBackupFiles(dir).map((f:any)=>({ name:f.name, size:f.size, created_at:f.created_at }));
   const cfg = getBackupConfig();
-  res.json({ ok: true, dir, files, config: { enabled: cfg.enabled, schedule_hours: cfg.hours, retention_count: cfg.retentionCount, retention_days: cfg.retentionDays } });
+  const runs = await pool.query('SELECT * FROM backup_runs ORDER BY created_at DESC LIMIT 20').catch(()=>({rows:[]}));
+  const last = runs.rows[0] || null;
+  res.json({ ok: true, dir, files, runs: runs.rows, last_run: last, config: { enabled: cfg.enabled, schedule_hours: cfg.hours, retention_count: cfg.retentionCount, retention_days: cfg.retentionDays } });
 }));
 
 router.post('/backups/run', asyncHandler(async (req, res) => {
   if (!requireAdmin(req,res)) return;
   const result = await runDbBackup('manual');
-  if (!result.ok) return res.status(500).json({ ok: false, message: result.message, detail: result.detail });
+  if (!result.ok) { const fail: any = result; return res.status(500).json({ ok: false, message: fail.message, detail: fail.detail }); }
   res.json({ ok: true, backup: result.backup, retention: result.retention });
 }));
 
