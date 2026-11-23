@@ -12,6 +12,8 @@ interface AuthContextType {
   login: (email: string, password: string, remember?: boolean) => Promise<void>;
   mfaRequired: boolean;
   mfaToken: string | null;
+  mfaEnrollmentRequired: boolean;
+  mfaEnrollment: { secret: string; otpauth_uri: string } | null;
   verifyMfa: (code: string) => Promise<void>;
   logout: () => void;
   theme: 'dark' | 'light';
@@ -40,6 +42,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const rememberRef = useRef(true);
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaToken, setMfaToken] = useState<string | null>(null);
+  const [mfaEnrollmentRequired, setMfaEnrollmentRequired] = useState(false);
+  const [mfaEnrollment, setMfaEnrollment] = useState<{ secret: string; otpauth_uri: string } | null>(null);
   // Read the saved theme during the first render: an effect read raced with the
   // mount write of the stale 'light' value (StrictMode re-ran the read after
   // localStorage had already been overwritten), so a saved 'dark' reverted to
@@ -113,6 +117,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setActiveRole(nextUser.role);
     setMfaRequired(false);
     setMfaToken(null);
+    setMfaEnrollmentRequired(false);
+    setMfaEnrollment(null);
     if (typeof window !== 'undefined') {
       if (remember) localStorage.setItem(TOKEN_KEY, nextToken);
       else localStorage.removeItem(TOKEN_KEY);
@@ -123,7 +129,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setError(null);
     setLoading(true);
     try {
-      const res = await apiFetch<LoginResponse & { mfa_required?: boolean; mfa_token?: string }>('/api/auth/login', {
+      const res = await apiFetch<LoginResponse & { mfa_required?: boolean; mfa_token?: string; mfa_enrollment_required?: boolean }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ email, password }),
       });
@@ -131,6 +137,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         rememberRef.current = remember;
         setMfaToken(res.mfa_token || null);
         setMfaRequired(true);
+        if (res.mfa_enrollment_required && res.mfa_token) {
+          setMfaEnrollmentRequired(true);
+          const enrollment = await apiFetch<{ secret: string; otpauth_uri: string }>('/api/auth/mfa/enroll', {
+            method: 'POST',
+            body: JSON.stringify({ password }),
+          }, res.mfa_token);
+          setMfaEnrollment({ secret: enrollment.secret, otpauth_uri: enrollment.otpauth_uri });
+        } else {
+          setMfaEnrollmentRequired(false);
+          setMfaEnrollment(null);
+        }
         return;
       }
       applySession(res.token, res.user, remember);
@@ -146,10 +163,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setError(null);
     setLoading(true);
     try {
-      const res = await apiFetch<LoginResponse>('/api/auth/mfa/verify', {
+      const res = await apiFetch<LoginResponse>(mfaEnrollmentRequired ? '/api/auth/mfa/confirm' : '/api/auth/mfa/verify', {
         method: 'POST',
         body: JSON.stringify({ mfa_token: mfaToken, code }),
-      });
+      }, mfaEnrollmentRequired ? mfaToken : undefined);
       applySession(res.token, res.user, rememberRef.current);
     } catch (e: any) {
       setError(e?.message || 'Verification failed');
@@ -166,6 +183,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setActiveRole(null);
     setMfaRequired(false);
     setMfaToken(null);
+    setMfaEnrollmentRequired(false);
+    setMfaEnrollment(null);
     if (typeof window !== 'undefined') localStorage.removeItem(TOKEN_KEY);
   };
 
@@ -185,6 +204,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     login,
     mfaRequired,
     mfaToken,
+    mfaEnrollmentRequired,
+    mfaEnrollment,
     verifyMfa,
     logout,
     theme,
@@ -198,7 +219,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     activeRole,
     switchRole: (role: UserRole) => setActiveRole(role),
     can,
-  }), [user, token, loading, error, mfaRequired, mfaToken, theme, isCommandPaletteOpen, isMobileMenuOpen, activeRole]);
+  }), [user, token, loading, error, mfaRequired, mfaToken, mfaEnrollmentRequired, mfaEnrollment, theme, isCommandPaletteOpen, isMobileMenuOpen, activeRole]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

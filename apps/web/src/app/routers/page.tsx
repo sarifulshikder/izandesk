@@ -33,8 +33,8 @@ export default function RoutersPage() {
     setLoading(true); setError(null);
     try {
       const [r, s] = await Promise.all([
-        apiFetch<{data:any[]}>('/api/network/routers', {}, token),
-        apiFetch<{data:any[], summary:any}>('/api/network/sessions', {}, token),
+        apiFetch<{data:any[]}>('/api/network/routers?nopoll=1', {}, token),
+        apiFetch<{data:any[], summary:any}>('/api/network/sessions?nopoll=1', {}, token),
       ]);
       setRouters(r.data || []); setSessions(s.data || []); setSummary(s.summary || {});
     } catch (e: any) { setError(e.message); }

@@ -62,6 +62,134 @@ export interface Subscriber {
   walledGarden?: boolean;
 }
 
+/** KYC / subscriber identity compliance types. Field names mirror the API's
+ *  snake_case rows so the same DTO can be used by staff, portal and reports. */
+export type KycDocType = 'NID' | 'PASSPORT' | 'CONTRACT' | 'PHOTO' | 'UTILITY_BILL' | 'TRADE_LICENSE' | 'OTHER';
+
+export type KycStatus =
+  | 'PENDING'
+  | 'UNDER_REVIEW'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'RESUBMISSION_REQUIRED'
+  | 'EXPIRED'
+  | 'NOT_APPLICABLE';
+
+export type KycServiceType =
+  | 'FIXED_BROADBAND'
+  | 'WIRELESS_BROADBAND'
+  | 'HOTSPOT'
+  | 'CYBER_CAFE'
+  | 'LEASED_LINE';
+
+export type KycIdentityType = 'INDIVIDUAL' | 'BUSINESS';
+
+export type KycOverallStatus = 'INCOMPLETE' | 'PENDING' | 'UNDER_REVIEW' | 'COMPLETE' | 'ATTENTION';
+
+export type KycReviewDecision =
+  | 'MARK_UNDER_REVIEW'
+  | 'APPROVE'
+  | 'REJECT'
+  | 'REQUEST_RESUBMISSION'
+  | 'MARK_EXPIRED';
+
+export interface KycDocument {
+  id: string;
+  subscriber_id: string;
+  doc_type: KycDocType;
+  file_name: string;
+  mime_type: string | null;
+  uploaded_at: string;
+  status: KycStatus;
+  document_number_masked: string | null;
+  issuer: string | null;
+  issue_date: string | null;
+  expires_at: string | null;
+  checksum: string | null;
+  scan_status: 'PENDING' | 'CLEAN' | 'FLAGGED' | 'NOT_SCANNED';
+  source: 'STAFF' | 'PORTAL' | 'MCP' | 'IMPORT';
+  verification_method: string | null;
+  verification_reference: string | null;
+  privacy_notice_version: string | null;
+  reviewed_by: string | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
+  rejection_reason: string | null;
+  reupload_of: string | null;
+  retention_until: string | null;
+  legal_hold_until: string | null;
+  last_reminder_at: string | null;
+  updated_at: string;
+}
+
+export interface KycReviewEvent {
+  id: string;
+  document_id: string;
+  subscriber_id: string;
+  actor_id: string | null;
+  actor_name: string | null;
+  actor_role: string | null;
+  action: KycReviewDecision | 'UPLOADED' | 'METADATA_UPDATED' | 'DELETED' | 'AUTO_EXPIRED' | 'LEGAL_HOLD';
+  from_status: KycStatus | null;
+  to_status: KycStatus | null;
+  reason: string | null;
+  evidence_ref: string | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export interface KycProfile {
+  subscriber_id: string;
+  service_type: KycServiceType;
+  identity_type: KycIdentityType;
+  legal_name: string | null;
+  date_of_birth: string | null;
+  occupation: string | null;
+  business_registration_number: string | null;
+  tax_id: string | null;
+  nid_number_masked: string | null;
+  present_address: string | null;
+  permanent_address: string | null;
+  verified_mobile: string | null;
+  email: string | null;
+  privacy_notice_version: string | null;
+  lawful_basis: 'CONTRACT' | 'LEGAL_OBLIGATION' | 'CONSENT' | 'VITAL_INTERESTS';
+  consent_at: string | null;
+  consent_withdrawn_at: string | null;
+  overall_status: KycOverallStatus;
+  last_reviewed_at: string | null;
+  last_reviewed_by: string | null;
+  risk_flags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KycQueueItem extends KycDocument {
+  client_code: string | null;
+  subscriber_name: string | null;
+  subscriber_status: string | null;
+  reseller_id: string | null;
+  reseller_name: string | null;
+  service_type: KycServiceType;
+}
+
+export interface ComplianceSubmission {
+  id: string;
+  portal: 'DIS' | 'ISPMS' | 'EMAIL' | 'MANUAL';
+  report_type: 'MONTHLY' | 'QUARTERLY' | 'ANNUAL_CLIENT_LIST' | 'KYC_PACK' | 'OTHER';
+  period_label: string;
+  period_start: string | null;
+  period_end: string | null;
+  file_name: string | null;
+  checksum: string | null;
+  submitted_at: string | null;
+  acknowledgement_ref: string | null;
+  status: 'DRAFT' | 'SUBMITTED' | 'ACKNOWLEDGED' | 'REJECTED';
+  rejection_reason: string | null;
+  submitted_by: string | null;
+  created_at: string;
+}
+
 export interface RouterTelemetry {
   id: string;
   name: string;

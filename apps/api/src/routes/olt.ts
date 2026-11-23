@@ -129,10 +129,12 @@ router.post('/olts/:id/discover', asyncHandler(async (req, res) => {
   const olt = (await pool.query('SELECT * FROM olts WHERE id=$1',[req.params.id])).rows[0];
   if (!olt) return res.status(404).json({ message: 'OLT not found' });
   const result = await oltDiscoverOnus(olt);
-  // Simulated fallback data must never be persisted as real topology.
-  const simulated = result.mode === 'simulated';
+  // Only parsed IF-MIB/vendor discovery is trustworthy. Simulated and
+  // "unsupported OID" fallbacks must never be persisted as real topology.
+  const trusted = result.ok === true && result.mode === 'snmp';
+  const simulated = !trusted;
   const discovered: any[] = [];
-  for (const n of (simulated ? [] : (result.onus || []))) {
+  for (const n of (trusted ? (result.onus || []) : [])) {
     const rx = n.rx_power_dbm != null ? Number(n.rx_power_dbm) : null;
     const tx = n.tx_power_dbm != null ? Number(n.tx_power_dbm) : null;
     const temp = n.temperature_c != null ? Number(n.temperature_c) : null;
@@ -216,22 +218,33 @@ router.post('/onus/refresh-telemetry', asyncHandler(async (req, res) => {
   const params = olt_id ? [olt_id] : [];
   const onus = (await pool.query(q, params)).rows;
   let mode: string = 'simulated';
+  // One SNMP walk set per OLT, not per ONU. Grouping avoids O(N) full walks.
+  const groups = new Map<string, any[]>();
   for (const o of onus) {
-    const resTel = await oltRefreshTelemetry({ host: o.host, snmp_community: o.snmp_community, vendor: o.vendor, model: o.model }, [o]);
+    const key = String(o.olt_id || '');
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(o);
+  }
+  for (const [oltId, list] of groups) {
+    const first = list[0];
+    const resTel = await oltRefreshTelemetry({ host: first.host, snmp_community: first.snmp_community, vendor: first.vendor, model: first.model }, list);
     mode = resTel.mode || mode;
     // Never overwrite real telemetry with simulated/random values.
     if (resTel.mode === 'simulated') continue;
-    const t: any = (resTel.onus || [])[0] || { rx_power_dbm: -(17 + Math.random()*12), tx_power_dbm: +(0.5 + Math.random()*3.5), status: o.status };
-    const rx = t.rx_power_dbm == null ? null : (+Number(t.rx_power_dbm).toFixed(2));
-    const tx = t.tx_power_dbm == null ? null : (+Number(t.tx_power_dbm).toFixed(2));
-    const temp = t.temperature_c == null ? null : (+Number(t.temperature_c).toFixed(2));
-    const volt = t.voltage_v == null ? null : (+Number(t.voltage_v).toFixed(2));
-    const bias = t.tx_bias_ma == null ? null : (+Number(t.tx_bias_ma).toFixed(2));
-    const mac = t.mac_address ? String(t.mac_address).toLowerCase() : null;
-    const dist = t.distance_m == null ? null : Math.round(Number(t.distance_m));
-    const lastDown = t.last_down_cause ? String(t.last_down_cause) : null;
-    const st = (o.status === 'AUTHORIZED') ? 'AUTHORIZED' : (t.status || o.status || 'DISCOVERED');
-    await pool.query('UPDATE onus SET rx_power_dbm=COALESCE($1,rx_power_dbm), tx_power_dbm=COALESCE($2,tx_power_dbm), mac_address=COALESCE($5,mac_address), distance_m=COALESCE($6,distance_m), last_down_cause=COALESCE($7,last_down_cause), temperature_c=COALESCE($8,temperature_c), voltage_v=COALESCE($9,voltage_v), tx_bias_ma=COALESCE($10,tx_bias_ma), status=$4, last_seen_at=now(), updated_at=now() WHERE id=$3', [rx, tx, o.id, st, mac, dist, lastDown, temp, volt, bias]);
+    const byId = new Map((resTel.onus || []).map((t: any) => [String(t.id), t]));
+    for (const o of list) {
+      const t: any = byId.get(String(o.id)) || o;
+      const rx = t.rx_power_dbm == null ? null : (+Number(t.rx_power_dbm).toFixed(2));
+      const tx = t.tx_power_dbm == null ? null : (+Number(t.tx_power_dbm).toFixed(2));
+      const temp = t.temperature_c == null ? null : (+Number(t.temperature_c).toFixed(2));
+      const volt = t.voltage_v == null ? null : (+Number(t.voltage_v).toFixed(2));
+      const bias = t.tx_bias_ma == null ? null : (+Number(t.tx_bias_ma).toFixed(2));
+      const mac = t.mac_address ? String(t.mac_address).toLowerCase() : null;
+      const dist = t.distance_m == null ? null : Math.round(Number(t.distance_m));
+      const lastDown = t.last_down_cause ? String(t.last_down_cause) : null;
+      const st = (o.status === 'AUTHORIZED') ? 'AUTHORIZED' : (t.status || o.status || 'DISCOVERED');
+      await pool.query('UPDATE onus SET rx_power_dbm=COALESCE($1,rx_power_dbm), tx_power_dbm=COALESCE($2,tx_power_dbm), mac_address=COALESCE($5,mac_address), distance_m=COALESCE($6,distance_m), last_down_cause=COALESCE($7,last_down_cause), temperature_c=COALESCE($8,temperature_c), voltage_v=COALESCE($9,voltage_v), tx_bias_ma=COALESCE($10,tx_bias_ma), status=$4, last_seen_at=now(), updated_at=now() WHERE id=$3', [rx, tx, o.id, st, mac, dist, lastDown, temp, volt, bias]);
+    }
   }
   const r = await pool.query(`SELECT o.*, ol.name as olt_name, ol.vendor as olt_vendor, s.full_name as subscriber_name, s.client_code as subscriber_code
     FROM onus o JOIN olts ol ON ol.id=o.olt_id LEFT JOIN subscribers s ON s.id=o.subscriber_id ${olt_id ? 'WHERE o.olt_id=$1':''} ORDER BY o.updated_at DESC`, params);

@@ -5,6 +5,7 @@ import fs = require('fs');
 import path = require('path');
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
+import { LITE_MODE } from '../config/runtime';
 
 const router: Router = Router();
 function requireAdmin(req:any,res:any){ if (!['SUPER_ADMIN','NOC_ENGINEER'].includes(String((req as any).user?.role))) { res.status(403).json({ message: 'Forbidden' }); return false; } return true; }
@@ -82,6 +83,7 @@ async function tryAcquireBackupLock(minutes = 30) {
 }
 
 export function startBackupScheduler() {
+  if (LITE_MODE) { console.log('[BackupScheduler] disabled in lite mode (manual backups still available)'); return; }
   const cfg = getBackupConfig();
   if (!cfg.enabled) { console.log('[BackupScheduler] disabled (set BACKUP_SCHEDULE_ENABLED=true to enable)'); return; }
   const intervalMs = cfg.hours * 3600 * 1000;
@@ -99,7 +101,8 @@ export function startBackupScheduler() {
 }
 
 // Redis health via the official client (no redis-cli binary needed in the container)
-async function redisPing(): Promise<{ ok: boolean; detail?: string; version?: string }> {
+async function redisPing(): Promise<{ ok: boolean | null; detail?: string; version?: string }> {
+  if (LITE_MODE) return { ok: null, detail: 'disabled in lite mode' };
   const client = createClient({
     socket: {
       host: process.env.REDIS_HOST || '127.0.0.1',
@@ -130,14 +133,16 @@ async function redisPing(): Promise<{ ok: boolean; detail?: string; version?: st
 
 router.get('/health', asyncHandler(async (_req, res) => {
   const checks: any = { api: { ok: true }, db: { ok: false }, redis: { ok: null }, disk: { ok: null }, memory: { ok: true }, time: new Date().toISOString() };
-  try { await pool.query('SELECT 1'); checks.db = { ok: true }; } catch (e:any) { checks.db = { ok: false, error: e.message }; }
+  try { await pool.query('SELECT 1'); checks.db = { ok: true }; } catch { checks.db = { ok: false }; }
   try {
     const mu = process.memoryUsage();
     checks.memory = { ok: true, rss: mu.rss, heapUsed: mu.heapUsed, heapTotal: mu.heapTotal };
   } catch {}
   try {
     checks.redis = await redisPing();
-  } catch (e:any) { checks.redis = { ok: false, error: e.message }; }
+    // Existing health UI treats null as "N/A" rather than a failed service.
+    if (checks.redis.ok === null) checks.redis = null;
+  } catch { checks.redis = { ok: false }; }
   try {
     if (typeof (fs as any).statfsSync === 'function') {
       const stat = (fs as any).statfsSync('/');
@@ -146,9 +151,11 @@ router.get('/health', asyncHandler(async (_req, res) => {
     } else {
       checks.disk = { ok: null, note: 'statfs not available in this runtime' };
     }
-  } catch (e:any) { checks.disk = { ok: null, note: e.message }; }
+  } catch { checks.disk = { ok: null, note: 'disk check unavailable' }; }
   const ok = checks.api.ok && checks.db.ok;
-  res.json({ ok, checks });
+  // Keep the payload for the UI, but fail the HTTP status too so probes and
+  // load balancers do not treat an unhealthy service as healthy.
+  res.status(ok ? 200 : 503).json({ ok, checks });
 }));
 
 router.get('/diagnostics', asyncHandler(async (req, res) => {

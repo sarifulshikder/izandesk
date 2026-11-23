@@ -1,4 +1,6 @@
 import { RouterOSAPI } from 'node-routeros';
+import { acquireMikrotikApi, releaseMikrotikApi, invalidateMikrotikApi } from './mikrotik-manager';
+import { isTransientMikrotikError, normalizeMikrotikError } from './mikrotik-errors';
 import * as https from 'https';
 
 export type RouterRow = any;
@@ -63,16 +65,29 @@ export async function mikrotikTest(r: RouterRow) {
     const data: any = await restFetch(o, '/system/identity').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/system/identity'); throw e; });
     return { ok: true, identity: data?.name || data?.identity || r.name, mode: 'REST' };
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
-  try {
-    await api.connect();
-    const ident = await api.write('/system/identity/print');
-    const name = (ident && ident[0] && (ident[0].name || ident[0]['name'])) || r.name;
-    return { ok: true, identity: name, mode: 'API' };
-  } finally {
-    try { api.close(); } catch {}
+  // A pooled API session can be stale even when it still reports `connected`.
+  // Retry once on a transport-style failure after discarding the session, so a
+  // transient socket drop is not reported as a dead router.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let api: RouterOSAPI | null = null;
+    let released = false;
+    try {
+      api = await acquireMikrotikApi(r, 'API');
+      const ident = await api.write('/system/identity/print');
+      const name = (ident && ident[0] && (ident[0].name || ident[0]['name'])) || r.name;
+      return { ok: true, identity: name, mode: 'API' };
+    } catch (e: any) {
+      if (api) {
+        await releaseMikrotikApi(r, api, false, 'API').catch(() => {});
+        released = true;
+      }
+      await invalidateMikrotikApi(String(r.id || r.host || 'unknown')).catch(() => {});
+      if (attempt === 1 || !isTransientMikrotikError(e)) throw normalizeMikrotikError(e, r);
+    } finally {
+      if (api && !released) await releaseMikrotikApi(r, api, true, 'API').catch(() => {});
+    }
   }
+  throw new Error('MikroTik API test failed');
 }
 
 export async function mikrotikTelemetry(r: RouterRow) {
@@ -98,15 +113,15 @@ export async function mikrotikTelemetry(r: RouterRow) {
       rx_bps: 0, tx_bps: 0,
     };
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let ok = false;
   try {
-    await api.connect();
     const [resource, ident] = await Promise.all([api.write('/system/resource/print'), api.write('/system/identity/print').catch(()=>[])]);
     const reso: any = (resource && resource[0]) || {};
     const totalMem = Number(reso['total-memory'] || 0);
     const freeMem = Number(reso['free-memory'] || 0);
     const uptime = parseUptime(String(reso.uptime || '0s'));
+    ok = true;
     return {
       status: 'ONLINE',
       cpu_load: Number(reso['cpu-load'] || 0),
@@ -117,9 +132,7 @@ export async function mikrotikTelemetry(r: RouterRow) {
       board_name: reso['board-name'] || r.board_name,
       rx_bps: 0, tx_bps: 0,
     };
-  } finally {
-    try { api.close(); } catch {}
-  }
+  } finally { await releaseMikrotikApi(r, api, ok, 'API'); }
 }
 
 async function restSend(o: any, method: string, path: string, body?: any) {
@@ -154,41 +167,21 @@ export async function mikrotikActiveSessions(r: RouterRow) {
   if (mode === 'REST') {
     const o = rosOpts(r, 'REST') as any;
     const arr: any[] = await restFetch(o, '/ppp/active').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/ppp/active'); throw e; }) as any;
-    const sessions = (arr || []).map(x => ({ name: x.name, address: x.address, uptime: x.uptime, caller_id: x['caller-id'] || x.caller_id, service: x.service, encoding: x.encoding, 'tx-byte': x['tx-byte'], 'rx-byte': x['rx-byte'], rx_bps: 0, tx_bps: 0 }));
-    // best-effort rates: try interface monitor-traffic for first few sessions (REST monitor-traffic support varies)
-    for (const s of sessions.slice(0, 20)) {
-      try {
-        const ifname = `<pppoe-${s.name}>`;
-        // REST monitor-traffic is not a simple GET; try interface list bytes as fallback not available; skip if unsupported
-        const mt: any = await restSend(o, 'POST', '/interface/monitor-traffic', { interface: ifname, once: true, duration: '1s' }).catch(()=>null);
-        if (mt) {
-          const m = Array.isArray(mt) ? mt[0] : mt;
-          s.rx_bps = Number(m?.['rx-bits-per-second'] || m?.rx_bits_per_second || 0);
-          s.tx_bps = Number(m?.['tx-bits-per-second'] || m?.tx_bits_per_second || 0);
-        }
-      } catch {}
-    }
-    return sessions;
+    // Do not poll monitor-traffic per session here: it issues dozens of extra
+    // RouterOS commands on every dashboard refresh and adds avoidable CPU load.
+    // Session state comes from /ppp/active; live rates are left at 0.
+    return (arr || []).map(x => ({ name: x.name, address: x.address, uptime: x.uptime, caller_id: x['caller-id'] || x.caller_id, service: x.service, encoding: x.encoding, 'tx-byte': x['tx-byte'], 'rx-byte': x['rx-byte'], rx_bps: 0, tx_bps: 0 }));
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let ok = false;
   try {
-    await api.connect();
     const arr: any[] = await api.write('/ppp/active/print').catch(()=>[]) as any;
-    const sessions = (arr || []).map(x => ({ name: x.name, address: x.address, uptime: x.uptime, caller_id: x['caller-id'], service: x.service, encoding: x.encoding, 'tx-byte': x['tx-byte'], 'rx-byte': x['rx-byte'], rx_bps: 0, tx_bps: 0 }));
-    // fetch real rates for active sessions (best-effort, limited to avoid long delays)
-    for (const s of sessions.slice(0, 25)) {
-      try {
-        const ifname = `<pppoe-${s.name}>`;
-        const mt: any[] = await api.write('/interface/monitor-traffic', [`=interface=${ifname}`, '=once=']).catch(()=>[]) as any;
-        if (mt && mt[0]) {
-          s.rx_bps = Number(mt[0]['rx-bits-per-second'] || 0);
-          s.tx_bps = Number(mt[0]['tx-bits-per-second'] || 0);
-        }
-      } catch {}
-    }
-    return sessions;
-  } finally { try { api.close(); } catch {} }
+    ok = true;
+    // Do not poll monitor-traffic per session here: it issues dozens of extra
+    // RouterOS commands on every dashboard refresh and adds avoidable CPU load.
+    // Session state comes from /ppp/active; live rates are left at 0.
+    return (arr || []).map(x => ({ name: x.name, address: x.address, uptime: x.uptime, caller_id: x['caller-id'], service: x.service, encoding: x.encoding, 'tx-byte': x['tx-byte'], 'rx-byte': x['rx-byte'], rx_bps: 0, tx_bps: 0 }));
+  } finally { await releaseMikrotikApi(r, api, ok, 'API'); }
 }
 
 function toBool(v: any): boolean {
@@ -235,10 +228,9 @@ export async function mikrotikListPppSecrets(r: RouterRow) {
       caller_id: String(x['caller-id'] || x.caller_id || ''),
     })).filter((x) => x.name);
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     const arr: any[] = await api.write('/ppp/secret/print').catch(() => []) as any;
     return (arr || []).map((x: any) => ({
       name: String(x.name || ''),
@@ -251,7 +243,7 @@ export async function mikrotikListPppSecrets(r: RouterRow) {
       local_address: String(x['local-address'] || ''),
       caller_id: String(x['caller-id'] || ''),
     })).filter((x) => x.name);
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 export async function mikrotikListPppProfiles(r: RouterRow) {
@@ -274,13 +266,12 @@ export async function mikrotikListPppProfiles(r: RouterRow) {
     const arr: any[] = await restFetch(o, '/ppp/profile').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/ppp/profile'); throw e; }) as any;
     return (Array.isArray(arr) ? arr : []).map(mapItem).filter((x) => x.name);
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     const arr: any[] = await api.write('/ppp/profile/print').catch(() => []) as any;
     return (arr || []).map(mapItem).filter((x) => x.name);
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 export async function mikrotikListHotspotUsers(r: RouterRow) {
@@ -301,13 +292,12 @@ export async function mikrotikListHotspotUsers(r: RouterRow) {
     const arr: any[] = await restFetch(o, '/ip/hotspot/user').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/ip/hotspot/user'); throw e; }) as any;
     return (Array.isArray(arr) ? arr : []).map(mapItem).filter((x) => x.name);
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     const arr: any[] = await api.write('/ip/hotspot/user/print').catch(() => []) as any;
     return (arr || []).map(mapItem).filter((x) => x.name);
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 export async function mikrotikListHotspotProfiles(r: RouterRow) {
@@ -332,13 +322,12 @@ export async function mikrotikListHotspotProfiles(r: RouterRow) {
     const arr: any[] = await restFetch(o, '/ip/hotspot/user/profile').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/ip/hotspot/user/profile'); throw e; }) as any;
     return (Array.isArray(arr) ? arr : []).map(mapItem).filter((x) => x.name);
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     const arr: any[] = await api.write('/ip/hotspot/user/profile/print').catch(() => []) as any;
     return (arr || []).map(mapItem).filter((x) => x.name);
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 function pkgRateLimit(p: any) {
@@ -387,10 +376,9 @@ export async function mikrotikSyncPackage(r: RouterRow, p: any) {
     return { ok: true, remote_ref: ref, mode: 'REST' };
   }
 
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     let ref = profileName;
     const allProfiles: any[] = await api.write('/ppp/profile/print').catch(()=>[]) as any;
     const existing = (allProfiles || []).find((x: any) => String(x.name) === profileName);
@@ -413,7 +401,7 @@ export async function mikrotikSyncPackage(r: RouterRow, p: any) {
       } catch {}
     }
     return { ok: true, remote_ref: ref, mode: 'API' };
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 export async function mikrotikSyncPppSecret(r: RouterRow, sub: any) {
@@ -440,10 +428,9 @@ export async function mikrotikSyncPppSecret(r: RouterRow, sub: any) {
     }
   }
 
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     const all: any[] = await api.write('/ppp/secret/print').catch(()=>[]) as any;
     const existing = (all || []).find((x:any)=>String(x.name)===username);
     if (existing) {
@@ -453,7 +440,7 @@ export async function mikrotikSyncPppSecret(r: RouterRow, sub: any) {
       await api.write('/ppp/secret/add', [`=name=${username}`, `=password=${password}`, `=profile=${profile}`, `=service=${service}`, `=comment=${comment}`, `=disabled=${disabled}`]);
       return { ok: true, action: 'created', mode: 'API' };
     }
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 export async function mikrotikRemovePppSecret(r: RouterRow, username: string) {
@@ -470,15 +457,14 @@ export async function mikrotikRemovePppSecret(r: RouterRow, username: string) {
     }
     return { ok: true, action: 'not_found', mode: 'REST' };
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     const all: any[] = await api.write('/ppp/secret/print').catch(()=>[]) as any;
     const existing = (all || []).find((x:any)=>String(x.name)===uname);
     if (existing) { await api.write('/ppp/secret/remove', [`=.id=${existing['.id']}`]); return { ok: true, action: 'removed', mode: 'API' }; }
     return { ok: true, action: 'not_found', mode: 'API' };
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 export async function mikrotikEnsureWalledGarden(r: RouterRow, opts: { profileName?: string; rateLimit?: string } = {}) {
@@ -498,16 +484,15 @@ export async function mikrotikEnsureWalledGarden(r: RouterRow, opts: { profileNa
     await restSend(o, 'PUT', `/ppp/profile`, body).catch(async (e)=>{ if (o.scheme==='https') return restSendHttps(o,'PUT',`/ppp/profile`,body); throw e; });
     return { ok: true, action: 'created', profile: profileName, mode: 'REST' };
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     const all: any[] = await api.write('/ppp/profile/print').catch(()=>[]) as any;
     const existing = (all || []).find((x:any)=>String(x.name)===profileName);
     if (existing) await api.write('/ppp/profile/set', [`=.id=${existing['.id']}`, `=rate-limit=${rate}`, `=comment=${comment}`]);
     else await api.write('/ppp/profile/add', [`=name=${profileName}`, `=rate-limit=${rate}`, `=comment=${comment}`]);
     return { ok: true, action: existing ? 'updated' : 'created', profile: profileName, mode: 'API' };
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 /** PPP profile used for direct-router (ROUTER mode) parental filtering.
@@ -535,17 +520,16 @@ export async function mikrotikEnsureParentalProfile(r: RouterRow, opts: { profil
     await restSend(o, 'PUT', `/ppp/profile`, body).catch(async (e) => { if (o.scheme === 'https') return restSendHttps(o, 'PUT', `/ppp/profile`, body); throw e; });
     return { ok: true, action: 'created', profile: profileName, mode: 'REST' };
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     const all: any[] = await api.write('/ppp/profile/print').catch(() => []) as any;
     const existing = (all || []).find((x: any) => String(x.name) === profileName);
     const extra = rate ? [`=rate-limit=${rate}`] : [];
     if (existing) await api.write('/ppp/profile/set', [`=.id=${existing['.id']}`, `=comment=${comment}`, ...extra]);
     else await api.write('/ppp/profile/add', [`=name=${profileName}`, `=comment=${comment}`, ...extra]);
     return { ok: true, action: existing ? 'updated' : 'created', profile: profileName, mode: 'API' };
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: { addressList?: string; portalUrl?: string; portalHost?: string; portalPort?: number; dnsAllow?: string[] } = {}) {
@@ -601,10 +585,9 @@ export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: 
   };
 
   const ensureApi = async () => {
-    const o = rosOpts(r, 'API') as any;
-    const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+    const api = await acquireMikrotikApi(r, 'API');
+    let __ok = true;
     try {
-      await api.connect();
       const safe = async (cmd:string, params:string[]=[]) => { try { return await api.write(cmd, params); } catch(e:any){ if(String(e?.message||'').includes('!empty')||e?.errno==='UNKNOWNREPLY') return []; throw e; } };
       // dns allow
       try {
@@ -632,7 +615,7 @@ export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: 
         if (!ex) await api.write('/ip/firewall/filter/add', [`=chain=forward`,`=src-address-list=${list}`,`=action=drop`,`=comment=${commentTag}:drop-other`]).catch(()=>{});
         results.steps.dropOther = { ok:true };
       } catch(e:any){ results.steps.dropOther={ok:false,error:e.message}; }
-    } finally { try { api.close(); } catch {} }
+    } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
   };
 
   if (mode === 'REST') {
@@ -689,10 +672,9 @@ export async function mikrotikProvisionWireGuard(r: RouterRow, cfg: { ifName: st
     return { ok: true, mode: 'REST', interface: ifName, router_public_key: pub };
   }
 
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     const safe = async (cmd: string, params: string[] = []) => { try { return await api.write(cmd, params); } catch (e:any) { if (String(e?.message||'').includes('!empty') || e?.errno==='UNKNOWNREPLY') return []; throw e; } };
     const ifaces: any[] = await safe('/interface/wireguard/print') as any;
     let iface = (ifaces||[]).find((x:any)=>String(x.name)===ifName);
@@ -722,7 +704,7 @@ export async function mikrotikProvisionWireGuard(r: RouterRow, cfg: { ifName: st
     const ifaces3: any[] = await safe('/interface/wireguard/print') as any;
     const iface3 = (ifaces3||[]).find((x:any)=>String(x.name)===ifName);
     return { ok: true, mode: 'API', interface: ifName, router_public_key: iface3 ? (iface3['public-key'] || null) : null };
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 function parseUptime(s: string): number {
@@ -765,10 +747,9 @@ export async function mikrotikDisconnectPppUser(r: RouterRow, username: string) 
     }
     return { ok: true, mode: 'REST', removed };
   }
-  const o = rosOpts(r, 'API') as any;
-  const api = new RouterOSAPI({ host: o.host, user: o.user, password: o.password, port: o.port, tls: o.tls, timeout: o.timeout });
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
   try {
-    await api.connect();
     const all: any[] = await api.write('/ppp/active/print').catch(()=>[]) as any;
     const matches = (all || []).filter((x:any)=>String(x.name)===uname);
     let removed = 0;
@@ -776,5 +757,5 @@ export async function mikrotikDisconnectPppUser(r: RouterRow, username: string) 
       try { await api.write('/ppp/active/remove', [`=.id=${m['.id']}`]); removed++; } catch {}
     }
     return { ok: true, mode: 'API', removed };
-  } finally { try { api.close(); } catch {} }
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }

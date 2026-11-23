@@ -19,7 +19,8 @@ function requireAdmin(req: any, res: any) {
 }
 
 // Schema (categories, fields, types, defaults, labels) — drives the UI
-router.get('/schema', asyncHandler(async (_req, res) => {
+router.get('/schema', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
   res.json({
     ok: true,
     categories: SETTINGS_CATEGORIES,
@@ -32,7 +33,8 @@ router.get('/schema', asyncHandler(async (_req, res) => {
 }));
 
 // All settings grouped by category, secrets masked
-router.get('/', asyncHandler(async (_req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
   const all = await getAllSettings();
   const masked = maskedView(all);
   const grouped: Record<string, any> = {};
@@ -47,6 +49,10 @@ router.get('/', asyncHandler(async (_req, res) => {
 
 router.get('/:category', asyncHandler(async (req, res) => {
   const cat = String(req.params.category || '').toLowerCase();
+  // General settings contain display/billing metadata (company name, currency,
+  // timezone) needed by every dashboard. The schema, aggregate and every other
+  // category — including secret-bearing ones — remain SUPER_ADMIN-only.
+  if (cat !== 'general' && !requireAdmin(req, res)) return;
   if (!SETTINGS_CATEGORIES[cat]) throw new ValidationError(`Unknown category: ${cat}`);
   const all = maskedView(await getAllSettings());
   const out: Record<string, any> = {};
@@ -118,6 +124,7 @@ router.post('/test-smtp', asyncHandler(async (req, res) => {
 
 // Who changed what lately (settings audit trail)
 router.get('/audit/recent', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
   const limit = Math.min(100, Number((req.query as any)?.limit || 25));
   const r = await pool.query(
     `SELECT * FROM audit_logs WHERE entity_type='settings' ORDER BY created_at DESC LIMIT $1`, [limit]

@@ -3,11 +3,10 @@ import { pool } from '../db';
 import { asyncHandler, networkGuard, hasNetworkWrite } from './helpers';
 import { allocateTunnelIp, buildHubWgConfig, buildRouterOsScript, generatePresharedKey, generateWgKeypair, readHubRuntimeStatus, writeHubConfigFile } from '../integrations/wireguard';
 import { mikrotikProvisionWireGuard } from '../integrations/mikrotik';
-import * as path from 'path';
+import { WG_CONFIG_DIR } from '../config/runtime';
 
 const router: Router = Router();
 router.use(networkGuard);
-const WG_CONFIG_DIR = process.env.WG_CONFIG_DIR || path.resolve(__dirname, '../../../../docker/wg-hub/config');
 
 // WireGuard private/preshared keys are live tunnel credentials. The list/detail
 // endpoints are reachable by every network *read* role (BILLING_OPERATOR,
@@ -93,6 +92,11 @@ router.post('/hub/init', asyncHandler(async (req, res) => {
   }
   try {
     const peers = (await pool.query('SELECT * FROM wg_peers')).rows;
+    // Never generate an interface-only wg0.conf from an empty DB: a fresh or
+    // restored database must not erase live peers from a shared hub config.
+    if (!peers.length) {
+      return res.json({ ok: true, hub: sanitizeHub(hub), config_file: null, note: 'Hub keys ready; config write skipped because no peers exist. Ensure wg-hub container/service applies this config and UDP port is reachable.' });
+    }
     const file = await writeHubConfigFile(WG_CONFIG_DIR, hub, peers);
     return res.json({ ok: true, hub: sanitizeHub(hub), config_file: file, note: 'Hub keys/config ready. Ensure wg-hub container/service applies this config and UDP port is reachable.' });
   } catch (e: any) {

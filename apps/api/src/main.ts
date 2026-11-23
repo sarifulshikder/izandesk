@@ -11,7 +11,7 @@ import { setKernel } from './kernel/kernel-instance';
 import { initDb, pool } from './db';
 import { getCached, getSetting, validatePasswordPolicy, invalidateCache } from './integrations/settings';
 import { auditLog } from './integrations/audit';
-import { LoginRequest, LoginResponse, UserRole, UserSession } from '@izandesk/shared-types';
+import { LoginRequest, LoginResponse, UserSession } from '@izandesk/shared-types';
 import subscribersRouter from './routes/subscribers';
 import topologyRouter from './routes/topology';
 import inventoryRouter from './routes/inventory';
@@ -34,6 +34,9 @@ import procurementRouter from './routes/procurement';
 import hotspotRouter from './routes/hotspot';
 import reportsRouter from './routes/reports';
 import auditRouter, { runAuditRetention } from './routes/audit';
+import kycRouter from './routes/kyc';
+import complianceRouter from './routes/compliance';
+import { runKycMaintenance } from './integrations/kyc';
 import leadsRouter from './routes/leads';
 import installationOrdersRouter from './routes/installation-orders';
 import subscriberEquipmentRouter from './routes/subscriber-equipment';
@@ -42,14 +45,66 @@ import settingsRouter from './routes/settings';
 import aiRouter from './routes/ai';
 import { createMcpRouter } from './routes/mcp';
 import { createMcpAuth } from './integrations/mcp-auth';
-import { assertProductionSecurity, ipAllowed } from './security/guards';
+import { assertProductionSecurity, enabled as envFlag, ipAllowed } from './security/guards';
 import { mfaEnabled, mfaRequiredFor } from './security/mfa';
 import { createRateLimiter } from './security/rate-limit';
 import { createSession, newSessionId, revokeAllSessions, sessionActive, touchSession } from './security/sessions';
+import { verifyPurposeToken, verifyStaffToken } from './security/staff-tokens';
+import { hasNetworkRead } from './routes/helpers';
 import { createAuthSecurityRouter } from './routes/auth-security';
 import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
+import { startNetworkCollector } from './integrations/network-collector';
+import { writeHubConfigFile } from './integrations/wireguard';
+import { LITE_MODE, WG_CONFIG_DIR } from './config/runtime';
+import { probeWithDeadline } from './health';
+
+/**
+ * Readiness probe that returns its client to the pool. On timeout the client is
+ * destroyed instead of left checked out, so repeated failed probes cannot
+ * starve the pool.
+ */
+async function probeDbReady(): Promise<boolean> {
+  let client: any = null;
+  try {
+    client = await pool.connect();
+    const ok = await probeWithDeadline(async () => { await client.query('SELECT 1'); return true; }, 2000);
+    if (!ok) {
+      const stale = client; client = null;
+      try { stale.release(new Error('readiness probe timed out')); } catch { /* already released */ }
+    }
+    return ok;
+  } catch {
+    return false;
+  } finally {
+    if (client) {
+      const held = client; client = null;
+      try { held.release(); } catch { /* already released */ }
+    }
+  }
+}
+
+/**
+ * The WireGuard hub file is generated state: the DB is authoritative. A wiped
+ * config dir, a restored backup or a disposable stack pointing at the shared
+ * path must not leave live peers out of wg0.conf after an API restart.
+ */
+async function reconcileWireGuardHub() {
+  try {
+    const hub = (await pool.query('SELECT * FROM wg_hub_config WHERE id=1')).rows[0];
+    if (!hub) return;
+    const peers = (await pool.query('SELECT * FROM wg_peers')).rows;
+    if (!peers.length) {
+      console.warn('[WireGuard] hub config reconciliation skipped: no peers in DB');
+      return;
+    }
+    const file = await writeHubConfigFile(WG_CONFIG_DIR, hub, peers);
+    console.log(`[WireGuard] hub config reconciled from DB: ${peers.length} peer(s) -> ${file}`);
+  } catch (e: any) {
+    console.warn('[WireGuard] hub config reconciliation skipped:', e?.message || e);
+  }
+}
 
 const PORT = Number(process.env.API_PORT || 4000);
 // Fail loudly before any route is mounted when the deployment is insecure.
@@ -63,7 +118,7 @@ interface AuthUser extends UserSession { password: string; password_hash?: strin
 
 // Demo accounts have well-known passwords. Disable them explicitly in any
 // non-demo deployment; they are only kept for the public demo environment.
-const DEMO_ACCOUNTS_DISABLED = String(process.env.DISABLE_DEMO_ACCOUNTS || '').toLowerCase() === 'true';
+const DEMO_ACCOUNTS_DISABLED = envFlag(process.env.DISABLE_DEMO_ACCOUNTS);
 
 const users: AuthUser[] = DEMO_ACCOUNTS_DISABLED ? [] : [
   { id: 'usr-admin-01', name: 'Izan Rahman (CEO)', email: 'admin@izandesk.com', password: 'admin123', role: 'SUPER_ADMIN', tenantId: 'tnt-primary-01', permissions: ['ALL'], avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80' },
@@ -74,6 +129,45 @@ const users: AuthUser[] = DEMO_ACCOUNTS_DISABLED ? [] : [
 ];
 if (!DEMO_ACCOUNTS_DISABLED && process.env.NODE_ENV === 'production') {
   console.warn('[Auth] WARNING: demo accounts with well-known passwords are ENABLED in production. Set DISABLE_DEMO_ACCOUNTS=true for real deployments.');
+}
+
+/**
+ * With demo accounts disabled there are no built-in users, so an operator must
+ * supply one bootstrap SUPER_ADMIN. Prefer BOOTSTRAP_ADMIN_PASSWORD_HASH (a
+ * bcrypt hash) so no plaintext password sits in the container env / router
+ * config. BOOTSTRAP_ADMIN_PASSWORD is accepted for convenience and is hashed
+ * in memory at boot. A password changed later via Settings → Security is
+ * persisted in `security.password_overrides` and takes precedence on restart.
+ */
+async function addBootstrapAdmin(): Promise<void> {
+  if (!DEMO_ACCOUNTS_DISABLED) return;
+  const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
+  const hash = String(process.env.BOOTSTRAP_ADMIN_PASSWORD_HASH || '').trim();
+  const plaintext = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
+  if (!hash && !plaintext) {
+    console.warn('[Auth] demo accounts disabled and no BOOTSTRAP_ADMIN_* account configured: no user can sign in.');
+    return;
+  }
+  if (!email) {
+    throw new Error('BOOTSTRAP_ADMIN_EMAIL is required when a bootstrap admin password/hash is provided');
+  }
+  if (users.some((u) => u.email.toLowerCase() === email)) return;
+  let passwordHash = hash;
+  if (!passwordHash) passwordHash = await bcrypt.hash(plaintext, 12);
+  if (!/^\$2[aby]\$\d{2}\$/.test(passwordHash)) {
+    throw new Error('BOOTSTRAP_ADMIN_PASSWORD_HASH must be a bcrypt hash ($2a$/$2b$/$2y$)');
+  }
+  users.push({
+    id: 'usr-bootstrap-admin',
+    name: String(process.env.BOOTSTRAP_ADMIN_NAME || 'Administrator').trim() || 'Administrator',
+    email,
+    password: '',
+    password_hash: passwordHash,
+    role: 'SUPER_ADMIN',
+    tenantId: 'tnt-primary-01',
+    permissions: ['ALL'],
+  });
+  console.log(`[Auth] bootstrap SUPER_ADMIN configured: ${email}`);
 }
 
 function toSession(u: AuthUser): UserSession { const { password, password_hash, ...rest } = u as any; return rest; }
@@ -89,20 +183,24 @@ async function checkPassword(user: AuthUser, pw: string): Promise<boolean> {
 // in-memory login lockout (per identifier + source IP), limits come from settings
 interface LoginAttempt { fails: number; lockedUntil: number }
 const loginAttempts = new Map<string, LoginAttempt>();
-const loginLimiter = createRateLimiter('login', 30, 60_000);
+// The E2E suite reuses one source IP for many UI logins. The insecure demo
+// profile already opts into known credentials, so give its limiter headroom;
+// real deployments keep the strict 30/minute default.
+const loginRateLimit = envFlag(process.env.SECURITY_ALLOW_INSECURE_DEMO) ? 300 : 30;
+const loginLimiter = createRateLimiter('login', loginRateLimit, 60_000);
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
   (async () => {
     const header = req.headers.authorization;
     if (!header?.startsWith('Bearer ')) { res.status(401).json({ message: 'Missing bearer token' }); return; }
-    let payload: { sub: string; role: UserRole; jti?: string };
+    let payload: { sub: string; role: string; jti?: string };
     try {
-      payload = jwt.verify(header.slice(7), JWT_SECRET) as { sub: string; role: UserRole; jti?: string };
+      payload = verifyStaffToken(header.slice(7), JWT_SECRET);
     } catch {
       res.status(401).json({ message: 'Invalid or expired token' }); return;
     }
     const user = users.find((u) => u.id === payload.sub);
-    if (!user) { res.status(401).json({ message: 'Invalid session' }); return; }
+    if (!user || user.role !== payload.role) { res.status(401).json({ message: 'Invalid session' }); return; }
     // Revocable sessions: a jti is present on interactive logins. Tokens without
     // one (service/MCP executor tokens) keep the legacy JWT-only behaviour.
     if (payload.jti && !await sessionActive(payload.jti)) {
@@ -130,19 +228,38 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
 }
 
 async function bootstrap() {
+  await addBootstrapAdmin();
   const app = express();
   const allowedOrigins = WEB_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean);
+  const lanOriginAllowed = (origin: string): boolean => {
+    if (!ALLOW_LAN_ORIGINS) return false;
+    try {
+      const host = new URL(origin).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+      if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+      const parts = host.split('.').map(Number);
+      if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+      const [a, b] = parts;
+      return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+    } catch {
+      return false;
+    }
+  };
   app.use(cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) return cb(null, true);
-      if (ALLOW_LAN_ORIGINS && /^https?:\/\/(localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(origin)) return cb(null, true);
+      if (lanOriginAllowed(origin)) return cb(null, true);
       if (allowedOrigins.length === 0) return cb(null, true);
       return cb(null, false);
     },
     credentials: true,
   }));
-  app.use(express.json({ limit: '10mb' }));
+  // Keep the exact bytes for webhook HMAC verification. Re-serializing parsed
+  // JSON changes whitespace/key order and rejects legitimate provider signatures.
+  app.use(express.json({
+    limit: '10mb',
+    verify: (req, _res, buf) => { (req as any).rawBody = Buffer.from(buf); },
+  }));
 
   let dbReady = false;
   try {
@@ -166,8 +283,13 @@ async function bootstrap() {
   await kernel.init();
   setKernel(kernel);
 
-  app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'izandesk-api', phase: 7, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length });
+  app.get('/api/health', async (_req, res) => {
+    // Probe the database on every request. A cached startup flag alone reports
+    // 200 after the DB has gone away, which would keep a broken pod in rotation.
+    const liveDbReady = dbReady && await probeDbReady();
+    const kernelReady = kernel.isReady();
+    const ok = liveDbReady && kernelReady;
+    res.status(ok ? 200 : 503).json({ ok, service: 'izandesk-api', phase: 7, dbReady: liveDbReady, kernelReady, pluginCount: kernel.listPlugins().length, lite: LITE_MODE });
   });
   app.use('/api/branding', brandingRouter);
   app.use('/api/portal', portalRouter);
@@ -181,7 +303,7 @@ async function bootstrap() {
       const identifier = String(body.identifier || body.email || body.username || '').trim().toLowerCase();
       const pw = String(body.password || '');
       const sourceIp = String(req.ip || req.headers['x-forwarded-for'] || '');
-      const throttle = loginLimiter.check(sourceIp || identifier || 'unknown', 30);
+      const throttle = loginLimiter.check(sourceIp || identifier || 'unknown', loginRateLimit);
       if (!throttle.allowed) {
         res.setHeader('Retry-After', String(throttle.retryAfterSec));
         return res.status(429).json({ message: 'Too many login attempts. Try again shortly.' });
@@ -223,18 +345,27 @@ async function bootstrap() {
         const challenge = jwt.sign({ sub: user.id, purpose: 'mfa' }, JWT_SECRET, { expiresIn: '5m' });
         return res.json({ mfa_required: true, mfa_token: challenge, methods: ['totp', 'recovery_code'] });
       }
-      // Policy requires TOTP but the account has not enrolled yet: let them in
-      // so they can complete enrollment in Settings → Security, and record it.
+      // Policy requires TOTP but the account has not enrolled yet: issue only a
+      // narrow enrollment challenge. No staff session is created until TOTP is
+      // configured and verified, otherwise the policy is trivially bypassable.
       if (required) {
         await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.mfa_enrollment_required', entity_type: 'auth' });
+        const enrollmentChallenge = jwt.sign({ sub: user.id, purpose: 'mfa_enrollment' }, JWT_SECRET, { expiresIn: '15m' });
+        return res.json({
+          mfa_required: true,
+          mfa_enrollment_required: true,
+          mfa_token: enrollmentChallenge,
+          methods: ['totp'],
+        });
       }
       const sessionMinutes = Number(await getCached('security.session_timeout_minutes', 720)) || 720;
       const jti = newSessionId();
       await createSession({ id: jti, userId: user.id, minutes: sessionMinutes, ip: req.ip, userAgent: String(req.headers['user-agent'] || '').slice(0, 300) });
       await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.login', entity_type: 'auth', ip_address: req.ip });
-      res.json({ token: issueToken(session, sessionMinutes, jti), user: session, ...(required ? { mfa_enrollment_required: true } : {}) } as LoginResponse);
+      res.json({ token: issueToken(session, sessionMinutes, jti), user: session } as LoginResponse);
     } catch (e: any) {
-      res.status(500).json({ message: e.message || 'Login failed' });
+      console.error('[Auth] login failed:', e);
+      res.status(500).json({ message: 'Login failed' });
     }
   });
 
@@ -263,7 +394,8 @@ async function bootstrap() {
       await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.change_password', entity_type: 'auth', entity_id: user.id, details: { via: 'settings-security', other_sessions_revoked: revoked }, ip_address: req.ip });
       res.json({ ok: true, message: revoked ? `Password updated. ${revoked} other session(s) were signed out.` : 'Password updated and stored hashed (survives restarts).' });
     } catch (e: any) {
-      res.status(500).json({ message: e.message || 'Failed to change password' });
+      console.error('[Auth] change-password failed:', e);
+      res.status(500).json({ message: 'Failed to change password' });
     }
   });
 
@@ -272,6 +404,20 @@ async function bootstrap() {
   app.use('/api/auth', (req, res, next) => {
     // MFA verification uses the short-lived challenge token, not a staff JWT.
     if (req.path === '/mfa/verify') return next();
+    // Enrollment challenge tokens are accepted only for the three enrollment
+    // endpoints. They cannot reach any other API surface.
+    if (['/mfa/enroll', '/mfa/confirm', '/mfa/status'].includes(req.path)) {
+      const header = req.headers.authorization;
+      if (header?.startsWith('Bearer ')) {
+        const sub = verifyPurposeToken(header.slice(7), JWT_SECRET, 'mfa_enrollment');
+        const user = sub ? users.find((u) => u.id === sub) : undefined;
+        if (user) {
+          (req as any).user = toSession(user);
+          (req as any).authPurpose = 'mfa_enrollment';
+          return next();
+        }
+      }
+    }
     return authMiddleware(req, res, next);
   }, createAuthSecurityRouter({
     findUser: (id) => users.find((u) => u.id === id),
@@ -353,6 +499,9 @@ async function bootstrap() {
   // KYC files are served through the ownership-checked route in subscribers.ts
   // (GET /api/subscribers/:id/kyc/:docId/file), never as public static files.
   app.use('/api/subscribers', authMiddleware, subscribersRouter);
+  // KYC review queue, decisions, legal holds and BTRC/PDPA export pack.
+  app.use('/api/kyc', authMiddleware, kycRouter);
+  app.use('/api/compliance', authMiddleware, complianceRouter);
   app.use('/api/topology', authMiddleware, topologyRouter);
   app.use('/api/inventory', authMiddleware, inventoryRouter);
   app.use('/api/gis', authMiddleware, gisRouter);
@@ -423,28 +572,49 @@ async function bootstrap() {
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status = err?.status || (err?.name === 'MulterError' ? 400 : 500);
     if (status >= 500) console.error(err);
-    res.status(status).json({ message: err?.message || 'Internal server error' });
+    res.status(status).json({ message: status >= 500 ? 'Internal server error' : (err?.message || 'Request failed') });
   });
 
   const server = http.createServer(app);
 
-  // WebSocket live sessions stream (spec parity with SSE)
+  // WebSocket live sessions stream (spec parity with SSE). It exposes the same
+  // subscriber/network data as /api/network/sessions, so it must enforce the
+  // same staff-token, session, admin-IP, maintenance and RBAC checks.
   const wss = new WebSocketServer({ noServer: true });
-  server.on('upgrade', (request, socket, head) => {
+  async function authorizeSessionsSocket(token: string, request: http.IncomingMessage): Promise<UserSession | null> {
+    let payload: { sub: string; role: string; jti?: string };
     try {
-      const reqUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
-      if (reqUrl.pathname !== '/api/network/sessions/ws' && reqUrl.pathname !== '/ws/sessions') {
-        socket.destroy(); return;
+      payload = verifyStaffToken(token, JWT_SECRET);
+    } catch { return null; }
+    const user = users.find((u) => u.id === payload.sub);
+    if (!user || user.role !== payload.role) return null;
+    if (payload.jti && !await sessionActive(payload.jti)) return null;
+    const ip = request.socket.remoteAddress || String(request.headers['x-forwarded-for'] || '');
+    const adminAllowlist = await getCached('security.admin_ip_allowlist', []);
+    if (user.role === 'SUPER_ADMIN' && !ipAllowed(ip, adminAllowlist)) return null;
+    if (await getCached('security.maintenance_mode', false) && user.role !== 'SUPER_ADMIN') return null;
+    const session = toSession(user);
+    if (!hasNetworkRead({ user: session })) return null;
+    return session;
+  }
+  server.on('upgrade', (request, socket, head) => {
+    void (async () => {
+      try {
+        const reqUrl = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+        if (reqUrl.pathname !== '/api/network/sessions/ws' && reqUrl.pathname !== '/ws/sessions') {
+          socket.destroy(); return;
+        }
+        const token = reqUrl.searchParams.get('token') || (String(request.headers.authorization || '').startsWith('Bearer ') ? String(request.headers.authorization).slice(7) : '');
+        if (!token) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
+        const user = await authorizeSessionsSocket(token, request);
+        if (!user) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit('connection', ws, request, user);
+        });
+      } catch {
+        socket.destroy();
       }
-      const token = reqUrl.searchParams.get('token') || (String(request.headers.authorization || '').startsWith('Bearer ') ? String(request.headers.authorization).slice(7) : '');
-      if (!token) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
-      try { jwt.verify(token, JWT_SECRET); } catch { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
-    } catch {
-      socket.destroy();
-    }
+    })();
   });
 
   async function wsSessionPayload() {
@@ -454,7 +624,7 @@ async function bootstrap() {
     return { t: Date.now(), sessions: rows, summary: { online: rows.filter((r:any)=>r.status==='ONLINE').length, aggRxBps: rows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: rows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } };
   }
 
-  wss.on('connection', async (ws) => {
+  wss.on('connection', async (ws: any, _request: any, _user: UserSession) => {
     try { ws.send(JSON.stringify(await wsSessionPayload())); } catch {}
     const iv = setInterval(async () => {
       if (ws.readyState !== 1) return;
@@ -471,13 +641,41 @@ async function bootstrap() {
     console.log(`[Bootstrap] DB ready: ${dbReady}, Plugins loaded: ${kernel.listPlugins().length}`);
   });
 
-  if (dbReady) {
+  let schedulersStarted = false;
+  const startSchedulers = () => {
+    if (schedulersStarted || !dbReady) return;
+    schedulersStarted = true;
     startBillingScheduler();
     startBackupScheduler();
     startReportScheduler();
-    // Compliance retention sweep once per day (setting: security.audit_retention_days).
+    startNetworkCollector();
+    // Compliance retention sweep once per day (settings: audit_retention_days,
+    // kyc.expiry_warning_days, kyc.document_retention_days). Legal holds win.
     void runAuditRetention();
-    setInterval(() => { void runAuditRetention(); }, 24 * 60 * 60 * 1000).unref();
+    void runKycMaintenance();
+    setInterval(() => {
+      void runAuditRetention();
+      void runKycMaintenance();
+    }, 24 * 60 * 60 * 1000).unref();
+  };
+
+  if (dbReady) {
+    await reconcileWireGuardHub();
+    startSchedulers();
+  } else {
+    // A DB outage at boot must not permanently strand readiness and disable
+    // every scheduler. Retry schema initialization until the DB returns.
+    const retry = setInterval(async () => {
+      try {
+        await initDb();
+        dbReady = true;
+        console.log('[DB] Schema ready after delayed recovery');
+        await reconcileWireGuardHub();
+        startSchedulers();
+        clearInterval(retry);
+      } catch { /* keep retrying until the database is reachable */ }
+    }, 15000);
+    retry.unref();
   }
 }
 

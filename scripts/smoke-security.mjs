@@ -4,6 +4,9 @@
  */
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -29,6 +32,8 @@ Object.assign(process.env, {
   DISABLE_DEMO_ACCOUNTS: 'true',
   WEB_ORIGIN: 'https://izandesk.example.com',
   ALLOW_LAN_ORIGINS: 'false',
+  KYC_ENCRYPTION_KEYS: `v1:${Buffer.alloc(32, 7).toString('base64')}`,
+  KYC_ENCRYPTION_ACTIVE_KEY_ID: 'v1',
 });
 assert.equal(guards.assertProductionSecurity().warnings.length, 0);
 assert.equal(guards.ipAllowed('10.0.0.5', ['10.0.0.0/8']), true);
@@ -69,4 +74,69 @@ assert.equal(rl.check('ip-1').allowed, true);
 assert.equal(rl.check('ip-1').allowed, false);
 assert.equal(rl.check('ip-2').allowed, true);
 
-console.log('security smoke: guards, TOTP, secret encryption, rate limiter OK');
+// 5. KYC/compliance upload guards: declared MIME type is not trusted, and
+//    identity numbers are masked before they reach the database.
+const files = require('../apps/api/dist/security/file-validation.js');
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyc-smoke-'));
+try {
+  const pdf = path.join(tmpDir, 'real.pdf');
+  fs.writeFileSync(pdf, '%PDF-1.7\n% IzanDesk smoke\n%%EOF');
+  files.assertAllowedKycFile(pdf, 'application/pdf');
+  assert.match(files.sha256File(pdf), /^[a-f0-9]{64}$/);
+  files.assertAllowedKycFileBuffer(fs.readFileSync(pdf), 'application/pdf');
+  assert.equal(files.sha256Buffer(fs.readFileSync(pdf)), files.sha256File(pdf));
+
+  const fake = path.join(tmpDir, 'fake.pdf');
+  fs.writeFileSync(fake, 'not actually a pdf');
+  assert.throws(() => files.assertAllowedKycFile(fake, 'application/pdf'), /File content does not match/);
+  assert.throws(() => files.assertAllowedKycFile(pdf, 'text/html'), /Only PNG/);
+
+  const csv = path.join(tmpDir, 'report.csv');
+  fs.writeFileSync(csv, 'period,count\n2026-11,3\n');
+  files.assertAllowedSubmissionFile(csv, 'text/csv');
+  assert.throws(() => files.assertAllowedSubmissionFile(fake, 'application/pdf'), /not a valid PDF/);
+
+  assert.equal(files.maskIdentityNumber('1234567890'), '******7890');
+  assert.equal(files.maskIdentityNumber('AB-1234567'), 'AB-***4567');
+  assert.equal(files.maskIdentityNumber(''), null);
+} finally {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+}
+
+// 6. KYC file encryption: ciphertext on disk, AES-GCM tamper detection, and
+//    key rotation without losing access to the plaintext.
+const encryption = require('../apps/api/dist/security/file-encryption.js');
+const encDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyc-enc-smoke-'));
+try {
+  const content = '%PDF-1.7\n% KYC encryption smoke\n%%EOF';
+
+  const enc = encryption.encryptKycBuffer(Buffer.from(content), encDir);
+  assert.equal(enc.algorithm, 'aes-256-gcm');
+  assert.equal(enc.keyId, 'v1');
+  assert.notEqual(fs.readFileSync(enc.filePath, 'utf8'), content);
+  assert.equal(encryption.decryptKycFile(enc.filePath, enc).toString(), content);
+  assert.throws(() => encryption.decryptKycFile(enc.filePath, { ...enc, authTag: Buffer.alloc(16).toString('base64') }));
+
+  const correctKeys = process.env.KYC_ENCRYPTION_KEYS;
+  process.env.KYC_ENCRYPTION_KEYS = `v1:${Buffer.alloc(32, 11).toString('base64')}`;
+  assert.throws(() => encryption.decryptKycFile(enc.filePath, enc), /could not be decrypted|Unsupported state|bad decrypt/i);
+  process.env.KYC_ENCRYPTION_KEYS = correctKeys;
+
+  process.env.KYC_ENCRYPTION_KEYS = [
+    `v1:${Buffer.alloc(32, 7).toString('base64')}`,
+    `v2:${Buffer.alloc(32, 9).toString('base64')}`,
+  ].join(',');
+  process.env.KYC_ENCRYPTION_ACTIVE_KEY_ID = 'v2';
+  const rotated = encryption.reencryptKycFile(enc.filePath, enc);
+  assert.ok(rotated, 'rotation should produce a new encrypted file');
+  assert.equal(rotated.previousPath, enc.filePath);
+  assert.equal(rotated.keyId, 'v2');
+  encryption.secureUnlinkKycFile(rotated.previousPath);
+  assert.equal(fs.existsSync(enc.filePath), false, 'superseded ciphertext must be removed');
+  assert.equal(encryption.decryptKycFile(rotated.filePath, rotated).toString(), content);
+  assert.equal(encryption.reencryptKycFile(rotated.filePath, rotated), null);
+} finally {
+  fs.rmSync(encDir, { recursive: true, force: true });
+}
+
+console.log('security smoke: guards, TOTP, secrets, rate limiter, KYC validation + file encryption OK');

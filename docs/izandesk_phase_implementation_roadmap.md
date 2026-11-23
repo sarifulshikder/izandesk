@@ -1,7 +1,7 @@
 # IzanDesk ERP — Master Implementation Roadmap & Verification Plan
 
 **Development Methodology:** Incremental, Test-Driven, Browser-Verified after every Phase  
-**Architecture:** Monorepo (pnpm workspaces), Next.js 15, NestJS, PostgreSQL 16, Redis 7, Hot-Reload Plugin Kernel  
+**Architecture (current implementation):** Monorepo (pnpm workspaces), Next.js 16 / React 19 (App Router), Express 5 + TypeScript API with `ws`, PostgreSQL 16/PostGIS, Redis 7, in-process DB-locked schedulers, Hot-Reload Plugin Kernel. Earlier research described NestJS/Socket.IO/BullMQ; those are not used by the running code.
 **Dev Server Web Host:** Localhost (`http://localhost:3000`)  
 
 ---
@@ -12,28 +12,30 @@
 /home/server/izandesk/
 ├── docker/
 │   ├── docker-compose.yml           # Unified multi-container orchestration
-│   ├── Dockerfile.web               # Next.js 15 frontend container
-│   ├── Dockerfile.api               # NestJS backend API container
+│   ├── web/Dockerfile               # Next.js 16 frontend container
+│   ├── api/Dockerfile               # Express 5 backend API container
 │   ├── radius/                      # FreeRADIUS 3 config, dictionary, and SQL maps
 │   └── wg-hub/                      # WireGuard hub container/config (hub-and-spoke overlay)
 ├── plugins/                         # Dynamic Hot-Reload Plugin Workspace
 │   ├── payment-bkash/               # bKash Tokenized Checkout Plugin
 │   ├── payment-stripe/              # Stripe Elements & Cards Plugin
 │   ├── sms-greenweb/                # Bangladesh Local SMS Gateway Plugin
-│   ├── sms-twilio/                  # Twilio International SMS Plugin
+│   ├── payment-nagad/               # Nagad merchant checkout
+│   ├── payment-paypal/              # PayPal Smart Buttons
+│   ├── payment-rocket/              # Rocket merchant checkout
 │   └── olt-huawei/                  # Huawei GPON/EPON Driver Plugin
 ├── apps/
-│   ├── web/                         # Next.js 15 App Router Frontend
+│   ├── web/                         # Next.js 16 App Router Frontend
 │   │   ├── src/
 │   │   │   ├── app/                 # Routes (Dashboard, Clients, Billing, Network, Tickets)
 │   │   │   ├── components/          # Shadcn UI, Telemetry Charts, Cmd+K Command Palette
 │   │   │   └── lib/                 # State management, API clients, WebSocket listeners
-│   └── api/                         # NestJS Backend Application
+│   └── api/                         # Express 5 Backend Application
 │       ├── src/
 │       │   ├── kernel/              # Dynamic Hot-Reload Plugin Kernel & Hook Bus
-│       │   ├── modules/             # Core BSS/OSS Modules (Auth, Subscribers, Billing, etc.)
-│       │   ├── workers/             # BullMQ Background Job Workers
-│       │   └── prisma/              # Prisma / Drizzle Schema & Seeders
+│       │   ├── db/                  # Raw SQL bootstrap/migrations (source of truth)
+│       │   ├── routes/              # Core BSS/OSS HTTP modules
+│       │   └── integrations/        # Billing, network, messaging and periodic schedulers
 ├── packages/
 │   ├── shared-types/                # Shared TypeScript DTOs, Enums & Interfaces
 │   └── config/                      # Shared ESLint, Prettier, Tailwind configurations
@@ -82,7 +84,7 @@ flowchart LR
   1. Complete Subscriber CRUD (Home, Corporate CIR, Hotspot) with advanced **wizard** onboarding/edit, PPPoE/connection profiles, validation, lifecycle status, topology and geo-location fields (`/api/subscribers`, `/subscribers`).
   2. KYC Document storage/upload/list (NID, Passport, Contract, etc.) and automatic Client Code Generator on subscriber creation.
   3. Physical topology hierarchy: Area → Zone → Distribution Box (TJ/Splitter/FAT/FDB/Closure) with management APIs and linkage to subscribers (`/api/topology/*`).
-  4. Location & GIS: PostGIS-backed data, Leaflet interactive map with subscriber pins, fiber boxes, fiber routes, add-distribution-box placement, route drawing, trace-to-subscriber flow, and subscriber **map pin picker** with **satellite+label views** (free no-key alternatives) and layer switching, **current-location** capture plus **reverse-geocoded auto-fill** (district, thana/upazila, post office, village, area, ward, road/street, house, address) (`/api/gis/*`, `/gis`, `/subscribers`).
+  4. Location & GIS: PostGIS-backed data, MapLibre GL interactive map (local no-key `gis-basemap.json`) with subscriber pins, fiber boxes, fiber routes, add-distribution-box placement, route drawing, trace-to-subscriber flow, and subscriber **map pin picker** with **satellite+label views** (free no-key alternatives) and layer switching, **current-location** capture plus **reverse-geocoded auto-fill** (district, thana/upazila, post office, village, area, ward, road/street, house, address) (`/api/gis/*`, `/gis`, `/subscribers`).
   5. Hardware Inventory & Serial Number Tracking: warehouses, items (ONT/Router/Fiber/etc.), serials with status/assignment to subscribers and stock summaries (`/api/inventory/*`, `/inventory`).
 - **Browser Verification Milestone**:
   - Add/edit subscribers via wizard with PPPoE profiles, verify validation and auto client-code generation.
@@ -161,12 +163,13 @@ flowchart LR
 ---
 
 ### Phase 6: Customer Self-Care Portal & 1-Click Plug-and-Play Packaging
+- **Status:** Implemented foundation (portal PWA, invoices/payments, speedtest and Wi-Fi tabs, system health/backup UI; advanced TR-069 automation remains provider/config dependent).
 - **Engineering Deliverables**:
   1. Customer Self-Service Portal (PWA):
      - View subscription status, invoice history, and instant online payment.
      - Live bandwidth speedtest.
      - Wi-Fi SSID and password modification via TR-069 GenieACS.
-  2. Complete Docker Compose package: Single command startup (`docker compose up -d`).
+  2. Complete Docker Compose package: single command startup (`docker compose -f docker/docker-compose.yml up -d`).
   3. System health diagnostics and automated database backup engine.
 - **Browser Verification Milestone**:
   - Open customer self-care view on mobile browser, view bill, make payment, and view Wi-Fi settings.

@@ -3,6 +3,7 @@ import './globals.css';
 import { AuthProvider } from '@/lib/auth-context';
 import { AuthGate } from '@/components/auth/auth-gate';
 import { AppShell } from '@/components/layout/app-shell';
+import { ThemeScript } from '@/components/theme-script';
 
 export const metadata: Metadata = {
   title: 'IzanDesk ERP — ISP Billing & Network Automation',
@@ -17,15 +18,8 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <script
-          dangerouslySetInnerHTML={{
-            // Apply the saved theme before paint so light is the flash-free default.
-            __html: `try{var t=localStorage.getItem('izandesk_theme');if(t==='dark'){document.documentElement.classList.add('dark');document.documentElement.classList.remove('light')}else{document.documentElement.classList.add('light');document.documentElement.classList.remove('dark')}}catch(e){}`,
-          }}
-        />
-      </head>
       <body className="min-h-screen bg-background text-foreground antialiased">
+        <ThemeScript />
         <AuthProvider>
           <AuthGate>
             <AppShell>{children}</AppShell>

@@ -17,7 +17,7 @@ const demoAccounts = [
 ];
 
 export function LoginScreen() {
-  const { login, verifyMfa, mfaRequired, loading, error, theme, toggleTheme } = useAuth();
+  const { login, verifyMfa, mfaRequired, mfaEnrollmentRequired, mfaEnrollment, loading, error, theme, toggleTheme } = useAuth();
   const [email, setEmail] = useState('admin@izandesk.com');
   const [password, setPassword] = useState('admin123');
   const [remember, setRemember] = useState(true);
@@ -147,15 +147,23 @@ export function LoginScreen() {
             {mfaRequired ? (
               <form onSubmit={submitMfa} className="space-y-4" data-testid="mfa-challenge">
                 <div className="alert alert-primary">
-                  <ShieldCheck className="w-4 h-4" /> Two-factor verification is required for this account.
+                  <ShieldCheck className="w-4 h-4" /> {mfaEnrollmentRequired ? 'Set up two-factor authentication to continue.' : 'Two-factor verification is required for this account.'}
                 </div>
+                {mfaEnrollment && (
+                  <div className="rounded-xl border border-border bg-muted/40 p-3 text-[11px]">
+                    <div className="font-semibold mb-1.5">1. Add this secret to your authenticator app</div>
+                    <code className="block break-all font-mono text-[12px] tracking-wide select-all">{mfaEnrollment.secret}</code>
+                    <a href={mfaEnrollment.otpauth_uri} className="mt-1.5 inline-block text-primary underline underline-offset-2">Open otpauth:// link</a>
+                    <div className="font-semibold mt-2.5 mb-1">2. Enter the 6-digit code below to confirm</div>
+                  </div>
+                )}
                 <div>
-                  <label className="form-label" htmlFor="mfa-code">Authenticator or recovery code</label>
+                  <label className="form-label" htmlFor="mfa-code">{mfaEnrollmentRequired ? 'Authenticator code' : 'Authenticator or recovery code'}</label>
                   <div className="input-icon">
                     <Lock />
                     <input id="mfa-code" value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" className="form-control tracking-[0.3em] font-mono" placeholder="000000" required autoFocus />
                   </div>
-                  <p className="text-[10.5px] text-muted-foreground mt-1.5">Enter the current 6-digit code, or a saved one-time recovery code.</p>
+                  <p className="text-[10.5px] text-muted-foreground mt-1.5">{mfaEnrollmentRequired ? 'Enter the current code from your authenticator app.' : 'Enter the current 6-digit code, or a saved one-time recovery code.'}</p>
                 </div>
                 {(localError || error) && <div className="alert alert-danger">{localError || error}</div>}
                 <button disabled={submitting || loading} type="submit" className="btn btn-primary w-full !h-[42px]">

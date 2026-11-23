@@ -42,11 +42,19 @@ async function gotoStable(page: Page, url: string) {
   }
 }
 
+// The suite makes dozens of API calls as the same few identities. Cache the
+// bearer tokens so a fast CI worker does not trip the 30-login/minute limiter.
+const tokenCache = new Map<string, string>();
+
 async function loginToken(request: APIRequestContext, creds: { email: string; password: string }) {
+  const key = `${creds.email}\u0000${creds.password}`;
+  const cached = tokenCache.get(key);
+  if (cached) return cached;
   const res = await request.post('/api/auth/login', { data: creds });
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
   expect(body.token).toBeTruthy();
+  tokenCache.set(key, body.token);
   return body.token as string;
 }
 
@@ -723,11 +731,11 @@ test.describe('network & OSS access control', () => {
 
     const billingToken = await loginToken(request, { email: 'billing@izandesk.com', password: 'billing123' });
     const headers = { Authorization: `Bearer ${billingToken}` };
-    expect((await request.get('/api/network/routers', { headers })).status()).toBe(200);
+    expect((await request.get('/api/network/routers?nopoll=1', { headers })).status()).toBe(200);
     expect((await request.post('/api/network/routers', { headers, data: {} })).status()).toBe(403);
     expect((await request.post('/api/radius/coa', { headers, data: { username: 'x', action: 'DISCONNECT' } })).status()).toBe(403);
 
-    const routers = await (await request.get('/api/network/routers', { headers: { Authorization: `Bearer ${adminToken}` } })).json();
+    const routers = await (await request.get('/api/network/routers?nopoll=1', { headers: { Authorization: `Bearer ${adminToken}` } })).json();
     const routerId = (routers.data || [])[0]?.id;
     if (routerId) {
       expect((await request.get(`/api/network/routers/${routerId}/mikrotik/import-preview?type=ppp-secrets`, { headers })).status()).toBe(403);

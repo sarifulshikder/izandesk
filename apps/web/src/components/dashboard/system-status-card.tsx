@@ -28,7 +28,7 @@ export function SystemStatusCard({ health, apiHealth, diag }: { health: any; api
   const rows: { icon: any; label: string; ok: boolean | null | undefined; value: string }[] = [
     { icon: Server, label: 'API server', ok: apiHealth?.ok ?? c.api?.ok, value: `node ${apiHealth ? '' : ''}${diag?.env?.node || ''}`.trim() || (diag?.env ? `node ${diag.env.node}` : 'running') },
     { icon: Database, label: 'PostgreSQL', ok: c.db?.ok, value: apiHealth?.dbReady ? 'connected' : '—' },
-    { icon: Zap, label: 'Redis cache', ok: c.redis?.ok, value: c.redis?.version ? `v${c.redis.version}` : (c.redis?.ok ? 'connected' : 'down') },
+    { icon: Zap, label: 'Redis cache', ok: c.redis ? c.redis.ok : null, value: c.redis?.version ? `v${c.redis.version}` : (c.redis ? (c.redis.ok ? 'connected' : 'down') : 'disabled') },
     { icon: HardDrive, label: 'Disk', ok: diskPct < 95 ? (c.disk?.ok ?? null) : false, value: `${diskPct}%` },
     { icon: MemoryStick, label: 'Heap', ok: heapPct == null ? null : heapPct < 90, value: heapPct != null ? `${heapPct}%` : '-' },
     { icon: Clock3, label: 'Uptime', ok: true, value: humanUptime(Number(diag?.uptime_sec || 0)) },

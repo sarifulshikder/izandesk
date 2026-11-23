@@ -1,0 +1,17 @@
+.git
+.github
+**/node_modules
+**/.next
+**/.next-*
+**/dist
+**/*.tsbuildinfo
+apps/uploads
+backups
+docs
+tests
+playwright-report
+test-results
+*.log
+.env
+.env.*
+docker/.env

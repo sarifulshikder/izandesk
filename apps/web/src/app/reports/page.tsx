@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { apiFetch, getApiBaseUrl } from '@/lib/api';
+import { apiFetch, downloadAuthenticatedFile } from '@/lib/api';
 import { RefreshCw, BarChart3, Download, Users, Wallet, CreditCard, Ticket, Store } from 'lucide-react';
 
 function money(v: any) { const n = Number(v || 0); return `৳${n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`; }
@@ -55,7 +55,10 @@ export default function ReportsPage() {
   useEffect(()=>{ load(); }, [load]);
 
   const exportJson = (name:string, data:any) => { const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download=`${name}.json`; a.click(); URL.revokeObjectURL(url); };
-  const dlCsv = (path:string, name:string) => { const base=getApiBaseUrl(); const a=document.createElement('a'); a.href=`${base}${path}?format=csv`; a.download=name; a.click(); };
+  const dlCsv = async (path:string, name:string) => {
+    try { await downloadAuthenticatedFile(`${path}?format=csv`, name, token); }
+    catch (e:any) { setErr(e.message); }
+  };
   const createSchedule = async () => { if(!token) return; try { await apiFetch('/api/reports/schedules', { method:'POST', body: JSON.stringify(sched) }, token); await load(); } catch(e:any){ setErr(e.message);} };
 
   const ov = overview || {};
@@ -123,7 +126,7 @@ export default function ReportsPage() {
         <h2 className="card-title mb-3">Report Schedules (delivery hook)</h2>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 table-wrap overflow-auto max-h-[220px]"><Table cols={['Name','Report','Format','Cron','Enabled']} rows={schedules.map((s:any)=>[s.name,s.report_key,s.format,s.schedule_cron||'-',s.enabled?'Yes':'No'])} empty="No schedules configured." /></div>
-          <div className="space-y-2 text-sm"><input className="form-control" placeholder="Schedule name" value={sched.name} onChange={e=>setSched({...sched,name:e.target.value})} /><select className="form-select" value={sched.report_key} onChange={e=>setSched({...sched,report_key:e.target.value})}>{['collections','dues-aging','profit-loss','expenses','resellers','payroll'].map(x=><option key={x} value={x}>{x}</option>)}</select><input className="form-control" placeholder="Cron (e.g. 0 23 * * *)" value={sched.schedule_cron} onChange={e=>setSched({...sched,schedule_cron:e.target.value})} /><button onClick={createSchedule} className="btn btn-primary w-full">Save Schedule</button><div className="text-xs text-muted-foreground">Schedules are stored for report generation/delivery; connect a cron/worker and email/messaging channel to auto-deliver outputs.</div></div>
+          <div className="space-y-2 text-sm"><input className="form-control" placeholder="Schedule name" value={sched.name} onChange={e=>setSched({...sched,name:e.target.value})} /><select className="form-select" value={sched.report_key} onChange={e=>setSched({...sched,report_key:e.target.value})}>{['collections','dues-aging','profit-loss','expenses','resellers','payroll','kyc-compliance'].map(x=><option key={x} value={x}>{x}</option>)}</select><input className="form-control" placeholder="Cron (e.g. 0 23 * * *)" value={sched.schedule_cron} onChange={e=>setSched({...sched,schedule_cron:e.target.value})} /><button onClick={createSchedule} className="btn btn-primary w-full">Save Schedule</button><div className="text-xs text-muted-foreground">Schedules are stored for report generation/delivery; connect a cron/worker and email/messaging channel to auto-deliver outputs.</div></div>
         </div>
       </div>
     </div>

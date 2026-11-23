@@ -12,6 +12,14 @@ function getUser(req: any) { return req.user || {}; }
 function isAdminLike(role: string) { return ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(role); }
 function moneyLike(v: any) { return `৳${Number(v || 0).toFixed(2)}`; }
 
+/** Commission and buying-margin are percentages; out-of-range values used to
+ *  produce negative wholesale charges or unlimited parent shares. */
+function validPercent(v: any) {
+  if (v === undefined || v === null || v === '') return true;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 && n <= 100;
+}
+
 /** Never echo credentials or gateway secrets in partner-facing responses. */
 function safeSubscriber(sub: any) {
   const out = { ...sub };
@@ -67,6 +75,9 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!['SUPER_ADMIN','BILLING_OPERATOR'].includes(user.role)) return res.status(403).json({ message: 'Insufficient permissions' });
   const b = req.body || {};
   if (!b.name) return res.status(400).json({ message: 'name is required' });
+  if (!validPercent(b.commission_percent) || !validPercent(b.buying_margin_percent)) {
+    return res.status(400).json({ message: 'commission_percent and buying_margin_percent must be between 0 and 100' });
+  }
   const code = b.code || generateResellerCode(b.name);
   // Prevent duplicate codes/subdomains — white-label routing resolves resellers by these values.
   const dup = await pool.query('SELECT id FROM resellers WHERE lower(code)=lower($1) OR ($2::text IS NOT NULL AND lower(subdomain)=lower($2)) LIMIT 1', [String(code), b.subdomain ? String(b.subdomain).toLowerCase().trim() : null]);
@@ -81,6 +92,9 @@ router.put('/:id', asyncHandler(async (req, res) => {
   const user = getUser(req);
   if (!['SUPER_ADMIN','BILLING_OPERATOR'].includes(user.role)) return res.status(403).json({ message: 'Insufficient permissions' });
   const b = req.body || {};
+  if (!validPercent(b.commission_percent) || !validPercent(b.buying_margin_percent)) {
+    return res.status(400).json({ message: 'commission_percent and buying_margin_percent must be between 0 and 100' });
+  }
   const r = await pool.query(`UPDATE resellers SET name=COALESCE($1,name), company_name=$2, tier=COALESCE($3,tier), parent_reseller_id=$4, email=$5, phone=$6, subdomain=$7, custom_domain=$8, brand_name=COALESCE($9,brand_name), logo_url=COALESCE($10,logo_url), primary_color=COALESCE($11,primary_color), secondary_color=COALESCE($12,secondary_color), portal_title=COALESCE($13,portal_title), status=COALESCE($14,status), credit_limit=COALESCE($15,credit_limit), commission_percent=COALESCE($16,commission_percent), buying_margin_percent=COALESCE($17,buying_margin_percent), address=$18, notes=$19, updated_at=now() WHERE id=$20 RETURNING *`,
     [b.name,b.company_name||null,b.tier,b.parent_reseller_id||null,b.email||null,b.phone||null,b.subdomain?String(b.subdomain).toLowerCase().trim():null,b.custom_domain||null,b.brand_name||null,b.logo_url||null,b.primary_color||null,b.secondary_color||null,b.portal_title||null,b.status,b.credit_limit,b.commission_percent,b.buying_margin_percent,b.address||null,b.notes||null,req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Reseller not found' });
@@ -200,7 +214,7 @@ router.post('/:id/renew-subscriber', asyncHandler(async (req, res) => {
     packageName = sub.package_name || null;
 
     retail = Number(sub.monthly_bill || 0);
-    marginPct = Number(reseller.buying_margin_percent || 0);
+    marginPct = Math.min(100, Math.max(0, Number(reseller.buying_margin_percent || 0)));
     wholesale = +(retail * (1 - marginPct / 100)).toFixed(2);
     charge = wholesale > 0 ? wholesale : retail;
     if (!(charge > 0)) { await client.query('ROLLBACK'); return res.status(400).json({ message: 'Subscriber has no billable package' }); }
@@ -617,27 +631,15 @@ router.get('/:id/logs', asyncHandler(async (req, res) => {
   if (kind === 'all' || kind === 'auth') {
     try {
       const params: any[] = [id];
-      let where = `WHERE (l.username IN (SELECT username FROM subscribers WHERE reseller_id=$1 AND username IS NOT NULL) OR l.subscriber_id IN (SELECT id FROM subscribers WHERE reseller_id=$1))`;
-      if (q) { params.push(like); where += ` AND (lower(COALESCE(l.username,'')) LIKE $${params.length} OR lower(COALESCE(l.ip_address,'')) LIKE $${params.length} OR lower(COALESCE(l.mac_address,'')) LIKE $${params.length} OR lower(COALESCE(l.status,'')) LIKE $${params.length} OR lower(COALESCE(l.result,'')) LIKE $${params.length})`; }
+      let where = `WHERE ra.username IN (SELECT username FROM subscribers WHERE reseller_id=$1 AND username IS NOT NULL)`;
+      if (q) { params.push(like); where += ` AND (lower(COALESCE(ra.username,'')) LIKE $${params.length} OR lower(COALESCE(ra.framedipaddress,'')) LIKE $${params.length} OR lower(COALESCE(ra.callingstationid,'')) LIKE $${params.length} OR lower(COALESCE(ra.acctterminatecause,'')) LIKE $${params.length})`; }
       params.push(limit);
       out.auth = (await pool.query(
-        `SELECT l.*
-         FROM user_auth_logs l ${where}
-         ORDER BY COALESCE(l.created_at, l.timestamp, now()) DESC LIMIT $${params.length}`, params
+        `SELECT ra.radacctid as id, ra.username, ra.acctstarttime as created_at, ra.acctstoptime, ra.framedipaddress as ip_address, ra.callingstationid as mac_address, ra.acctterminatecause as status
+         FROM radacct ra ${where}
+         ORDER BY ra.acctstarttime DESC NULLS LAST LIMIT $${params.length}`, params
       )).rows;
-    } catch {
-      try {
-        const params: any[] = [id];
-        let where = `WHERE ra.username IN (SELECT username FROM subscribers WHERE reseller_id=$1 AND username IS NOT NULL)`;
-        if (q) { params.push(like); where += ` AND (lower(COALESCE(ra.username,'')) LIKE $${params.length} OR lower(COALESCE(ra.framedipaddress,'')) LIKE $${params.length} OR lower(COALESCE(ra.callingstationid,'')) LIKE $${params.length} OR lower(COALESCE(ra.acctterminatecause,'')) LIKE $${params.length})`; }
-        params.push(limit);
-        out.auth = (await pool.query(
-          `SELECT ra.radacctid as id, ra.username, ra.acctstarttime as created_at, ra.acctstoptime, ra.framedipaddress as ip_address, ra.callingstationid as mac_address, ra.acctterminatecause as status
-           FROM radacct ra ${where}
-           ORDER BY ra.acctstarttime DESC NULLS LAST LIMIT $${params.length}`, params
-        )).rows;
-      } catch { out.auth = []; }
-    }
+    } catch { out.auth = []; }
   }
 
   if (kind === 'all' || kind === 'wallet') {

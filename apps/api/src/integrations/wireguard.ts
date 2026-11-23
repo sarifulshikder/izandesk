@@ -64,11 +64,20 @@ export async function allocateTunnelIp(pool: any, overlayCidr: string, hubAddres
   const used = new Set<string>((await pool.query('SELECT tunnel_ip FROM wg_peers')).rows.map((r: any) => String(r.tunnel_ip || '').split('/')[0]));
   const hubIp = String(hubAddress || '10.77.0.1/16').split('/')[0];
   used.add(hubIp);
-  const { base } = parseCidrBase(overlayCidr);
-  const start = (ipToInt(base) & 0xffff0000) >>> 0; // assume /16-ish planning baseline
-  // allocate from .0.2 upward in /16 space for simplicity
-  for (let i = 2; i < 65534; i++) {
-    const candidate = intToIp((start + i) >>> 0);
+  const { base, prefix } = parseCidrBase(overlayCidr);
+  if (!Number.isInteger(prefix) || prefix < 8 || prefix > 30) {
+    throw new Error('overlay_cidr prefix must be between /8 and /30');
+  }
+  const mask = (0xffffffff << (32 - prefix)) >>> 0;
+  const network = (ipToInt(base) & mask) >>> 0;
+  const broadcast = (network | (~mask >>> 0)) >>> 0;
+  const hubNum = ipToInt(hubIp);
+  if (hubNum <= network || hubNum >= broadcast) {
+    throw new Error('hub_address must be inside overlay_cidr');
+  }
+  // Reserve the network address and .1 for the hub, then scan usable hosts.
+  for (let n = network + 2; n < broadcast; n++) {
+    const candidate = intToIp(n >>> 0);
     if (candidate.endsWith('.0') || candidate.endsWith('.255')) continue;
     if (!used.has(candidate)) return `${candidate}/32`;
   }
@@ -111,6 +120,7 @@ export function buildRouterOsScript(hub: WgHubConfig, peer: WgPeer): string {
   // route overlay and hub tunnel network by default
   allowed.add(scriptSafe(String(hub.overlay_cidr || '10.77.0.0/16')));
   for (const a of (peer.allowed_ips || [])) { const v = scriptSafe(a); if (v) allowed.add(v); }
+  for (const c of (peer.olt_mgmt_cidrs || [])) { const v = scriptSafe(c); if (v) allowed.add(v); }
   const allowedStr = Array.from(allowed).join(',');
   const lines: string[] = [];
   lines.push(`# IzanDesk WireGuard bootstrap (RouterOS v7+)`);

@@ -7,16 +7,19 @@ function fmtBps(bps: number) {
   const n = Number(bps || 0);
   if (n > 1e9) return `${(n / 1e9).toFixed(2)} Gbps`;
   if (n > 1e6) return `${(n / 1e6).toFixed(1)} Mbps`;
-  return `${Math.max(0, n / 1e3).toFixed(0)} Kbps`;
+  if (n > 1e3) return `${(n / 1e3).toFixed(1)} Kbps`;
+  return `${Math.max(0, n).toFixed(0)} Bps`;
 }
+
+const HISTORY_LEN = 30; // 30 points × 10s refresh = 5 min window
 
 type Point = { rx: number; tx: number };
 
 export function LiveTrafficChart({ rx, tx, online }: { rx: number; tx: number; online: number }) {
-  const [history, setHistory] = useState<Point[]>(() => Array.from({ length: 30 }, () => ({ rx: 0, tx: 0 })));
+  const [history, setHistory] = useState<Point[]>(() => Array.from({ length: HISTORY_LEN }, () => ({ rx: 0, tx: 0 })));
 
   useEffect(() => {
-    setHistory((h) => [...h.slice(-29), { rx: Number(rx || 0), tx: Number(tx || 0) }]);
+    setHistory((h) => [...h.slice(-(HISTORY_LEN - 1)), { rx: Number(rx || 0), tx: Number(tx || 0) }]);
   }, [rx, tx]);
 
   const { rxPoints, txPoints, areaPoints, peak } = useMemo(() => {

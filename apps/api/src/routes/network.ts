@@ -2,15 +2,26 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler, sanitizeRouter, sanitizeRouters, networkGuard, hasNetworkWrite } from './helpers';
 import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret } from '../integrations/mikrotik';
+import { invalidateMikrotikApi } from '../integrations/mikrotik-manager';
+import { mikrotikErrorMessage } from '../integrations/mikrotik-errors';
 import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas } from '../integrations/radius';
-import { autoLinkOnusBulk } from '../integrations/onu-autolink';
 import { hashPassword } from '../utils/password';
+import { TELEMETRY_TTL_MS } from '../config/runtime';
 
 const router: Router = Router();
 router.use(networkGuard);
 
+// Lite mode reuses the last RouterOS telemetry for a short window so simply
+// opening the Routers page doesn't open a new API session on every navigation.
+const telemetryCache = new Map<string, { at: number; data: any }>();
+const telemetryInFlight = new Map<string, Promise<any>>();
+let lastSessionsPollAt = 0;
+const SESSIONS_POLL_TTL_MS = Math.max(0, Number(process.env.SESSIONS_POLL_TTL_MS || 30_000));
+
 // Routers CRUD
+// ?nopoll=1 (or db_only=1) returns stored DB state without live MikroTik telemetry/login.
 router.get('/routers', asyncHandler(async (req, res) => {
+  const nopoll = ['1', 'true', 'yes'].includes(String(req.query.nopoll || req.query.db_only || '').toLowerCase());
   const mode = String(req.query.integration_mode || req.query.mode || '').toUpperCase();
   const enabled = req.query.enabled;
   const where: string[] = [];
@@ -22,22 +33,48 @@ router.get('/routers', asyncHandler(async (req, res) => {
   const rows: any[] = [];
   for (const row of r.rows) {
     let t: any = null;
+    let fromCache = false;
     const imode = String(row.integration_mode || 'API').toUpperCase();
-    if (row.is_enabled && (imode === 'API' || imode === 'REST')) {
-      try {
-        const live = await mikrotikTelemetry(row);
-        t = { ...live, last_seen_at: new Date().toISOString() };
-      } catch (e: any) {
-        t = { status: 'OFFLINE', last_seen_at: row.last_seen_at, last_error: e.message || 'unreachable' };
+    if (nopoll) {
+      t = { status: row.is_enabled ? (row.status || 'UNKNOWN') : 'DISABLED', last_seen_at: row.last_seen_at };
+    } else if (row.is_enabled && (imode === 'API' || imode === 'REST')) {
+      const cached = telemetryCache.get(row.id);
+      if (TELEMETRY_TTL_MS && cached && Date.now() - cached.at < TELEMETRY_TTL_MS) {
+        t = cached.data;
+        fromCache = true;
+      } else {
+        const inFlight = telemetryInFlight.get(row.id);
+        if (inFlight) {
+          try { t = await inFlight; fromCache = true; } catch { t = { status: row.status || 'UNKNOWN', last_seen_at: row.last_seen_at }; fromCache = true; }
+        } else {
+          const p = (async () => {
+            try {
+              const live = await mikrotikTelemetry(row);
+              const data = { ...live, last_seen_at: new Date().toISOString() };
+              if (TELEMETRY_TTL_MS) telemetryCache.set(row.id, { at: Date.now(), data });
+              return data;
+            } catch (e: any) {
+              const data = { status: 'OFFLINE', last_seen_at: row.last_seen_at, last_error: mikrotikErrorMessage(e, row) };
+              if (TELEMETRY_TTL_MS) telemetryCache.set(row.id, { at: Date.now(), data });
+              return data;
+            }
+          })().finally(() => telemetryInFlight.delete(row.id));
+          telemetryInFlight.set(row.id, p);
+          t = await p;
+        }
       }
     } else if (row.is_enabled && imode === 'RADIUS') {
-      t = { status: row.status || 'ONLINE', last_seen_at: new Date().toISOString() };
+      // RADIUS NAS health is not polled here. Reporting a fabricated fresh
+      // last_seen_at/ONLINE makes dead gear look healthy to operators.
+      t = { status: row.status || 'UNKNOWN', last_seen_at: row.last_seen_at };
     } else {
       t = { status: 'DISABLED', last_seen_at: row.last_seen_at };
     }
     const merged = { ...row, ...t };
-    await pool.query('UPDATE network_routers SET cpu_load=$1,memory_used_mb=$2,memory_total_mb=$3,rx_bps=$4,tx_bps=$5,uptime_seconds=$6,status=$7,last_seen_at=COALESCE($8,last_seen_at),identity=COALESCE($9,identity),board_name=COALESCE($10,board_name),updated_at=now() WHERE id=$11',
-      [merged.cpu_load ?? row.cpu_load ?? null, merged.memory_used_mb ?? row.memory_used_mb ?? null, merged.memory_total_mb ?? row.memory_total_mb ?? null, merged.rx_bps ?? row.rx_bps ?? 0, merged.tx_bps ?? row.tx_bps ?? 0, merged.uptime_seconds ?? row.uptime_seconds ?? null, merged.status || row.status, merged.last_seen_at || null, merged.identity || null, merged.board_name || null, row.id]);
+    if (!fromCache && !nopoll) {
+      await pool.query('UPDATE network_routers SET cpu_load=$1,memory_used_mb=$2,memory_total_mb=$3,rx_bps=$4,tx_bps=$5,uptime_seconds=$6,status=$7,last_seen_at=COALESCE($8,last_seen_at),identity=COALESCE($9,identity),board_name=COALESCE($10,board_name),updated_at=now() WHERE id=$11',
+        [merged.cpu_load ?? row.cpu_load ?? null, merged.memory_used_mb ?? row.memory_used_mb ?? null, merged.memory_total_mb ?? row.memory_total_mb ?? null, merged.rx_bps ?? row.rx_bps ?? 0, merged.tx_bps ?? row.tx_bps ?? 0, merged.uptime_seconds ?? row.uptime_seconds ?? null, merged.status || row.status, merged.last_seen_at || null, merged.identity || null, merged.board_name || null, row.id]);
+    }
     rows.push(merged);
   }
   res.json({ data: sanitizeRouters(rows) });
@@ -107,6 +144,8 @@ router.put('/routers/:id', asyncHandler(async (req, res) => {
       b.router_type??c.router_type,b.ros_version??c.ros_version,b.use_ssl??c.use_ssl,b.site??c.site,b.is_enabled??c.is_enabled,
       mode, b.radius_secret ?? '', Number(b.coa_port ?? c.coa_port ?? 3799), b.nas_identifier ?? c.nas_identifier, req.params.id
     ]);
+  telemetryCache.delete(req.params.id);
+  await invalidateMikrotikApi(String(req.params.id)).catch(() => {});
   try { await syncNasForRouter(r.rows[0], c.host); } catch {}
   res.json(sanitizeRouter(r.rows[0]));
 }));
@@ -114,6 +153,8 @@ router.put('/routers/:id', asyncHandler(async (req, res) => {
 router.delete('/routers/:id', asyncHandler(async (req, res) => {
   const cur = await pool.query('SELECT * FROM network_routers WHERE id=$1',[req.params.id]);
   await pool.query('DELETE FROM network_routers WHERE id=$1',[req.params.id]);
+  telemetryCache.delete(req.params.id);
+  await invalidateMikrotikApi(String(req.params.id)).catch(() => {});
   try { if (cur.rows[0]) await removeNasForRouter(cur.rows[0]); } catch {}
   res.json({ ok: true });
 }));
@@ -131,7 +172,7 @@ router.post('/routers/:id/test', asyncHandler(async (req, res) => {
   try {
     if (mode === 'API' || mode === 'REST') {
       const result = await mikrotikTest(row);
-      await pool.query(`UPDATE network_routers SET status='ONLINE', last_seen_at=now(), identity=$1, updated_at=now() WHERE id=$2`, [result.identity || row.identity || row.name, req.params.id]);
+      await pool.query(`UPDATE network_routers SET status='ONLINE', last_seen_at=now(), last_error=NULL, identity=$1, updated_at=now() WHERE id=$2`, [result.identity || row.identity || row.name, req.params.id]);
       return res.json({ ok: true, message: `Real ${mode} connection successful. Identity: ${result.identity}`, identity: result.identity, integration_mode: mode });
     } else {
       // RADIUS NAS: verify config (real CoA reachability tested via CoA action); mark enabled NAS as configured
@@ -140,8 +181,8 @@ router.post('/routers/:id/test', asyncHandler(async (req, res) => {
       return res.json({ ok: true, message: `RADIUS NAS configured. Secret set, CoA port ${row.coa_port||3799}. (Use CoA/PoD to verify real NAS response; FreeRADIUS handles AAA.)`, identity: row.nas_identifier || row.identity || row.name, integration_mode: mode, coa_port: row.coa_port || 3799 });
     }
   } catch (e: any) {
-    await pool.query(`UPDATE network_routers SET status='OFFLINE', updated_at=now() WHERE id=$1`, [req.params.id]);
-    return res.status(502).json({ ok: false, message: `Connection failed: ${e.message || e}`, integration_mode: mode });
+    await pool.query(`UPDATE network_routers SET status='OFFLINE', last_error=$2, updated_at=now() WHERE id=$1`, [req.params.id, mikrotikErrorMessage(e, row).slice(0, 500)]);
+    return res.status(502).json({ ok: false, message: `Connection failed: ${mikrotikErrorMessage(e, row)}`, integration_mode: mode });
   }
 }));
 
@@ -388,79 +429,89 @@ router.post('/routers/:id/mikrotik/import', asyncHandler(async (req, res) => {
 }));
 
 // Live sessions / throughput
+// ?nopoll=1 (or db_only=1) returns the last known DB state without polling MikroTik/NAS.
+// Use this for dashboard widgets to avoid continuous login attempts on routers.
 router.get('/sessions', asyncHandler(async (req, res) => {
-  const subs = await pool.query(`SELECT s.id, s.username, s.full_name, s.client_code, s.status, s.connection_type, s.ip_address, s.mac_address, s.provisioning_mode, s.router_id
-    FROM subscribers s WHERE s.username IS NOT NULL AND s.username <> ''`);
-  const allRouters = (await pool.query('SELECT * FROM network_routers ORDER BY created_at')).rows;
-  const radiusRouters = allRouters.filter((r:any)=>String(r.integration_mode).toUpperCase()==='RADIUS' && r.is_enabled);
-  const directRouters = allRouters.filter((r:any)=>['API','REST'].includes(String(r.integration_mode).toUpperCase()) && r.is_enabled);
+  const refresh = ['1', 'true', 'yes'].includes(String(req.query.refresh || req.query.poll || '').toLowerCase());
+  const nopollReq = ['1', 'true', 'yes'].includes(String(req.query.nopoll || req.query.db_only || '').toLowerCase());
+  const nopoll = nopollReq || (!refresh && SESSIONS_POLL_TTL_MS > 0 && Date.now() - lastSessionsPollAt < SESSIONS_POLL_TTL_MS);
 
-  // Try real active PPP sessions from direct API/REST routers
-  const realMap = new Map<string, {router_id:string; address?:string; caller_id?:string; uptime?:string; rx_bps?:number; tx_bps?:number}>();
-  for (const rt of directRouters) {
-    try {
-      const actives = await mikrotikActiveSessions(rt);
-      for (const a of (actives||[])) {
-        if (a && a.name) realMap.set(String(a.name), { router_id: rt.id, address: a.address, caller_id: a.caller_id, uptime: a.uptime, rx_bps: Number(a.rx_bps||0), tx_bps: Number(a.tx_bps||0) });
+  if (!nopoll) {
+    lastSessionsPollAt = Date.now(); // optimistic: prevent concurrent request stampede
+    const subs = await pool.query(`SELECT s.id, s.username, s.full_name, s.client_code, s.status, s.connection_type, s.ip_address, s.mac_address, s.provisioning_mode, s.router_id
+      FROM subscribers s WHERE s.username IS NOT NULL AND s.username <> ''`);
+    const allRouters = (await pool.query('SELECT * FROM network_routers ORDER BY created_at')).rows;
+    const radiusRouters = allRouters.filter((r:any)=>String(r.integration_mode).toUpperCase()==='RADIUS' && r.is_enabled);
+    const directRouters = allRouters.filter((r:any)=>['API','REST'].includes(String(r.integration_mode).toUpperCase()) && r.is_enabled);
+
+    // Try real active PPP sessions from direct API/REST routers
+    const realMap = new Map<string, {router_id:string; address?:string; caller_id?:string; uptime?:string; rx_bps?:number; tx_bps?:number}>();
+    for (const rt of directRouters) {
+      try {
+        const actives = await mikrotikActiveSessions(rt);
+        for (const a of (actives||[])) {
+          if (a && a.name) realMap.set(String(a.name), { router_id: rt.id, address: a.address, caller_id: a.caller_id, uptime: a.uptime, rx_bps: Number(a.rx_bps||0), tx_bps: Number(a.tx_bps||0) });
+        }
+      } catch (_e) { /* unreachable/unsupported - fall through */ }
+    }
+
+    for (let i=0; i<subs.rows.length; i++) {
+      const s = subs.rows[i];
+      const uname = String(s.username);
+      let rt: any = null;
+      const real = realMap.get(uname);
+      if (String(s.provisioning_mode||'').toUpperCase() === 'ROUTER' && s.router_id) {
+        rt = directRouters.find((r:any)=>r.id===s.router_id) || allRouters.find((r:any)=>r.id===s.router_id) || null;
+      } else if (real) {
+        rt = allRouters.find((r:any)=>r.id===real.router_id) || null;
+      } else if (String(s.provisioning_mode||'').toUpperCase() === 'RADIUS') {
+        if (radiusRouters.length) rt = radiusRouters[i % radiusRouters.length];
+        else rt = directRouters[i % Math.max(1,directRouters.length)] || allRouters[0] || null;
+      } else {
+        rt = directRouters[i % Math.max(1,directRouters.length)] || allRouters[0] || null;
       }
-    } catch (_e) { /* unreachable/unsupported - fall through */ }
-  }
-
-  for (let i=0; i<subs.rows.length; i++) {
-    const s = subs.rows[i];
-    const uname = String(s.username);
-    let rt: any = null;
-    const real = realMap.get(uname);
-    if (String(s.provisioning_mode||'').toUpperCase() === 'ROUTER' && s.router_id) {
-      rt = directRouters.find((r:any)=>r.id===s.router_id) || allRouters.find((r:any)=>r.id===s.router_id) || null;
-    } else if (real) {
-      rt = allRouters.find((r:any)=>r.id===real.router_id) || null;
-    } else if (String(s.provisioning_mode||'').toUpperCase() === 'RADIUS') {
-      if (radiusRouters.length) rt = radiusRouters[i % radiusRouters.length];
-      else rt = directRouters[i % Math.max(1,directRouters.length)] || allRouters[0] || null;
-    } else {
-      rt = directRouters[i % Math.max(1,directRouters.length)] || allRouters[0] || null;
-    }
-    if (!rt) continue;
-
-    const isDirect = ['API','REST'].includes(String(rt.integration_mode||'').toUpperCase());
-    let online = false; let ip = s.ip_address; let mac = s.mac_address; let uptimeSec = 0; let rx = 0; let tx = 0;
-    if (isDirect && real && real.router_id === rt.id) {
-      online = true; ip = real.address || ip; mac = real.caller_id || mac;
-      uptimeSec = parseUptimeSimple(real.uptime || '0s');
-      rx = Number(real.rx_bps || 0); tx = Number(real.tx_bps || 0);
-    } else if (isDirect && String(s.provisioning_mode||'').toUpperCase() === 'ROUTER') {
-      online = false; // direct router but not in active list
-    } else if (String(s.provisioning_mode||'').toUpperCase() === 'RADIUS') {
-      // RADIUS: session state is driven by accounting (radacct overlay below) / NAS; do not fabricate traffic
-      online = false; rx = 0; tx = 0; uptimeSec = 0;
-    } else {
-      // Fallback: unknown without telemetry/accounting
-      online = false; rx = 0; tx = 0; uptimeSec = 0;
-    }
-    await pool.query(`INSERT INTO subscriber_sessions(subscriber_id,router_id,username,ip_address,mac_address,rx_bps,tx_bps,rx_bytes,tx_bytes,status,uptime_sec,updated_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
-      ON CONFLICT (username, router_id) DO UPDATE SET subscriber_id=$1,ip_address=COALESCE($4,subscriber_sessions.ip_address),mac_address=COALESCE($5,subscriber_sessions.mac_address),rx_bps=$6,tx_bps=$7,rx_bytes=subscriber_sessions.rx_bytes+$6,tx_bytes=subscriber_sessions.tx_bytes+$7,status=$10,uptime_sec=$11,updated_at=now()`,
-      [s.id, rt.id, uname, ip || null, mac || null, rx, tx, rx*5, tx*5, online?'ONLINE':'OFFLINE', uptimeSec]);
-  }
-  // Overlay RADIUS accounting (radacct) for live sessions where available
-  try {
-    const acct = await pool.query(`SELECT DISTINCT ON (username) username, framedipaddress::text as ip_address, nasipaddress::text as nas_ip, acctstarttime, acctupdatetime, acctsessiontime, acctinputoctets, acctoutputoctets
-      FROM radacct WHERE acctstoptime IS NULL ORDER BY username, acctupdatetime DESC NULLS LAST, acctstarttime DESC`);
-    for (const a of acct.rows) {
-      const uname = String(a.username || '');
-      if (!uname) continue;
-      const sub = subs.rows.find((s:any)=>String(s.username)===uname);
-      let rt = radiusRouters[0] || directRouters[0] || allRouters[0];
-      if (sub && String(sub.provisioning_mode||'').toUpperCase() === 'ROUTER' && sub.router_id) rt = allRouters.find((r:any)=>r.id===sub.router_id) || rt;
       if (!rt) continue;
-      const uptimeSec = Number(a.acctsessiontime || 0);
+
+      const isDirect = ['API','REST'].includes(String(rt.integration_mode||'').toUpperCase());
+      let online = false; let ip = s.ip_address; let mac = s.mac_address; let uptimeSec = 0; let rx = 0; let tx = 0;
+      if (isDirect && real && real.router_id === rt.id) {
+        online = true; ip = real.address || ip; mac = real.caller_id || mac;
+        uptimeSec = parseUptimeSimple(real.uptime || '0s');
+        rx = Number(real.rx_bps || 0); tx = Number(real.tx_bps || 0);
+      } else if (isDirect && String(s.provisioning_mode||'').toUpperCase() === 'ROUTER') {
+        online = false; // direct router but not in active list
+      } else if (String(s.provisioning_mode||'').toUpperCase() === 'RADIUS') {
+        // RADIUS: session state is driven by accounting (radacct overlay below) / NAS; do not fabricate traffic
+        online = false; rx = 0; tx = 0; uptimeSec = 0;
+      } else {
+        // Fallback: unknown without telemetry/accounting
+        online = false; rx = 0; tx = 0; uptimeSec = 0;
+      }
       await pool.query(`INSERT INTO subscriber_sessions(subscriber_id,router_id,username,ip_address,mac_address,rx_bps,tx_bps,rx_bytes,tx_bytes,status,uptime_sec,updated_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'ONLINE',$10,now())
-        ON CONFLICT (username, router_id) DO UPDATE SET subscriber_id=COALESCE($1,subscriber_sessions.subscriber_id),ip_address=COALESCE($4,subscriber_sessions.ip_address),status='ONLINE',rx_bps=0,tx_bps=0,rx_bytes=$8,tx_bytes=$9,uptime_sec=$10,updated_at=now()`,
-        [sub?.id || null, rt.id, uname, a.ip_address || sub?.ip_address || null, sub?.mac_address || null, 0, 0, Number(a.acctoutputoctets||0), Number(a.acctinputoctets||0), uptimeSec]);
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
+        ON CONFLICT (username, router_id) DO UPDATE SET subscriber_id=$1,ip_address=COALESCE($4,subscriber_sessions.ip_address),mac_address=COALESCE($5,subscriber_sessions.mac_address),rx_bps=$6,tx_bps=$7,rx_bytes=subscriber_sessions.rx_bytes+$6,tx_bytes=subscriber_sessions.tx_bytes+$7,status=$10,uptime_sec=$11,updated_at=now()`,
+        [s.id, rt.id, uname, ip || null, mac || null, rx, tx, rx*5, tx*5, online?'ONLINE':'OFFLINE', uptimeSec]);
     }
-  } catch (_e) { /* radacct not available or no accounting yet */ }
+    // Overlay RADIUS accounting (radacct) for live sessions where available
+    try {
+      const acct = await pool.query(`SELECT DISTINCT ON (username) username, framedipaddress::text as ip_address, nasipaddress::text as nas_ip, acctstarttime, acctupdatetime, acctsessiontime, acctinputoctets, acctoutputoctets
+        FROM radacct WHERE acctstoptime IS NULL ORDER BY username, acctupdatetime DESC NULLS LAST, acctstarttime DESC`);
+      for (const a of acct.rows) {
+        const uname = String(a.username || '');
+        if (!uname) continue;
+        const sub = subs.rows.find((s:any)=>String(s.username)===uname);
+        let rt = radiusRouters[0] || directRouters[0] || allRouters[0];
+        if (sub && String(sub.provisioning_mode||'').toUpperCase() === 'ROUTER' && sub.router_id) rt = allRouters.find((r:any)=>r.id===sub.router_id) || rt;
+        if (!rt) continue;
+        const uptimeSec = Number(a.acctsessiontime || 0);
+        await pool.query(`INSERT INTO subscriber_sessions(subscriber_id,router_id,username,ip_address,mac_address,rx_bps,tx_bps,rx_bytes,tx_bytes,status,uptime_sec,updated_at)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'ONLINE',$10,now())
+          ON CONFLICT (username, router_id) DO UPDATE SET subscriber_id=COALESCE($1,subscriber_sessions.subscriber_id),ip_address=COALESCE($4,subscriber_sessions.ip_address),status='ONLINE',rx_bps=0,tx_bps=0,rx_bytes=$8,tx_bytes=$9,uptime_sec=$10,updated_at=now()`,
+          [sub?.id || null, rt.id, uname, a.ip_address || sub?.ip_address || null, sub?.mac_address || null, 0, 0, Number(a.acctoutputoctets||0), Number(a.acctinputoctets||0), uptimeSec]);
+      }
+    } catch (_e) { /* radacct not available or no accounting yet */ }
+    lastSessionsPollAt = Date.now();
+  }
 
   const q = String(req.query.q || '').toLowerCase();
   let rows = (await pool.query(`SELECT ss.*, s.full_name, s.client_code, s.provisioning_mode, r.name as router_name, r.integration_mode
@@ -469,8 +520,9 @@ router.get('/sessions', asyncHandler(async (req, res) => {
     ORDER BY ss.status DESC, ss.updated_at DESC LIMIT 200`)).rows;
   if (q) rows = rows.filter((x:any)=>[x.username,x.full_name,x.client_code,x.ip_address,x.router_name].some(v=>String(v||'').toLowerCase().includes(q)));
   rows = rows.map((x:any) => ({ ...x, uptime: formatUptimeSec(Number(x.uptime_sec || 0)) }));
-  // Best-effort automatic ONU↔subscriber linking (name/client_code + MAC/FDB correlation)
-  try { await autoLinkOnusBulk({ allowFdb: true, limit: 30 }); } catch {}
+  // NOTE: ONU↔subscriber auto-linking is intentionally NOT run here. It performs
+  // SNMP/FDB lookups against every enabled OLT and can block this endpoint for
+  // many seconds when an OLT is unreachable. Use POST /api/olt/auto-link explicitly.
   res.json({ data: rows, summary: { online: rows.filter((r:any)=>r.status==='ONLINE').length, total: rows.length, aggRxBps: rows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: rows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } });
 }));
 
@@ -495,19 +547,31 @@ router.get('/sessions/stream', asyncHandler(async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
   let closed = false;
-  req.on('close', () => { closed = true; });
+  let inFlight = false;
+  let iv: NodeJS.Timeout | undefined;
+  const stop = () => { closed = true; if (iv) clearInterval(iv); };
+  req.on('close', stop);
   const send = async () => {
-    if (closed) return;
-    let rows = (await pool.query(`SELECT ss.username, ss.rx_bps, ss.tx_bps, ss.status, ss.ip_address, ss.uptime_sec, r.name as router_name, r.integration_mode, s.full_name, s.provisioning_mode
-      FROM subscriber_sessions ss LEFT JOIN network_routers r ON r.id=ss.router_id LEFT JOIN subscribers s ON s.id=ss.subscriber_id
-      ORDER BY ss.updated_at DESC LIMIT 50`)).rows;
-    rows = rows.map((x:any) => ({ ...x, uptime: formatUptimeSec(Number(x.uptime_sec || 0)) }));
-    const payload = { t: Date.now(), sessions: rows, summary: { online: rows.filter((r:any)=>r.status==='ONLINE').length, aggRxBps: rows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: rows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } };
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    if (closed || inFlight) return;
+    inFlight = true;
+    try {
+      const rows = (await pool.query(`SELECT ss.username, ss.rx_bps, ss.tx_bps, ss.status, ss.ip_address, ss.uptime_sec, r.name as router_name, r.integration_mode, s.full_name, s.provisioning_mode
+        FROM subscriber_sessions ss LEFT JOIN network_routers r ON r.id=ss.router_id LEFT JOIN subscribers s ON s.id=ss.subscriber_id
+        ORDER BY ss.updated_at DESC LIMIT 50`)).rows;
+      if (closed || res.writableEnded || res.destroyed) return;
+      const safeRows = rows.map((x:any) => ({ ...x, uptime: formatUptimeSec(Number(x.uptime_sec || 0)) }));
+      const payload = { t: Date.now(), sessions: safeRows, summary: { online: safeRows.filter((r:any)=>r.status==='ONLINE').length, aggRxBps: safeRows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: safeRows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } };
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch (e) {
+      console.error('[network] SSE tick failed:', e);
+      stop();
+      try { res.end(); } catch {}
+    } finally {
+      inFlight = false;
+    }
   };
   await send();
-  const iv = setInterval(send, 3000);
-  req.on('close', () => clearInterval(iv));
+  if (!closed) iv = setInterval(() => { void send().catch(() => stop()); }, 3000);
 }));
 
 export default router;

@@ -39,6 +39,19 @@ services:
       DISABLE_DEMO_ACCOUNTS: ${DISABLE_DEMO_ACCOUNTS:-true}
       SECURITY_STRICT_MODE: ${SECURITY_STRICT_MODE:-false}
       SECURITY_ALLOW_INSECURE_DEMO: ${SECURITY_ALLOW_INSECURE_DEMO:-false}
+      # Required in production/strict mode. Without a bootstrap admin and KYC
+      # keys, a demos-disabled stack has no sign-in user and unencrypted KYC.
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Administrator}
+      BOOTSTRAP_ADMIN_PASSWORD_HASH: ${BOOTSTRAP_ADMIN_PASSWORD_HASH:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      KYC_ENCRYPTION_KEYS: ${KYC_ENCRYPTION_KEYS:-}
+      KYC_ENCRYPTION_ACTIVE_KEY_ID: ${KYC_ENCRYPTION_ACTIVE_KEY_ID:-}
+      MFS_SMS_INGEST_TOKEN: ${MFS_SMS_INGEST_TOKEN:-}
+      INVOICE_SHARE_SECRET: ${INVOICE_SHARE_SECRET:-}
+      # Default keeps the historical shared path for existing deployments.
+      # Disposable stacks must override this so hub/init cannot clobber prod.
+      WG_CONFIG_DIR: ${WG_CONFIG_DIR:-/app/docker/wg-hub/config}
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: ${POSTGRES_DB:-izandesk}
@@ -85,12 +98,25 @@ services:
     ports:
       - "1812:1812/udp"
       - "1813:1813/udp"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-izandesk_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-izandesk_secret_password}
+      POSTGRES_DB: ${POSTGRES_DB:-izandesk}
     volumes:
       - ./radius/clients.conf:/etc/raddb/clients.conf:ro
-      - ./radius/mods-enabled/sql:/etc/raddb/mods-enabled/sql:ro
+      - ./radius/mods-enabled/sql:/etc/raddb/sql.template:ro
       - ./radius/mods-config/sql/main/postgresql/queries.conf:/etc/raddb/mods-config/sql/main/postgresql/queries.conf:ro
       - ./radius/sites-enabled/default:/etc/raddb/sites-enabled/default:ro
-    command: ["sh", "-c", "apk add --no-cache postgresql-libs >/dev/null 2>&1 || apk add --no-cache libpq >/dev/null 2>&1 || true; exec radiusd -f -l stdout"]
+    command:
+      - sh
+      - -c
+      - |
+        sed -e "s|__POSTGRES_USER__|$$POSTGRES_USER|g" \
+            -e "s|__POSTGRES_PASSWORD__|$$POSTGRES_PASSWORD|g" \
+            -e "s|__POSTGRES_DB__|$$POSTGRES_DB|g" \
+            /etc/raddb/sql.template > /etc/raddb/mods-enabled/sql
+        apk add --no-cache postgresql-libs >/dev/null 2>&1 || apk add --no-cache libpq >/dev/null 2>&1 || true
+        exec radiusd -f -l stdout
 
   genieacs:
     image: drumsergio/genieacs:latest

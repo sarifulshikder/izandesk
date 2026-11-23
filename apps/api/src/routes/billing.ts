@@ -154,7 +154,7 @@ router.post('/subscribers/:id/suspend', asyncHandler(async (req, res) => {
   const walled = !!b.walled_garden;
   const stage = walled ? 'WALLED_GARDEN' : 'ISOLATED';
   const status = walled ? 'ACTIVE' : 'SUSPENDED';
-  await pool.query(`UPDATE subscribers SET status=$2, suspension_stage=$3, walled_garden=$4, suspension_reason=$5, updated_at=now() WHERE id=$1`, [req.params.id, status, stage, walled, b.reason || 'Manual suspension']);
+  await pool.query(`UPDATE subscribers SET status=$2, suspension_stage=$3, walled_garden=$4, suspension_reason=$5, suspension_source='MANUAL', updated_at=now() WHERE id=$1`, [req.params.id, status, stage, walled, b.reason || 'Manual suspension']);
   const applied = await applyProvisioningState(req.params.id, { status, stage, walled_garden: walled, reason: b.reason || 'Manual suspension', sendCoa: true, coaAction: walled ? 'COA' : 'DISCONNECT', profileOverride: walled ? 'izn-walled-garden' : undefined, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? 'izn-walled-garden' : undefined });
   await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'MANUAL_SUSPEND',$2,$3,$4::jsonb,$5)`, [req.params.id, stage, b.reason || 'Manual suspension', JSON.stringify({ walled_garden: walled }), (req as any).user?.email || 'user']);
   res.json({ ok: true, applied });
@@ -223,7 +223,7 @@ router.post('/payments/record', asyncHandler(async (req, res) => {
 
 router.post('/subscribers/:id/reactivate', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
-  const result = await reactivateSubscriber(req.params.id, req.body?.reason || 'Manual reactivation');
+  const result = await reactivateSubscriber(req.params.id, req.body?.reason || 'Manual reactivation', { force: true });
   res.json(result);
 }));
 
@@ -411,6 +411,10 @@ router.post('/payments/checkout', asyncHandler(async (req, res) => {
   const amount = invoice ? Number(invoice.due_amount || invoice.total_amount || 0) : Number(b.amount || 0);
   if (!(amount > 0)) return res.status(400).json({ message: 'amount must be > 0' });
   const cfg = await getGatewayConfig(gateway);
+  // A disabled channel must never produce a "successful" (simulated) checkout.
+  if (cfg && cfg.enabled === false) {
+    return res.status(403).json({ message: `Payment gateway '${gateway}' is disabled. Enable it in Settings > Payment Gateways.` });
+  }
   const kernel = getKernel();
   const pluginMeta = kernel?.listPlugins().find(p => p.type === 'PAYMENT_GATEWAY' && (p.id === gateway || p.id === `payment-${gateway}` || p.name.toLowerCase().includes(gateway)));
   const plugin = pluginMeta ? kernel?.getPlugin(pluginMeta.id)?.instance : null;
@@ -464,7 +468,8 @@ function verifyWebhookSignature(gateway: string, req: any, cfg: any) {
   // Fail closed: an unsigned webhook cannot be trusted, and accepting it let
   // anyone mint payments by POSTing an arbitrary amount.
   if (!secret) return { ok: false, error: 'webhook secret not configured' };
-  const raw = JSON.stringify(req.body || {});
+  const rawBuf = (req as any).rawBody as Buffer | undefined;
+  const raw = rawBuf ? rawBuf.toString('utf8') : JSON.stringify(req.body || {});
   const sigHeader = String(req.headers['x-signature'] || req.headers['x-webhook-signature'] || req.headers['stripe-signature'] || req.headers['x-hook-signature'] || '');
   if (!sigHeader) {
     // allow token-based verification via query/body for some providers/setups
@@ -501,21 +506,40 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
     return res.status(401).json({ ok: false, verified: false, message: sig.error || 'Invalid webhook signature' });
   }
 
-  let verification: any = null;
+  let pluginVerification: any = null;
   if (plugin && typeof plugin.verifyWebhook === 'function') {
-    try { verification = await plugin.verifyWebhook(payload, req.headers as any, cfg); } catch (e:any) { verification = { ok: false, verified: false, status: 'FAILED', message: e.message, raw: payload }; }
+    try { pluginVerification = await plugin.verifyWebhook(payload, req.headers as any, cfg); } catch (e:any) { pluginVerification = { ok: false, verified: false, status: 'FAILED', message: e.message, raw: payload }; }
   }
-  if (!verification) {
-    // No provider-specific verifier. A valid HMAC proves the caller knows the
-    // secret, but we still bind the event to a known PENDING payment and cap
-    // the amount at what was actually checked out.
-    const pref = String(payload.paymentRef || payload.payment_ref || '').trim();
+  let verification: any = pluginVerification;
+  if (verification) {
+    // Bundled plugin "verifiers" normalize fields; they are not the trust
+    // boundary. Normalize the verdict and then always bind below.
+    const successStatus = ['COMPLETED', 'PAID', 'SUCCESS'].includes(String(verification.status || '').toUpperCase());
+    const verified = verification.verified === true || (verification.ok === true && verification.verified !== false && successStatus);
+    verification = { ...verification, ok: verified, verified };
+  } else {
+    verification = { ok: false, verified: false, status: String(payload.status || 'COMPLETED').toUpperCase(), raw: payload };
+  }
+
+  // A valid HMAC/provider parse is not enough: bind every accepted event to a
+  // PENDING payment created by this system and cap the amount at checkout.
+  if (verification.verified) {
+    const pref = String(verification.paymentRef || verification.payment_ref || payload.paymentRef || payload.payment_ref || '').trim();
     const pending = pref ? (await pool.query("SELECT * FROM payments WHERE payment_ref=$1 AND status='PENDING'", [pref])).rows[0] : null;
-    const amt = Number(payload.amount || 0);
+    const amt = Number(verification.amount ?? payload.amount ?? 0);
     if (!pending || !(amt > 0) || amt > Number(pending.amount || 0) + 0.01) {
-      verification = { ok: false, verified: false, status: 'FAILED', message: 'Webhook does not match a pending payment', raw: payload };
+      verification = { ...verification, ok: false, verified: false, status: 'FAILED', message: 'Webhook does not match a pending payment', raw: payload };
     } else {
-      verification = { ok: true, verified: true, status: String(payload.status || 'COMPLETED').toUpperCase(), amount: amt, trxId: payload.trxId || payload.trx_id || null, paymentRef: pref, invoiceId: pending.invoice_id, subscriber_id: pending.subscriber_id, raw: payload };
+      verification = {
+        ...verification,
+        ok: true,
+        verified: true,
+        amount: +Math.min(amt, Number(pending.amount || 0)).toFixed(2),
+        trxId: verification.trxId || verification.trx_id || payload.trxId || payload.trx_id || null,
+        paymentRef: pending.payment_ref,
+        invoiceId: pending.invoice_id,
+        subscriber_id: pending.subscriber_id,
+      };
     }
   }
 

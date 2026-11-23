@@ -21,6 +21,12 @@ import { removeSubscriberFromRadiusDb, syncSubscriberToRadiusDb } from '../integ
 import { applyProvisioningState } from '../integrations/billing';
 import { resellerScope, assertSubscriberOwnership } from './subscriber-scope';
 import { auditLog, reqActor } from '../integrations/audit';
+import {
+  applyKycDecision, canResellerUploadKyc, canReviewKyc, createKycDocument,
+  deleteKycDocument, normalizeDocType, readKycDocument,
+} from '../integrations/kyc';
+import { assertAllowedKycFileBuffer, sha256Buffer } from '../security/file-validation';
+import { encryptKycBuffer, secureUnlinkKycFile } from '../security/file-encryption';
 import { execFile } from 'child_process';
 
 const router: Router = Router();
@@ -46,20 +52,13 @@ const SUBSCRIBER_TYPES = ['HOME', 'CORPORATE', 'HOTSPOT'];
 const CONNECTION_TYPES = ['PPPOE', 'STATIC_IP', 'DHCP', 'HOTSPOT', 'LEASED_LINE_CIR'];
 const STATUSES = ['PENDING', 'ACTIVE', 'SUSPENDED', 'EXPIRED', 'TERMINATED'];
 const SUSPENSION_STAGES = ['NONE', 'WARNING', 'GRACE', 'ISOLATED', 'WALLED_GARDEN', 'SUSPENDED'];
-const KYC_DOC_TYPES = ['NID', 'PASSPORT', 'CONTRACT', 'PHOTO', 'OTHER'];
 const MAX_KYC_BYTES = 5 * 1024 * 1024;
 const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    // Unguessable name: KYC documents must not be reachable by file enumeration.
-    const safe = crypto.randomUUID() + '-' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-    cb(null, safe);
-  },
-});
+// KYC uploads stay in memory until they are encrypted; plaintext never lands in the document store.
+const kycStorage = multer.memoryStorage();
 const upload = multer({
-  storage,
+  storage: kycStorage,
   limits: { fileSize: MAX_KYC_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
     if (!/^(image\/(png|jpeg|webp|gif)|application\/pdf)$/i.test(file.mimetype)) {
@@ -214,6 +213,12 @@ async function validateReferences(p: any) {
 
 async function buildPayload(b: any, cur: any) {
   const get = (k: string) => (has(b, k) ? b[k] : cur?.[k]);
+  // Date fields need special handling on partial updates: `cur` comes back from
+  // Postgres as a timezone-aware ISO string (e.g. 2026-12-05T18:00Z for a local
+  // date of 2026-12-06). Re-parsing that with dateVal() would shift the stored
+  // date back one day on every unrelated PUT. Only normalize dates supplied by
+  // the caller; keep existing values byte-for-byte when the field is absent.
+  const dateField = (key: string) => has(b, key) ? dateVal(b[key], key) : (cur?.[key] ?? null);
   const p: any = {};
 
   p.full_name = str(get('full_name'));
@@ -279,7 +284,7 @@ async function buildPayload(b: any, cur: any) {
 
   p.ip_address = nullableStr(get('ip_address'));
   p.mac_address = nullableStr(get('mac_address'));
-  p.installation_date = dateVal(get('installation_date'), 'installation_date');
+  p.installation_date = dateField('installation_date');
 
   p.district = nullableStr(get('district'));
   p.thana = nullableStr(get('thana'));
@@ -293,9 +298,9 @@ async function buildPayload(b: any, cur: any) {
   p.notes = nullableStr(get('notes'));
 
   p.billing_cycle_day = intVal(get('billing_cycle_day'), 'billing_cycle_day', { min: 1, max: 31 }) ?? 1;
-  p.expiry_date = dateVal(get('expiry_date'), 'expiry_date');
-  p.due_date = dateVal(get('due_date'), 'due_date');
-  p.next_bill_date = dateVal(get('next_bill_date'), 'next_bill_date');
+  p.expiry_date = dateField('expiry_date');
+  p.due_date = dateField('due_date');
+  p.next_bill_date = dateField('next_bill_date');
   p.auto_suspend_enabled = boolVal(get('auto_suspend_enabled'), cur?.auto_suspend_enabled ?? true);
   p.auto_pay_enabled = boolVal(get('auto_pay_enabled'), cur?.auto_pay_enabled ?? false);
 
@@ -309,7 +314,7 @@ async function buildPayload(b: any, cur: any) {
   // SRZone-parity fields
   for (const key of EXTRA_SUBSCRIBER_TEXT) p[key] = nullableStr(get(key));
   for (const key of EXTRA_SUBSCRIBER_BOOL) p[key] = boolVal(get(key), cur?.[key] ?? false);
-  p.old_expiry_date = dateVal(get('old_expiry_date'), 'old_expiry_date');
+  p.old_expiry_date = dateField('old_expiry_date');
   p.excess_amount = moneyVal(get('excess_amount') ?? 0, 'excess_amount') ?? 0;
 
   await validateReferences(p);
@@ -723,7 +728,8 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// KYC
+// KYC — legacy subscriber-scoped surface. The richer review workflow lives in
+// /api/kyc; these routes remain for the subscriber detail panel and integrations.
 router.get('/:id/kyc', asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const r = await pool.query('SELECT * FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [req.params.id]);
@@ -733,55 +739,95 @@ router.get('/:id/kyc', asyncHandler(async (req, res) => {
 router.post('/:id/kyc', upload.single('file'), asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   if (!req.file) return res.status(400).json({ message: 'file is required' });
-  const docType = KYC_DOC_TYPES.includes(str(req.body.doc_type).toUpperCase()) ? str(req.body.doc_type).toUpperCase() : 'OTHER';
-  const r = await pool.query(
-    'INSERT INTO kyc_documents(subscriber_id,doc_type,file_name,file_path,mime_type) VALUES($1,$2,$3,$4,$5) RETURNING *',
-    [req.params.id, docType, req.file.originalname, req.file.filename, req.file.mimetype]
-  );
-  await auditLog({ ...reqActor(req), action: 'SUBSCRIBER_KYC_UPLOAD', entity_type: 'subscriber', entity_id: req.params.id, details: { doc_type: docType, file_name: req.file.originalname } });
-  res.status(201).json(r.rows[0]);
+  if (req.user?.role === 'RESELLER' && !await canResellerUploadKyc()) {
+    return res.status(403).json({ message: 'Reseller KYC uploads are disabled by policy' });
+  }
+  assertAllowedKycFileBuffer(req.file.buffer, req.file.mimetype);
+  const b = req.body || {};
+  let encrypted: ReturnType<typeof encryptKycBuffer> | null = null;
+  let doc;
+  try {
+    const checksum = sha256Buffer(req.file.buffer); // checksum of plaintext before encryption
+    encrypted = encryptKycBuffer(req.file.buffer, uploadDir);
+    doc = await createKycDocument({
+      subscriberId: req.params.id,
+      docType: normalizeDocType(b.doc_type),
+      fileName: req.file.originalname,
+      filePath: path.basename(encrypted.filePath),
+      mimeType: req.file.mimetype,
+      source: 'STAFF',
+      actor: { id: req.user?.id, name: req.user?.name || req.user?.email, role: req.user?.role, ip: req.ip },
+      checksum,
+      documentNumber: b.document_number,
+      issuer: b.issuer,
+      issueDate: b.issue_date,
+      expiresAt: b.expires_at,
+      verificationMethod: b.verification_method,
+      verificationReference: b.verification_reference,
+      reuploadOf: b.reupload_of || null,
+      encryption: encrypted,
+    });
+  } catch (e) {
+    secureUnlinkKycFile(encrypted?.filePath);
+    throw e;
+  }
+  res.status(201).json(doc);
 }));
 
 router.delete('/:id/kyc/:docId', asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
-  const r = await pool.query('SELECT * FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, req.params.id]);
-  if (r.rows[0]) {
-    const fp = path.join(uploadDir, r.rows[0].file_path);
-    if (fs.existsSync(fp)) fs.unlinkSync(fp);
-    await pool.query('DELETE FROM kyc_documents WHERE id=$1', [req.params.docId]);
+  if (req.user?.role === 'RESELLER' && !await canResellerUploadKyc()) {
+    return res.status(403).json({ message: 'Reseller KYC changes are disabled by policy' });
   }
+  const doc = await deleteKycDocument({
+    documentId: req.params.docId,
+    subscriberId: req.params.id,
+    actor: { id: req.user?.id, name: req.user?.name || req.user?.email, role: req.user?.role, ip: req.ip },
+  });
+  if (!doc) return res.status(404).json({ message: 'KYC document not found' });
   res.json({ ok: true });
 }));
 
+// Backwards-compatible status endpoint. Reasons and reviewer metadata are now
+// persisted by applyKycDecision; /api/kyc/documents/:id/decision is preferred.
 router.put('/:id/kyc/:docId/status', asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
+  if (!canReviewKyc(req)) return res.status(403).json({ message: 'KYC review is restricted to staff reviewer roles' });
   const b = req.body || {};
   const newStatus = String(b.status || '').toUpperCase();
   if (!['APPROVED', 'REJECTED'].includes(newStatus)) return res.status(400).json({ message: 'status must be APPROVED or REJECTED' });
-  const r = await pool.query('SELECT * FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, req.params.id]);
-  if (!r.rows[0]) return res.status(404).json({ message: 'KYC document not found' });
-  await pool.query('UPDATE kyc_documents SET status=$1 WHERE id=$2', [newStatus, req.params.docId]);
-  await auditLog({ ...reqActor(req), action: newStatus === 'APPROVED' ? 'SUBSCRIBER_KYC_APPROVED' : 'SUBSCRIBER_KYC_REJECTED', entity_type: 'subscriber', entity_id: req.params.id, details: { doc_id: req.params.docId, doc_type: r.rows[0].doc_type } });
-  const updated = (await pool.query('SELECT * FROM kyc_documents WHERE id=$1', [req.params.docId])).rows[0];
-  res.json({ ok: true, data: updated });
+  const found = await pool.query('SELECT id FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, req.params.id]);
+  if (!found.rows[0]) return res.status(404).json({ message: 'KYC document not found' });
+  const doc = await applyKycDecision({
+    documentId: req.params.docId,
+    decision: newStatus === 'APPROVED' ? 'APPROVE' : 'REJECT',
+    reason: b.reason || b.rejection_reason,
+    evidenceRef: b.evidence_ref,
+    actor: { id: req.user?.id, name: req.user?.name || req.user?.email, role: req.user?.role, ip: req.ip },
+  });
+  res.json({ ok: true, data: doc });
 }));
 
 // Ownership-checked KYC download. Replaces public static serving of /uploads/kyc.
 router.get('/:id/kyc/:docId/file', asyncHandler(async (req, res) => {
   if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
   const r = await pool.query(
-    'SELECT file_path, file_name, mime_type FROM kyc_documents WHERE id=$1 AND subscriber_id=$2',
+    `SELECT file_path, file_name, mime_type, encryption_alg, encryption_iv, encryption_auth_tag, encryption_key_id
+     FROM kyc_documents WHERE id=$1 AND subscriber_id=$2`,
     [req.params.docId, req.params.id],
   );
   const doc = r.rows[0];
   if (!doc) return res.status(404).json({ message: 'Document not found' });
-  const filePath = path.resolve(uploadDir, doc.file_path);
-  if (!filePath.startsWith(uploadDir + path.sep)) return res.status(400).json({ message: 'Invalid document path' });
-  if (!fs.existsSync(filePath)) return res.status(404).json({ message: 'Document file not found' });
+  const plain = readKycDocument(doc); // decrypted and authenticated before anything is sent
   const safeName = String(doc.file_name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
-  res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+  const mime = String(doc.mime_type || '');
+  res.setHeader('Content-Type', /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/i.test(mime) ? mime : 'application/octet-stream');
+  res.setHeader('Content-Length', String(plain.length));
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', 'sandbox');
   res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
-  res.sendFile(filePath);
+  await auditLog({ ...reqActor(req), action: 'KYC_DOCUMENT_VIEWED', entity_type: 'kyc_document', entity_id: req.params.docId, details: { subscriber_id: req.params.id } });
+  res.end(plain);
 }));
 
 /* ------------------------------------------------------------------ */

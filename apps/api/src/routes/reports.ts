@@ -17,7 +17,7 @@ router.get('/overview', asyncHandler(async (req,res)=>{
   const [subs, inv, pay, tickets, resellers] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int total, COUNT(*) FILTER (WHERE status='ACTIVE')::int active, COUNT(*) FILTER (WHERE status='SUSPENDED')::int suspended, COUNT(*) FILTER (WHERE status='PENDING')::int pending, COALESCE(SUM(balance),0)::numeric(14,2) as total_due FROM subscribers`),
     pool.query(`SELECT COUNT(*)::int total, COUNT(*) FILTER (WHERE status IN ('UNPAID','PARTIAL','OVERDUE'))::int due_count, COALESCE(SUM(due_amount) FILTER (WHERE status IN ('UNPAID','PARTIAL','OVERDUE')),0)::numeric(14,2) outstanding, COALESCE(SUM(total_amount),0)::numeric(14,2) billed FROM invoices`).catch(()=>({rows:[{}]})),
-    pool.query(`SELECT COALESCE(SUM(amount) FILTER (WHERE status='COMPLETED' AND created_at::date=CURRENT_DATE),0)::numeric(14,2) today, COALESCE(SUM(amount) FILTER (WHERE status='COMPLETED' AND date_trunc('month',created_at)=date_trunc('month',now())),0)::numeric(14,2) month FROM payments`).catch(()=>({rows:[{}]})),
+    pool.query(`SELECT COALESCE(SUM(amount) FILTER (WHERE status='COMPLETED' AND created_at::date=CURRENT_DATE),0)::numeric(14,2) today, COALESCE(SUM(amount) FILTER (WHERE status='COMPLETED' AND date_trunc('month',created_at)=date_trunc('month',now())),0)::numeric(14,2) AS "month" FROM payments`).catch(()=>({rows:[{}]})),
     pool.query(`SELECT COUNT(*)::int total, COUNT(*) FILTER (WHERE status NOT IN ('RESOLVED','CLOSED'))::int open, COUNT(*) FILTER (WHERE sla_breached=true)::int breached FROM tickets`).catch(()=>({rows:[{}]})),
     pool.query(`SELECT COUNT(*)::int total, COALESCE(SUM(wallet_balance),0)::numeric(14,2) wallet_total FROM resellers`).catch(()=>({rows:[{}]})),
   ]);

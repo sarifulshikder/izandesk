@@ -96,17 +96,37 @@ export async function generateInvoiceForSubscriber(sub: AnyObj, opts: { cycleDat
   }
   const policy = await getDefaultPolicy();
   const due = addDays(new Date(), 7);
-  const invoice_number = await nextInvoiceNumber();
   const total = +amount.toFixed(2);
-  const ins = await pool.query(`INSERT INTO invoices (
-      invoice_number, subscriber_id, client_code, subscriber_name, username, billing_cycle, bill_month,
-      period_start, period_end, issue_date, due_date, amount, discount, tax, total_amount, paid_amount, due_amount,
-      status, notes, prorated, prorate_ratio, metadata
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CURRENT_DATE,$10,$11,0,0,$12,0,$12,'UNPAID',$13,$14,$15,$16::jsonb) RETURNING *`,
-    [invoice_number, sub.id, sub.client_code, sub.full_name, sub.username || null, billMonth, billMonth,
-     ymd(pStart), ymd(periodEnd), ymd(due), amount, total, note, prorated, prorate_ratio,
-     JSON.stringify({ package_name: sub.package_name, monthly_bill: monthly, policy: policy.name })]
-  );
+  // Apply any advance credit (overpayments from previous payments) to this
+  // invoice so the balance is not stranded on the subscriber record.
+  const creditRow = await pool.query('SELECT COALESCE(excess_amount,0)::numeric AS excess FROM subscribers WHERE id=$1', [sub.id]).catch(() => ({ rows: [] as any[] }));
+  const credit = +Math.min(total, Math.max(0, Number(creditRow.rows[0]?.excess || 0))).toFixed(2);
+  const dueAmount = +Math.max(0, total - credit).toFixed(2);
+  if (credit > 0) {
+    await pool.query('UPDATE subscribers SET excess_amount=COALESCE(excess_amount,0)-$2, updated_at=now() WHERE id=$1', [sub.id, credit]).catch(()=>{});
+  }
+  let ins: any = null;
+  // nextInvoiceNumber() derives its sequence from a COUNT, so two concurrent
+  // batches can compute the same number. invoice_number is UNIQUE — retry with
+  // a fresh sequence instead of surfacing a 500 (and losing one invoice).
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const invoice_number = await nextInvoiceNumber();
+    try {
+      ins = await pool.query(`INSERT INTO invoices (
+          invoice_number, subscriber_id, client_code, subscriber_name, username, billing_cycle, bill_month,
+          period_start, period_end, issue_date, due_date, amount, discount, tax, total_amount, paid_amount, due_amount,
+          status, notes, prorated, prorate_ratio, metadata
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CURRENT_DATE,$10,$11,$12,0,$13,0,$14,$15,$16,$17,$18,$19::jsonb) RETURNING *`,
+        [invoice_number, sub.id, sub.client_code, sub.full_name, sub.username || null, billMonth, billMonth,
+         ymd(pStart), ymd(periodEnd), ymd(due), amount, credit, total, dueAmount,
+         dueAmount <= 0 ? 'PAID' : 'UNPAID', note, prorated, prorate_ratio,
+         JSON.stringify({ package_name: sub.package_name, monthly_bill: monthly, policy: policy.name, advance_credit_applied: credit })]
+      );
+      break;
+    } catch (e: any) {
+      if (e?.code !== '23505' || attempt === 4) throw e;
+    }
+  }
   const inv = ins.rows[0];
   await pool.query(`INSERT INTO invoice_items (invoice_id, description, item_type, quantity, unit_price, amount, metadata)
     VALUES ($1,$2,'SUBSCRIPTION',1,$3,$3,$4::jsonb)`,
@@ -265,7 +285,7 @@ export async function evaluateDuePolicies() {
     if (!due || (!(currentDue > 0) && !validityExpired)) {
       // no dues and validity not expired: if previously warned/grace/walled but not manually suspended, clear stage
       if (!validityExpired && ['WARNING','GRACE','WALLED_GARDEN'].includes(String(ref.suspension_stage || 'NONE')) && !['SUSPENDED', 'EXPIRED'].includes(String(ref.status || ''))) {
-        await pool.query(`UPDATE subscribers SET suspension_stage='NONE', grace_until=NULL, walled_garden=false, suspension_reason=NULL, updated_at=now() WHERE id=$1`, [s.id]);
+        await pool.query(`UPDATE subscribers SET suspension_stage='NONE', grace_until=NULL, walled_garden=false, suspension_reason=NULL, suspension_source='NONE', updated_at=now() WHERE id=$1`, [s.id]);
         actions.push({ subscriber_id: s.id, action: 'CLEARED', stage: 'NONE' });
       }
       continue;
@@ -320,8 +340,8 @@ export async function evaluateDuePolicies() {
     const statusChanged = targetStatus !== String(ref.status || s.status);
     const walledChanged = walled !== !!(ref.walled_garden ?? s.walled_garden);
     if (stageChanged || statusChanged || walledChanged) {
-      await pool.query(`UPDATE subscribers SET suspension_stage=$2, status=$3, walled_garden=$4, grace_until=$5, suspension_reason=$6, updated_at=now() WHERE id=$1`,
-        [s.id, targetStage, targetStatus, walled, graceUntil ? graceUntil.toISOString() : null, reason]);
+      await pool.query(`UPDATE subscribers SET suspension_stage=$2, status=$3, walled_garden=$4, grace_until=$5, suspension_reason=$6, suspension_source=$7, updated_at=now() WHERE id=$1`,
+        [s.id, targetStage, targetStatus, walled, graceUntil ? graceUntil.toISOString() : null, reason, targetStage === 'NONE' ? 'NONE' : 'POLICY']);
       await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,$2,$3,$4,$5::jsonb,$6)`,
         [s.id, statusChanged ? 'STATUS_CHANGE' : 'STAGE_CHANGE', targetStage, reason, JSON.stringify({ daysOverdue, daysToDue, currentDue, due: due ? ymd(due) : null, walled, validityExpired }), 'policy_engine']);
 
@@ -330,7 +350,18 @@ export async function evaluateDuePolicies() {
         try {
           const profileOverride = walled ? (policy.walled_garden_profile || 'izn-walled-garden') : undefined;
           const coaAction: 'DISCONNECT'|'COA' = ((targetStatus === 'SUSPENDED' || targetStatus === 'EXPIRED') && !walled) ? 'DISCONNECT' : 'COA';
-          await applyProvisioningState(s.id, { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction, profileOverride, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? 'izn-walled-garden' : undefined });
+          const applied = await applyProvisioningState(s.id, { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction, profileOverride, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? 'izn-walled-garden' : undefined });
+          // applyProvisioningState returns ok:true even when an individual
+          // router/RADIUS/CoA step failed. Do not silently record a successful
+          // enforcement when the subscriber state was changed but the network
+          // was not.
+          const failed = Object.entries(applied?.results || {})
+            .filter(([, v]: any) => v && v.ok === false && !v.skipped)
+            .map(([k]) => k);
+          if (failed.length) {
+            await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'ENFORCEMENT_ERROR',$2,$3,$4::jsonb,'policy_engine')`,
+              [s.id, targetStage, `Enforcement failed: ${failed.join(', ')}`, JSON.stringify({ failed, results: applied.results })]);
+          }
         } catch (e:any) {
           await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'ENFORCEMENT_ERROR',$2,$3,$4::jsonb,'policy_engine')`, [s.id, targetStage, e.message, JSON.stringify({})]);
         }
@@ -341,10 +372,18 @@ export async function evaluateDuePolicies() {
   return { ok: true, evaluated: subs.length, actions, policy: { grace_days: graceDays, warning_days: warnBefore, auto_suspend: !!policy.auto_suspend, isolate_on_suspend: !!policy.isolate_on_suspend, enable_walled_garden: !!policy.enable_walled_garden } };
 }
 
-export async function reactivateSubscriber(subscriberId: string, reason = 'Payment confirmed') {
+export async function reactivateSubscriber(subscriberId: string, reason = 'Payment confirmed', opts: { force?: boolean } = {}) {
   const start = Date.now();
+  const current = (await pool.query('SELECT suspension_source, suspension_reason FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
+  const manuallySuspended = current && (
+    String(current.suspension_source || '').toUpperCase() === 'MANUAL' ||
+    /^manual/i.test(String(current.suspension_reason || ''))
+  );
+  if (manuallySuspended && !opts.force) {
+    return { ok: true, skipped: true, reason: 'Manual suspension is preserved; use the explicit reactivate action' };
+  }
   // activate and clear suspension/walled garden
-  await pool.query(`UPDATE subscribers SET status='ACTIVE', suspension_stage='NONE', walled_garden=false, grace_until=NULL, suspension_reason=NULL, updated_at=now() WHERE id=$1`, [subscriberId]);
+  await pool.query(`UPDATE subscribers SET status='ACTIVE', suspension_stage='NONE', walled_garden=false, grace_until=NULL, suspension_reason=NULL, suspension_source='NONE', updated_at=now() WHERE id=$1`, [subscriberId]);
   const applied = await applyProvisioningState(subscriberId, { status: 'ACTIVE', stage: SUSPENSION_STAGES.NONE, walled_garden: false, reason, sendCoa: true, coaAction: 'COA' });
   await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'REACTIVATED','NONE',$2,$3::jsonb,'payment')`, [subscriberId, reason, JSON.stringify({ duration_ms: Date.now()-start, target_ms: 2000 })]);
   return { ok: true, duration_ms: Date.now()-start, target_ms: 2000, applied };
@@ -373,6 +412,14 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
       return { ok: true, duplicate: true, payment: p, invoice: inv, subscriber_id: p.subscriber_id, reactivation: null };
     }
   }
+  if (input.dedupe_key) {
+    const existingByKey = await pool.query(`SELECT * FROM payments WHERE idempotency_key=$1 ORDER BY created_at DESC LIMIT 1`, [input.dedupe_key]);
+    if (existingByKey.rows[0] && String(existingByKey.rows[0].status).toUpperCase() === 'COMPLETED') {
+      const p = existingByKey.rows[0];
+      const inv = p.invoice_id ? (await pool.query('SELECT * FROM invoices WHERE id=$1', [p.invoice_id])).rows[0] : null;
+      return { ok: true, duplicate: true, payment: p, invoice: inv, subscriber_id: p.subscriber_id, reactivation: null };
+    }
+  }
 
   let invoice = null as any;
   if (input.invoice_id) {
@@ -393,32 +440,60 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
   }
 
   const payment_ref = input.payment_ref || `PAY-${Date.now()}-${Math.random().toString(36).slice(2,8).toUpperCase()}`;
-  const payRes = await pool.query(`INSERT INTO payments (payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, trx_id, payer_number, gateway_response, verified_at, idempotency_key)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb, CASE WHEN $8='COMPLETED' THEN now() ELSE NULL END, $12)
-    ON CONFLICT (payment_ref) DO UPDATE SET
-      status=CASE WHEN payments.status='COMPLETED' THEN payments.status ELSE EXCLUDED.status END,
-      trx_id=COALESCE(EXCLUDED.trx_id,payments.trx_id),
-      payer_number=COALESCE(EXCLUDED.payer_number,payments.payer_number),
-      gateway_response=COALESCE(EXCLUDED.gateway_response,payments.gateway_response),
-      verified_at=COALESCE(payments.verified_at, EXCLUDED.verified_at),
-      updated_at=now()
-    RETURNING *`,
-    [payment_ref, invoice?.id || input.invoice_id || null, subscriberId, input.gateway, input.method || null, amount, input.currency || 'BDT', status, trx, input.payer_number || null, JSON.stringify(input.raw || {}), input.dedupe_key || null]
-  );
+  let payRes: any;
+  try {
+    payRes = await pool.query(`INSERT INTO payments (payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, trx_id, payer_number, gateway_response, verified_at, idempotency_key)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb, CASE WHEN $8='COMPLETED' THEN now() ELSE NULL END, $12)
+      ON CONFLICT (payment_ref) DO UPDATE SET
+        status=CASE WHEN payments.status='COMPLETED' THEN payments.status ELSE EXCLUDED.status END,
+        trx_id=COALESCE(EXCLUDED.trx_id,payments.trx_id),
+        payer_number=COALESCE(EXCLUDED.payer_number,payments.payer_number),
+        gateway_response=COALESCE(EXCLUDED.gateway_response,payments.gateway_response),
+        verified_at=COALESCE(payments.verified_at, EXCLUDED.verified_at),
+        updated_at=now()
+      RETURNING *`,
+      [payment_ref, invoice?.id || input.invoice_id || null, subscriberId, input.gateway, input.method || null, amount, input.currency || 'BDT', status, trx, input.payer_number || null, JSON.stringify(input.raw || {}), input.dedupe_key || null]
+    );
+  } catch (e: any) {
+    // Two concurrent deliveries can pass the read checks above. The database
+    // uniqueness constraint is the real boundary: treat a conflict as a
+    // duplicate and never apply money/state side effects twice.
+    if (e?.code === '23505') {
+      const existing = trx
+        ? await pool.query(`SELECT * FROM payments WHERE gateway=$1 AND trx_id=$2 ORDER BY created_at DESC LIMIT 1`, [input.gateway, trx])
+        : input.dedupe_key
+          ? await pool.query(`SELECT * FROM payments WHERE idempotency_key=$1 ORDER BY created_at DESC LIMIT 1`, [input.dedupe_key])
+          : { rows: [] as any[] };
+      if (existing.rows[0]) {
+        const p = existing.rows[0];
+        const inv = p.invoice_id ? (await pool.query('SELECT * FROM invoices WHERE id=$1', [p.invoice_id])).rows[0] : null;
+        return { ok: true, duplicate: true, payment: p, invoice: inv, subscriber_id: p.subscriber_id, reactivation: null };
+      }
+    }
+    throw e;
+  }
   const payment = payRes.rows[0];
 
   let updatedInvoice = invoice;
   const applyToInvoice = async (inv: any, applyAmount: number) => {
     const total = Number(inv.total_amount || inv.amount || 0);
     const paidBefore = Number(inv.paid_amount || 0);
-    const paid = +Math.min(total, paidBefore + applyAmount).toFixed(2);
-    const dueAmt = +Math.max(0, total - paid).toFixed(2);
+    // due_amount is authoritative: waivers/credits may make it differ from
+    // total_amount - paid_amount. Never recreate a waived due balance.
+    const dueBefore = Number.isFinite(Number(inv.due_amount))
+      ? Math.max(0, Number(inv.due_amount))
+      : Math.max(0, total - paidBefore);
+    const take = Math.min(Math.max(0, applyAmount), dueBefore);
+    const paid = +Math.min(total, paidBefore + take).toFixed(2);
+    const dueAmt = +Math.max(0, dueBefore - take).toFixed(2);
     const invStatus = dueAmt <= 0 ? 'PAID' : (paid > 0 ? 'PARTIAL' : inv.status);
     return (await pool.query(`UPDATE invoices SET paid_amount=$2, due_amount=$3, status=$4, paid_at=CASE WHEN $4='PAID' THEN COALESCE(paid_at, now()) ELSE paid_at END, updated_at=now() WHERE id=$1 RETURNING *`,
       [inv.id, paid, dueAmt, invStatus])).rows[0];
   };
 
+  let overpayment = 0;
   if (invoice && status === 'COMPLETED') {
+    overpayment = +Math.max(0, amount - Math.max(0, Number(invoice.due_amount || 0))).toFixed(2);
     updatedInvoice = await applyToInvoice(invoice, amount);
   } else if (!invoice && subscriberId && status === 'COMPLETED') {
     // Advance/unallocated payment: apply to open invoices (oldest first)
@@ -432,7 +507,12 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
       if (!updatedInvoice) updatedInvoice = upd;
       remaining = +(remaining - take).toFixed(2);
     }
-    // Any remaining amount is kept as overpayment (recorded as payment; invoices fully settled). No negative-due/credit ledger yet.
+    overpayment = +Math.max(0, remaining).toFixed(2);
+  }
+  // Money received beyond what was invoiced is retained as an advance credit
+  // instead of silently disappearing. It is deducted from the next invoice.
+  if (overpayment > 0 && subscriberId) {
+    await pool.query(`UPDATE subscribers SET excess_amount=COALESCE(excess_amount,0)+$2, updated_at=now() WHERE id=$1`, [subscriberId, overpayment]).catch(()=>{});
   }
 
   let reactivation: any = null;
@@ -472,30 +552,6 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
         }
       }
       await auditLog({ action:'PAYMENT_COMPLETED', entity_type:'payment', entity_id: payment.id||ref, details:{ gateway: input.gateway, amount, trx_id: trx, subscriber_id: subscriberId, invoice_id: updatedInvoice?.id || invoice?.id || null, duplicate:false } }).catch(()=>{});
-    } catch {}
-  }
-
-  // Best-effort finance posting & audit for completed payments
-  if (status === 'COMPLETED') {
-    try {
-      const ref = payment.payment_ref || payment_ref;
-      const exists = await pool.query(`SELECT 1 FROM finance_transactions WHERE reference_id=$1 LIMIT 1`, [ref]).catch(()=>({rows:[]}));
-      if (!exists.rows?.length) {
-        const method = String(input.gateway||input.method||'CASH').toUpperCase();
-        const accCode = method.includes('BANK')?'1010':(method.match(/BKASH|NAGAD|ROCKET|MFS/)?'1020':'1000');
-        const cashAccR = await pool.query('SELECT id FROM finance_accounts WHERE code=$1 LIMIT 1',[accCode]).catch(()=>({rows:[]}));
-        const revAccR = await pool.query("SELECT id FROM finance_accounts WHERE code='4000' LIMIT 1").catch(()=>({rows:[]}));
-        await pool.query(`INSERT INTO finance_transactions(txn_date,txn_type,method,amount,currency,reference_type,reference_id,subscriber_id,description,created_by) VALUES(COALESCE($1::date,CURRENT_DATE),'COLLECTION',$2,$3,$4,'PAYMENT',$5,$6,$7,'system')`,
-          [payment.verified_at||payment.created_at, input.gateway||input.method||'CASH', amount, input.currency||'BDT', ref, subscriberId, `Payment ${ref} (${input.gateway||''}${trx?` ${trx}`:''})`]).catch(()=>{});
-        const cashAcc=cashAccR.rows[0]?.id, revAcc=revAccR.rows[0]?.id;
-        if(cashAcc && revAcc){
-          const je=await pool.query(`INSERT INTO finance_journal_entries(entry_no,entry_date,description,source_type,source_id,posted,created_by) VALUES($1,COALESCE($2::date,CURRENT_DATE),$3,'PAYMENT',$4,true,'system') RETURNING id`,
-            [`JE-PAY-${Date.now()}-${Math.random().toString(36).slice(2,5).toUpperCase()}`, payment.verified_at||payment.created_at, `Payment ${ref}`, String(ref)]).catch(()=>({rows:[]}));
-          const jid=je.rows[0]?.id;
-          if(jid){ await pool.query(`INSERT INTO finance_journal_lines(entry_id,account_id,debit,credit,memo) VALUES($1,$2,$3,0,'cash/mfs'),($1,$4,0,$3,'revenue')`, [jid,cashAcc,amount,revAcc]).catch(()=>{}); }
-        }
-      }
-      await auditLog({ action:'PAYMENT_COMPLETED', entity_type:'payment', entity_id: payment.id||ref, details:{ gateway: input.gateway, amount, trx_id: trx, subscriber_id: subscriberId } }).catch(()=>{});
     } catch {}
   }
 
@@ -756,6 +812,8 @@ export function startBillingScheduler() {
     try { await ensureOverdueInvoiceStatuses(); await evaluateDuePolicies(); } catch (e:any) { console.error('[BillingScheduler] error', e.message); }
   };
   const runMsg = async () => {
+    const got = await tryAcquireSchedulerLock('messaging-sweep', 9 * 60 * 1000).catch(()=>false);
+    if (!got) return;
     try { await runMessagingSchedulerSweep(); } catch (e:any) { console.error('[MessagingScheduler] error', e.message); }
   };
   setTimeout(run, 5000);
@@ -771,34 +829,68 @@ export async function ingestMfsSmsEvent(input: { gateway?: string; sender?: stri
   const message = String(input.message || input.payload?.text || input.payload?.body || '').trim();
   const trxId = input.trx_id ? String(input.trx_id).trim() : null;
   const amount = input.amount != null ? Number(input.amount) : null;
-  const ins = await pool.query(`INSERT INTO payment_sms_events(gateway,sender,message,trx_id,amount,payer_number,status,payload)
-    VALUES($1,$2,$3,$4,$5,$6,'RECEIVED',$7::jsonb) RETURNING *`,
-    [gateway, input.sender || input.payer_number || null, message || null, trxId, Number.isFinite(amount as any) ? amount : null, input.payer_number || input.sender || null, JSON.stringify(input.payload || {})]);
+  const payer = input.payer_number || input.sender || null;
 
-  const ev = ins.rows[0];
+  // Reuse the row for a retried transaction ID. The unique index below makes
+  // this safe even when two forwarders deliver the same SMS concurrently.
+  let ev: any = null;
+  if (trxId) {
+    const prior = await pool.query(`SELECT * FROM payment_sms_events WHERE gateway=$1 AND trx_id=$2 ORDER BY created_at DESC LIMIT 1`, [gateway, trxId]);
+    const old = prior.rows[0];
+    if (old && ['MATCHED', 'MATCH_FOUND'].includes(String(old.status))) {
+      return { ok: true, duplicate: true, event: old, match: null, recorded: null };
+    }
+    if (old) {
+      ev = (await pool.query(`UPDATE payment_sms_events SET sender=$2, message=$3, amount=$4, payer_number=$5, payload=$6::jsonb, status='RECEIVED', processed_at=NULL WHERE id=$1 RETURNING *`,
+        [old.id, input.sender || payer, message || null, Number.isFinite(amount as any) ? amount : null, payer, JSON.stringify(input.payload || {})])).rows[0];
+    }
+  }
+  if (!ev) {
+    ev = (await pool.query(`INSERT INTO payment_sms_events(gateway,sender,message,trx_id,amount,payer_number,status,payload)
+      VALUES($1,$2,$3,$4,$5,$6,'RECEIVED',$7::jsonb) RETURNING *`,
+      [gateway, input.sender || payer, message || null, trxId, Number.isFinite(amount as any) ? amount : null, payer, JSON.stringify(input.payload || {})])).rows[0];
+  }
+
   let match: any = null;
   let recorded: any = null;
+  let reason: string | undefined;
 
-  // best-effort auto-match: prefer existing pending payment by trx/ref hints, else open invoice by amount+recent
-  if (trxId) {
-    const byTrx = await pool.query(`SELECT * FROM payments WHERE trx_id=$1 ORDER BY created_at DESC LIMIT 1`, [trxId]);
-    if (byTrx.rows[0]) match = { type: 'payment', payment: byTrx.rows[0] };
-  }
-  if (!match && ev.amount && Number(ev.amount) > 0) {
-    const inv = await pool.query(`SELECT i.* FROM invoices i
-      WHERE i.status IN ('UNPAID','PARTIAL','OVERDUE') AND ABS(i.due_amount - $1::numeric) < 0.01
-      ORDER BY i.due_date ASC NULLS LAST, i.created_at DESC LIMIT 1`, [ev.amount]);
-    if (inv.rows[0]) match = { type: 'invoice', invoice: inv.rows[0] };
-  }
-
-  if (match?.payment && String(match.payment.status).toUpperCase() !== 'COMPLETED') {
-    recorded = await recordPaymentAndReactivate({ gateway, amount: Number(ev.amount || match.payment.amount || 0), payment_ref: match.payment.payment_ref, invoice_id: match.payment.invoice_id, subscriber_id: match.payment.subscriber_id, trx_id: trxId || undefined, method: 'mfs_sms', payer_number: ev.payer_number || undefined, raw: { sms_event_id: ev.id, message }, status: 'COMPLETED' });
-  } else if (match?.invoice) {
-    recorded = await recordPaymentAndReactivate({ gateway, amount: Number(ev.amount || match.invoice.due_amount || 0), invoice_id: match.invoice.id, subscriber_id: match.invoice.subscriber_id, trx_id: trxId || undefined, method: 'mfs_sms', payer_number: ev.payer_number || undefined, raw: { sms_event_id: ev.id, message }, status: 'COMPLETED' });
+  // Amount-only matching can pay any open invoice with the same amount, so it
+  // is no longer used. An SMS must carry a transaction ID that binds it to a
+  // checkout/payment already created by this system.
+  if (!trxId) {
+    reason = 'SMS event has no transaction id; it was stored for manual reconciliation only';
+  } else {
+    const byTrx = await pool.query(`SELECT * FROM payments WHERE gateway=$1 AND trx_id=$2 ORDER BY created_at DESC LIMIT 1`, [gateway, trxId]);
+    const pending = byTrx.rows[0];
+    if (pending && !['COMPLETED', 'CANCELLED', 'FAILED', 'REJECTED'].includes(String(pending.status).toUpperCase())) {
+      match = { type: 'payment', payment: pending };
+      const pendingAmount = Number(pending.amount || 0);
+      const smsAmount = Number(ev.amount || pendingAmount);
+      if (!(smsAmount > 0) || smsAmount > pendingAmount + 0.01) {
+        match = null;
+        reason = 'SMS amount does not match the pending payment';
+      } else {
+        recorded = await recordPaymentAndReactivate({
+          gateway,
+          amount: +Math.min(smsAmount, pendingAmount).toFixed(2),
+          payment_ref: pending.payment_ref,
+          invoice_id: pending.invoice_id,
+          subscriber_id: pending.subscriber_id,
+          trx_id: trxId,
+          method: 'mfs_sms',
+          payer_number: ev.payer_number || undefined,
+          raw: { sms_event_id: ev.id, message },
+          status: 'COMPLETED',
+        });
+      }
+    } else {
+      reason = pending ? 'The transaction has already been settled' : 'No pending payment matched this transaction id';
+    }
   }
 
   const status = recorded?.ok ? 'MATCHED' : (match ? 'MATCH_FOUND' : 'UNMATCHED');
-  const upd = await pool.query(`UPDATE payment_sms_events SET status=$2, matched_payment_ref=$3, matched_invoice_id=$4, processed_at=CASE WHEN $2 IN ('MATCHED','MATCH_FOUND') THEN now() ELSE processed_at END WHERE id=$1 RETURNING *`,
-    [ev.id, status, recorded?.payment?.payment_ref || match?.payment?.payment_ref || null, recorded?.invoice?.id || match?.invoice?.id || null]);
-  return { ok: true, event: upd.rows[0], match, recorded };
+  const upd = await pool.query(`UPDATE payment_sms_events SET status=$2, matched_payment_ref=$3, matched_invoice_id=$4, processed_at=CASE WHEN $3 IS NOT NULL THEN now() ELSE processed_at END WHERE id=$1 RETURNING *`,
+    [ev.id, status, recorded?.payment?.payment_ref || null, recorded?.invoice?.id || null]);
+  return { ok: true, event: upd.rows[0], match, recorded, ...(reason ? { reason } : {}) };
 }

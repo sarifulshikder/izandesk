@@ -36,7 +36,7 @@ export default function LiveSubscribersPage() {
     if (!token) return;
     setLoading(true); setError(null);
     try {
-      const res = await apiFetch<{ data: AnyObj[]; summary: AnyObj }>('/api/network/sessions', {}, token);
+      const res = await apiFetch<{ data: AnyObj[]; summary: AnyObj }>('/api/network/sessions?nopoll=1', {}, token);
       setSessions(res.data || []);
       setSummary(res.summary || {});
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
@@ -63,7 +63,7 @@ export default function LiveSubscribersPage() {
         <div>
           <span className="page-eyebrow">Network operations · Live sessions</span>
           <h1 className="page-title">Live Subscribers (Online Sessions)</h1>
-          <p className="page-subtitle">Real-time PPPoE/RADIUS subscriber sessions, throughput, router/NAS binding and provisioning mode (auto-refreshing).</p>
+          <p className="page-subtitle">PPPoE/RADIUS subscriber sessions, router/NAS binding and provisioning mode from last known state (auto-refreshing, no router polling).</p>
         </div>
         <div className="page-actions">
           <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
@@ -93,7 +93,7 @@ export default function LiveSubscribersPage() {
       </div>
 
       <div className="card overflow-hidden">
-        <div className="card-header text-xs text-muted-foreground">Live data source: <code className="font-mono">/api/network/sessions</code> (polling). SSE: <code className="font-mono">/api/network/sessions/stream</code>, WS: <code className="font-mono">/api/network/sessions/ws</code>.</div>
+        <div className="card-header text-xs text-muted-foreground">Data source: <code className="font-mono">/api/network/sessions?nopoll=1</code> (DB polling, no router login). SSE/WS endpoints exist for live streams when explicitly used.</div>
         <div className="table-wrap overflow-auto">
           <table className="table table-hover min-w-[720px]">
             <thead className="sticky top-0 z-10"><tr><th className="text-left px-3 py-2.5">Subscriber</th><th className="text-left px-3 py-2.5">Router / NAS</th><th className="text-left px-3 py-2.5">Session / IP</th><th className="text-left px-3 py-2.5">Throughput</th><th className="text-left px-3 py-2.5">Status</th></tr></thead>

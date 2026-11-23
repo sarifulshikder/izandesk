@@ -16,10 +16,8 @@ export type MfaRecord = {
 };
 
 export async function getMfaRecord(userId: string): Promise<MfaRecord | null> {
-  try {
-    const r = await pool.query('SELECT * FROM user_mfa WHERE user_id=$1', [userId]);
-    return r.rows[0] || null;
-  } catch { return null; }
+  const r = await pool.query('SELECT * FROM user_mfa WHERE user_id=$1', [userId]);
+  return r.rows[0] || null;
 }
 
 export async function mfaEnabled(userId: string): Promise<boolean> {

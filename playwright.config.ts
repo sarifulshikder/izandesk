@@ -1,8 +1,9 @@
 import { defineConfig } from '@playwright/test';
 
 // The dev stack is already running (Docker with hot reload); these tests never
-// start a server themselves. Override with E2E_BASE_URL to target another host.
-const baseURL = process.env.E2E_BASE_URL || 'https://izandesk.duckdns.org';
+// start a server themselves. Default to a local stack so an accidental run can
+// never mutate a production deployment — point at another host explicitly.
+const baseURL = process.env.E2E_BASE_URL || 'http://localhost:3000';
 
 export default defineConfig({
   testDir: './tests',

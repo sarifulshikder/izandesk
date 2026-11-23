@@ -6,6 +6,7 @@ import multer = require('multer');
 import path = require('path');
 import fs = require('fs');
 import { pool } from '../db';
+import { auditLog } from '../integrations/audit';
 import { asyncHandler } from './helpers';
 import { getInvoiceWithItems } from '../integrations/billing';
 import { getKernel } from '../kernel/kernel-instance';
@@ -13,6 +14,10 @@ import { renderSimpleInvoicePdf } from '../integrations/pdf';
 import { nextTicketNo } from '../utils/ticket-no';
 import { hashPassword, verifyPassword, isHashed } from '../utils/password';
 import { validatePasswordPolicy } from '../integrations/settings';
+import { createKycDocument, normalizeDocType, readKycDocument } from '../integrations/kyc';
+import { assertAllowedKycFileBuffer, sha256Buffer } from '../security/file-validation';
+import { encryptKycBuffer, secureUnlinkKycFile } from '../security/file-encryption';
+import { getPortalAcsStatus, updatePortalSubscriberWifi } from './acs';
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
@@ -20,17 +25,10 @@ const uploadDir = path.resolve(__dirname, '../../../uploads/kyc');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const MAX_KYC_BYTES = 5 * 1024 * 1024;
 const KYC_MIME_RE = /^(image\/(png|jpeg|webp|gif)|application\/pdf)$/i;
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    // Unguessable, extension-bounded name — no original filename is persisted.
-    const ext = path.extname(file.originalname).toLowerCase();
-    const safeExt = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.pdf'].includes(ext) ? ext : '';
-    cb(null, crypto.randomUUID() + safeExt);
-  },
-});
+// KYC uploads stay in memory until encrypted; plaintext never lands in the document store.
+const kycStorage = multer.memoryStorage();
 const upload = multer({
-  storage,
+  storage: kycStorage,
   limits: { fileSize: MAX_KYC_BYTES, files: 1 },
   fileFilter: (_req, file, cb) => {
     if (!KYC_MIME_RE.test(file.mimetype)) {
@@ -47,14 +45,14 @@ const upload = multer({
 function tokenVersion(password: any) {
   return crypto.createHash('sha256').update(String(password || '')).digest('hex').slice(0, 16);
 }
-/** Check a portal password against the dedicated bcrypt hash, with fallbacks
- *  for legacy rows that still rely on the cleartext NAS password field. */
+/** Check a portal password against the dedicated portal credential only.
+ *  Client codes, usernames and phone numbers are identifiers, never passwords. */
 async function verifyPortalPassword(pass: string, row: any): Promise<boolean> {
   const portalHash = row.portal_password ? String(row.portal_password) : '';
   if (portalHash) return isHashed(portalHash) ? verifyPassword(pass, portalHash) : portalHash === pass;
   const legacy = row.password ? String(row.password) : '';
   if (legacy) return isHashed(legacy) ? verifyPassword(pass, legacy) : legacy === pass;
-  return pass === String(row.client_code || '') || pass === String(row.username || '') || pass === String(row.phone || '');
+  return false;
 }
 function issuePortalToken(sub: any) {
   return jwt.sign({ type: 'PORTAL_SUBSCRIBER', sub: sub.id, client_code: sub.client_code, ver: tokenVersion(sub.portal_password || sub.password) }, JWT_SECRET, { expiresIn: '7d' });
@@ -365,7 +363,12 @@ router.post('/package-request', portalAuth, asyncHandler(async (req, res) => {
 
 router.get('/documents', portalAuth, asyncHandler(async (req, res) => {
   const id = (req as any).portal.sub;
-  const r = await pool.query('SELECT id, doc_type, file_name, mime_type, uploaded_at FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC', [id]);
+  const r = await pool.query(
+    `SELECT id, doc_type, file_name, mime_type, uploaded_at, status, rejection_reason,
+      expires_at, reviewed_at, verification_method, source
+     FROM kyc_documents WHERE subscriber_id=$1 ORDER BY uploaded_at DESC`,
+    [id]
+  );
   res.json({ ok: true, data: r.rows });
 }));
 
@@ -374,28 +377,50 @@ router.get('/documents/:docId/download', portalAuth, asyncHandler(async (req, re
   const r = await pool.query('SELECT * FROM kyc_documents WHERE id=$1 AND subscriber_id=$2', [req.params.docId, id]);
   const doc = r.rows[0];
   if (!doc) return res.status(404).json({ message: 'Document not found' });
-  const fp = path.resolve(uploadDir, String(doc.file_path || ''));
-  if (!fp.startsWith(uploadDir + path.sep)) return res.status(400).json({ message: 'Invalid document path' });
-  if (!fs.existsSync(fp)) return res.status(404).json({ message: 'File not found' });
+  const plain = readKycDocument(doc); // decrypted and authenticated before anything is sent
   const mime = String(doc.mime_type || '');
   const safeName = String(doc.file_name || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
   res.setHeader('Content-Type', KYC_MIME_RE.test(mime) ? mime : 'application/octet-stream');
+  res.setHeader('Content-Length', String(plain.length));
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Content-Security-Policy', 'sandbox');
   res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-  fs.createReadStream(fp).pipe(res);
+  await auditLog({ actor_id: id, actor_role: 'PORTAL_SUBSCRIBER', action: 'KYC_DOCUMENT_DOWNLOADED', entity_type: 'kyc_document', entity_id: doc.id, details: { subscriber_id: id }, ip_address: req.ip });
+  res.end(plain);
 }));
 
 router.post('/documents', portalAuth, upload.single('file'), asyncHandler(async (req, res) => {
   const id = (req as any).portal.sub;
   if (!(req as any).file) return res.status(400).json({ message: 'file is required' });
   const f = (req as any).file;
-  const docType = String(req.body.doc_type || 'OTHER');
-  const r = await pool.query(
-    'INSERT INTO kyc_documents(subscriber_id,doc_type,file_name,file_path,mime_type) VALUES($1,$2,$3,$4,$5) RETURNING id,doc_type,file_name,mime_type,uploaded_at',
-    [id, docType, f.originalname, f.filename, f.mimetype]
-  );
-  res.status(201).json({ ok: true, data: r.rows[0] });
+  assertAllowedKycFileBuffer(f.buffer, f.mimetype);
+  const sub = await pool.query('SELECT client_code, full_name FROM subscribers WHERE id=$1', [id]);
+  let encrypted: ReturnType<typeof encryptKycBuffer> | null = null;
+  let doc;
+  try {
+    const checksum = sha256Buffer(f.buffer); // checksum of plaintext before encryption
+    encrypted = encryptKycBuffer(f.buffer, uploadDir);
+    doc = await createKycDocument({
+      subscriberId: id,
+      docType: normalizeDocType(req.body.doc_type),
+      fileName: f.originalname,
+      filePath: path.basename(encrypted.filePath),
+      mimeType: f.mimetype,
+      source: 'PORTAL',
+      actor: { id, name: sub.rows[0]?.full_name || sub.rows[0]?.client_code || id, role: 'PORTAL_SUBSCRIBER', ip: req.ip },
+      checksum,
+      documentNumber: req.body.document_number,
+      issuer: req.body.issuer,
+      issueDate: req.body.issue_date,
+      expiresAt: req.body.expires_at,
+      reuploadOf: req.body.reupload_of || null,
+      encryption: encrypted,
+    });
+  } catch (e) {
+    secureUnlinkKycFile(encrypted?.filePath);
+    throw e;
+  }
+  res.status(201).json({ ok: true, data: doc });
 }));
 
 router.get('/notifications', portalAuth, asyncHandler(async (req, res) => {
@@ -480,6 +505,19 @@ router.delete('/payment-methods/:id', portalAuth, asyncHandler(async (req, res) 
   const subId = (req as any).portal.sub;
   await pool.query('DELETE FROM saved_payment_methods WHERE id=$1 AND subscriber_id=$2', [req.params.id, subId]);
   res.json({ ok: true });
+}));
+
+// Customer-scoped TR-069 status and Wi-Fi update. The staff /api/acs routes
+// remain admin-only; these endpoints never accept a staff token.
+router.get('/acs/status', portalAuth, asyncHandler(async (req, res) => {
+  const subId = (req as any).portal.sub;
+  res.json(await getPortalAcsStatus(subId));
+}));
+
+router.post('/acs/wifi', portalAuth, asyncHandler(async (req, res) => {
+  const subId = (req as any).portal.sub;
+  const result = await updatePortalSubscriberWifi(subId, req.body || {});
+  res.json(result);
 }));
 
 

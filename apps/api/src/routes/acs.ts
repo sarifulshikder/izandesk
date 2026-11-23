@@ -716,4 +716,71 @@ router.post('/sync', requireRole(['SUPER_ADMIN','NOC_ENGINEER']), asyncHandler(a
   res.json({ ok: true, synced: count });
 }));
 
+/** Customer-portal helpers. These intentionally expose only status and Wi-Fi
+ *  updates for devices explicitly linked to the authenticated subscriber. */
+export async function getPortalAcsStatus(subscriberId: string) {
+  const cfg = await getAcsConfig();
+  const devices = await pool.query(
+    `SELECT genieacs_id, serial_number, manufacturer, model_name, status, last_inform_at
+     FROM acs_devices WHERE subscriber_id=$1 ORDER BY updated_at DESC LIMIT 10`,
+    [subscriberId],
+  ).catch(() => ({ rows: [] as any[] }));
+  if (!cfg.configured) return { ok: true, configured: false, reachable: false, devices: devices.rows || [] };
+  try {
+    await acsFetch('/devices/?limit=1&projection=_id');
+    return { ok: true, configured: true, reachable: true, devices: devices.rows || [] };
+  } catch (e: any) {
+    return { ok: true, configured: true, reachable: false, devices: devices.rows || [], message: e?.message };
+  }
+}
+
+export async function updatePortalSubscriberWifi(subscriberId: string, input: any) {
+  const deviceId = String(input?.device_id || input?.deviceId || '').trim();
+  if (!deviceId) {
+    const err: any = new Error('device_id is required'); err.status = 400; throw err;
+  }
+  const owned = await pool.query('SELECT 1 FROM acs_devices WHERE genieacs_id=$1 AND subscriber_id=$2', [deviceId, subscriberId]);
+  if (!owned.rows[0]) {
+    const err: any = new Error('This device is not linked to your account'); err.status = 403; throw err;
+  }
+  const cfg = await getAcsConfig();
+  if (!cfg.configured) {
+    const err: any = new Error('GenieACS/TR-069 is not configured'); err.status = 501; throw err;
+  }
+  const params: any[] = [];
+  const ssid = input?.ssid;
+  const password = input?.password;
+  if (ssid != null && String(ssid).trim()) {
+    const value = String(ssid).trim();
+    if (value.length > 32) { const err: any = new Error('SSID is too long'); err.status = 400; throw err; }
+    params.push(['InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID', value, 'xsd:string']);
+  }
+  if (password != null && String(password)) {
+    const value = String(password);
+    if (value.length < 8 || value.length > 63) { const err: any = new Error('Wi-Fi password must be 8-63 characters'); err.status = 400; throw err; }
+    params.push(['InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase', value, 'xsd:string']);
+  }
+  if (!params.length) {
+    const err: any = new Error('ssid and/or password required'); err.status = 400; throw err;
+  }
+  try {
+    const task = { name: 'setParameterValues', parameterValues: params };
+    const data = await acsFetch(`/devices/${encodeURIComponent(deviceId)}/tasks${qs({ connection_request: '' })}`, { method: 'POST', body: JSON.stringify(task) });
+    await logAction({
+      device_id: deviceId,
+      action: 'WIFI_UPDATE',
+      task_name: 'setParameterValues',
+      task_id: data?._id,
+      payload: { parameterValues: params.map((p) => [p[0], String(p[0]).toLowerCase().includes('pass') ? '***' : p[1], p[2]]) },
+      result: data,
+      status: 'QUEUED',
+      created_by: null,
+    });
+    return { ok: true, device_id: deviceId, task: data };
+  } catch (e: any) {
+    await logAction({ device_id: deviceId, action: 'WIFI_UPDATE', task_name: 'setParameterValues', status: 'FAILED', error_message: e?.message, created_by: null }).catch(() => {});
+    throw e;
+  }
+}
+
 export default router;

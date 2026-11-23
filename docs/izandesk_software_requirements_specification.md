@@ -3,7 +3,7 @@
 **Document Version:** 1.2.0  
 **Project:** IzanDesk ERP (ISP Billing & Network Management)  
 **Status:** Approved Master Architecture  
-**Key Features:** 565 Built-in Production Features across 18 Domains  
+**Key Features:** 565 Cataloged Features across 18 Domains (implementation status varies by phase)
 **Extensibility:** Dynamic Hot-Reload Plugin Kernel (Zero-Downtime Extensibility)  
 
 ---
@@ -15,7 +15,7 @@
 It merges **Business Support Systems (BSS)** (automated recurring billing, multi-gateway payments, reseller wallets, double-entry financial accounting, HR/payroll, and CRM ticketing) with **Operations Support Systems (OSS)** (carrier-grade FreeRADIUS 3 AAA, MikroTik RouterOS automation, OLT/FTTH optical telemetry, TR-069 GenieACS remote customer CPE Wi-Fi management, and PostGIS fiber route mapping).
 
 ### Core Architectural Pillars
-1. **565 Built-In Production Features**: Comprehensive feature matrix covering every operational requirement of modern telecom operators (refer to [izandesk_500_plus_feature_catalog.md](file:///home/server/.gemini/antigravity-cli/brain/4e3267c3-6afb-4476-8d07-d635bee4cd39/izandesk_500_plus_feature_catalog.md)).
+1. **565 Cataloged Features**: Design matrix covering the operational requirements of modern telecom operators (refer to [izandesk_500_plus_feature_catalog.md](./izandesk_500_plus_feature_catalog.md)). This is a requirements catalog, not a shipped-feature list; see the README phase status and the implementation roadmap for what is actually available.
 2. **Dynamic Hot-Reload Plugin Kernel**: New payment gateway drivers, SMS gateways, and OLT vendor CLI templates can be dropped into the `/plugins/` directory and hot-reloaded dynamically without restarting the server or interrupting active subscriber sessions.
 3. **Carrier-Grade AAA with Dynamic CoA**: FreeRADIUS 3.2 integrated with dynamic Change of Authorization (CoA RFC 3576) and Packet of Disconnect (PoD) for real-time speed transitions and instant suspension/reactivation.
 4. **Dual-Market Extensibility**: Complete regional MFS integration (bKash tokenized, Nagad PGW, Rocket, SSLCommerz, Android SMS listener app, BTRC regulatory reports) and international networks (Stripe, PayPal, M-Pesa, Twilio).
@@ -29,15 +29,15 @@ It merges **Business Support Systems (BSS)** (automated recurring billing, multi
 ```mermaid
 graph TB
     subgraph ClientTier["Cross-Platform Client Tier (Responsive Web, Mobile, Tablet)"]
-        AdminWeb["Admin & NOC Web App (Next.js 15 / React 19)"]
+        AdminWeb["Admin & NOC Web App (Next.js 16 / React 19)"]
         MobilePWA["Field Engineer & Customer PWA (Mobile / Tablet)"]
         ResellerWeb["White-Label Reseller Portal"]
     end
 
     subgraph APITier["API & Gateway Tier"]
         NginxProxy["Nginx Gateway / Reverse Proxy"]
-        NestAPI["IzanDesk Core API (NestJS + TypeScript)"]
-        WebSocketEngine["WebSocket Telemetry Engine (Socket.io)"]
+        NestAPI["IzanDesk Core API (Express 5 + TypeScript)"]
+        WebSocketEngine["WebSocket Telemetry Engine (ws)"]
         PluginKernel["Dynamic Hot-Reload Plugin Kernel (Chokidar + Isolated VM)"]
     end
 
@@ -48,7 +48,7 @@ graph TB
     end
 
     subgraph WorkerTier["Async Network & Event Workers"]
-        BullMQWorkers["BullMQ Job Workers (Redis)"]
+        BullMQWorkers["DB-locked in-process schedulers (BullMQ workers planned)"]
         MikrotikEngine["MikroTik RouterOS Worker (API / REST)"]
         OLTEngine["OLT Telemetry Worker (SNMP v2c/v3 + Telnet/SSH)"]
         ACSBridge["TR-069 GenieACS Bridge (NBI REST API)"]
@@ -155,7 +155,7 @@ sequenceDiagram
 ```
 
 ### 4.2 TR-069 / GenieACS Customer Wi-Fi Remote Management
-- **Zero-Touch Provisioning (ZTP)**: On connection, the customer router issues a CWMP Inform request. IzanDesk automatically maps the serial number to the subscriber's account and injects PPPoE credentials and Wi-Fi SSID.
+- **Zero-Touch Provisioning (ZTP)** *(planned)*: On connection, the customer router issues a CWMP Inform request; a future workflow would map the serial to the subscriber and inject PPPoE credentials/Wi-Fi. Today the GenieACS integration provides device visibility, diagnostics, parameters and queued tasks/provisions via `/api/acs` — automatic serial-to-subscriber enrollment is not implemented.
 - **Remote Wi-Fi Password Changes**: Directly updates the `InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.PreSharedKey` parameter tree.
 - **Signal Quality Telemetry**: Automatically queries the optical module transceiver parameters (`RxOpticalPower`, `TxOpticalPower`) and graphs signal fluctuations over time.
 
@@ -184,5 +184,5 @@ stateDiagram-v2
 
 ## 6. Complete Data Schema Synchronization
 
-All 565 features are backed by the relational PostgreSQL 16 schema detailed in:  
-📄 **[izandesk_database_schema_and_models.md](file:///home/server/.gemini/antigravity-cli/brain/4e3267c3-6afb-4476-8d07-d635bee4cd39/izandesk_database_schema_and_models.md)**
+The cataloged features are designed around the relational PostgreSQL 16 schema detailed in:
+📄 **[izandesk_database_schema_and_models.md](./izandesk_database_schema_and_models.md)**

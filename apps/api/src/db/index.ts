@@ -8,6 +8,12 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD || 'izandesk_secret_password',
 });
 
+// A dropped idle connection is routine during DB restarts/failover. Without a
+// listener, pg emits an unhandled 'error' event and takes down the whole API.
+pool.on('error', (err) => {
+  console.error('[DB] idle connection error:', err.message);
+});
+
 export async function query<T = any>(text: string, params?: any[]): Promise<{ rows: T[] }> {
   return pool.query(text, params) as any;
 }
@@ -107,6 +113,141 @@ export async function initDb() {
     );
     ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'PENDING';
 
+    -- KYC compliance extension. Only masked identity numbers are stored; scans
+    -- stay in an ownership-checked, AES-256-GCM encrypted local file store with
+    -- a SHA-256 checksum of the plaintext.
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS document_number_masked TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS issuer TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS issue_date DATE;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS expires_at DATE;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS checksum TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS scan_status TEXT NOT NULL DEFAULT 'PENDING';
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS storage_key TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'STAFF';
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS verification_method TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS verification_reference TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS privacy_notice_version TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS reviewed_by TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS reviewed_by_name TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS rejection_reason TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS reupload_of UUID REFERENCES kyc_documents(id) ON DELETE SET NULL;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS retention_until DATE;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS legal_hold_until DATE;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ;
+    -- AES-256-GCM file encryption. NULL metadata means a legacy plaintext file;
+    -- the maintenance sweep migrates it on startup.
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS encryption_alg TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS encryption_iv TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS encryption_auth_tag TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS encryption_key_id TEXT;
+    ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+    CREATE INDEX IF NOT EXISTS idx_kyc_documents_subscriber ON kyc_documents(subscriber_id);
+    CREATE INDEX IF NOT EXISTS idx_kyc_documents_status ON kyc_documents(status);
+    CREATE INDEX IF NOT EXISTS idx_kyc_documents_expires ON kyc_documents(expires_at) WHERE expires_at IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_kyc_documents_reupload ON kyc_documents(reupload_of) WHERE reupload_of IS NOT NULL;
+
+    DO $$ BEGIN
+      ALTER TABLE kyc_documents ADD CONSTRAINT kyc_documents_status_check
+        CHECK (status IN ('PENDING','UNDER_REVIEW','APPROVED','REJECTED','RESUBMISSION_REQUIRED','EXPIRED','NOT_APPLICABLE'));
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE kyc_documents ADD CONSTRAINT kyc_documents_scan_status_check
+        CHECK (scan_status IN ('PENDING','CLEAN','FLAGGED','NOT_SCANNED'));
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    DO $$ BEGIN
+      ALTER TABLE kyc_documents ADD CONSTRAINT kyc_documents_source_check
+        CHECK (source IN ('STAFF','PORTAL','MCP','IMPORT'));
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+    -- Append-only review history. Kept separate from audit_logs so reviewer
+    -- notes/evidence can be queried without parsing JSON details.
+    CREATE TABLE IF NOT EXISTS kyc_review_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      document_id UUID NOT NULL REFERENCES kyc_documents(id) ON DELETE CASCADE,
+      subscriber_id UUID NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+      actor_id TEXT,
+      actor_name TEXT,
+      actor_role TEXT,
+      action TEXT NOT NULL,
+      from_status TEXT,
+      to_status TEXT,
+      reason TEXT,
+      evidence_ref TEXT,
+      ip_address TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_kyc_review_events_document ON kyc_review_events(document_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_kyc_review_events_subscriber ON kyc_review_events(subscriber_id, created_at DESC);
+
+    -- One KYC profile per subscriber: identity class, consent/lawful basis and
+    -- overall completion state (derived from the mandatory document set).
+    CREATE TABLE IF NOT EXISTS subscriber_kyc_profiles (
+      subscriber_id UUID PRIMARY KEY REFERENCES subscribers(id) ON DELETE CASCADE,
+      service_type TEXT NOT NULL DEFAULT 'FIXED_BROADBAND',
+      identity_type TEXT NOT NULL DEFAULT 'INDIVIDUAL',
+      legal_name TEXT,
+      date_of_birth DATE,
+      occupation TEXT,
+      business_registration_number TEXT,
+      tax_id TEXT,
+      nid_number_masked TEXT,
+      present_address TEXT,
+      permanent_address TEXT,
+      verified_mobile TEXT,
+      email TEXT,
+      privacy_notice_version TEXT,
+      lawful_basis TEXT NOT NULL DEFAULT 'CONTRACT',
+      consent_at TIMESTAMPTZ,
+      consent_withdrawn_at TIMESTAMPTZ,
+      overall_status TEXT NOT NULL DEFAULT 'INCOMPLETE',
+      last_reviewed_at TIMESTAMPTZ,
+      last_reviewed_by TEXT,
+      risk_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_kyc_profiles_status ON subscriber_kyc_profiles(overall_status);
+    CREATE INDEX IF NOT EXISTS idx_kyc_profiles_service ON subscriber_kyc_profiles(service_type);
+
+    -- Authority/LEA preservation requests override automatic retention sweeps.
+    CREATE TABLE IF NOT EXISTS kyc_legal_holds (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE CASCADE,
+      document_id UUID REFERENCES kyc_documents(id) ON DELETE CASCADE,
+      case_reference TEXT NOT NULL,
+      authority TEXT NOT NULL,
+      requested_by TEXT NOT NULL,
+      start_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      end_at TIMESTAMPTZ NOT NULL,
+      released_at TIMESTAMPTZ,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_kyc_legal_holds_active ON kyc_legal_holds(end_at) WHERE released_at IS NULL;
+
+    -- Evidence of what was filed in BTRC DIS/ISPMS, including acknowledgement.
+    CREATE TABLE IF NOT EXISTS compliance_submissions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      portal TEXT NOT NULL DEFAULT 'DIS',
+      report_type TEXT NOT NULL DEFAULT 'MONTHLY',
+      period_label TEXT NOT NULL,
+      period_start DATE,
+      period_end DATE,
+      file_name TEXT,
+      file_path TEXT,
+      checksum TEXT,
+      submitted_at TIMESTAMPTZ,
+      acknowledgement_ref TEXT,
+      status TEXT NOT NULL DEFAULT 'DRAFT',
+      rejection_reason TEXT,
+      submitted_by TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_compliance_submissions_period ON compliance_submissions(period_label, portal);
+
     CREATE TABLE IF NOT EXISTS inventory_warehouses (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL UNIQUE,
@@ -161,22 +302,6 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS house_no TEXT,
       ADD COLUMN IF NOT EXISTS notes TEXT;
   `);
-
-  // Phase 3.1: dual-mode provisioning (API/REST direct router vs RADIUS pool)
-  await pool.query(`
-    ALTER TABLE network_routers
-      ADD COLUMN IF NOT EXISTS integration_mode TEXT NOT NULL DEFAULT 'API',
-      ADD COLUMN IF NOT EXISTS radius_secret TEXT,
-      ADD COLUMN IF NOT EXISTS coa_port INT DEFAULT 3799,
-      ADD COLUMN IF NOT EXISTS nas_identifier TEXT;
-  `);
-  await pool.query(`ALTER TABLE network_routers ALTER COLUMN api_port DROP NOT NULL;`).catch(() => {});
-  await pool.query(`
-    ALTER TABLE subscribers
-      ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'RADIUS',
-      ADD COLUMN IF NOT EXISTS router_id UUID REFERENCES network_routers(id) ON DELETE SET NULL;
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscribers_router_id ON subscribers(router_id);`);
 
   // FreeRADIUS SQL schema (integrated in IzanDesk DB) for real AAA
   await pool.query(`
@@ -288,10 +413,10 @@ export async function initDb() {
       ros_version TEXT NOT NULL DEFAULT 'v7',
       use_ssl BOOLEAN NOT NULL DEFAULT false,
       site TEXT,
-      wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL,
       is_enabled BOOLEAN NOT NULL DEFAULT true,
       last_seen_at TIMESTAMPTZ,
       status TEXT NOT NULL DEFAULT 'UNKNOWN',
+      last_error TEXT,
       cpu_load NUMERIC(5,2),
       memory_used_mb NUMERIC(12,2),
       memory_total_mb NUMERIC(12,2),
@@ -366,7 +491,6 @@ export async function initDb() {
       password TEXT,
       snmp_community TEXT DEFAULT 'public',
       site TEXT,
-      wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL,
       is_enabled BOOLEAN NOT NULL DEFAULT true,
       status TEXT NOT NULL DEFAULT 'UNKNOWN',
       last_seen_at TIMESTAMPTZ,
@@ -448,13 +572,6 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_inventory_serials_source ON inventory_serials(source);
   `);
 
-  // Phase 3.3: bind OLT to WireGuard peer for tunnel-aware management/routing
-  await pool.query(`
-    ALTER TABLE olts ADD COLUMN IF NOT EXISTS wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL;
-    CREATE INDEX IF NOT EXISTS idx_olts_wg_peer_id ON olts(wg_peer_id);
-  `);
-
-
   // Phase 3.2: WireGuard hub-and-spoke overlay (for NAT/CGNAT sites and OLTs behind routers)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS wg_hub_config (
@@ -500,6 +617,30 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS idx_wg_peers_router_id ON wg_peers(router_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_wg_peers_tunnel_ip ON wg_peers(tunnel_ip);
   `);
+
+  // Cross-table columns are added after both tables exist so a fresh database
+  // can bootstrap without depending on a pre-existing schema snapshot.
+  await pool.query(`ALTER TABLE network_routers ADD COLUMN IF NOT EXISTS wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL;`);
+  await pool.query(`ALTER TABLE olts ADD COLUMN IF NOT EXISTS wg_peer_id UUID REFERENCES wg_peers(id) ON DELETE SET NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_olts_wg_peer_id ON olts(wg_peer_id);`);
+
+  // Phase 3.1: dual-mode provisioning (API/REST direct router vs RADIUS pool)
+  await pool.query(`
+    ALTER TABLE network_routers
+      ADD COLUMN IF NOT EXISTS integration_mode TEXT NOT NULL DEFAULT 'API',
+      ADD COLUMN IF NOT EXISTS radius_secret TEXT,
+      ADD COLUMN IF NOT EXISTS coa_port INT DEFAULT 3799,
+      ADD COLUMN IF NOT EXISTS nas_identifier TEXT;
+  `);
+  await pool.query(`ALTER TABLE network_routers ALTER COLUMN api_port DROP NOT NULL;`).catch(() => {});
+  await pool.query(`ALTER TABLE network_routers ADD COLUMN IF NOT EXISTS last_error TEXT;`);
+  await pool.query(`
+    ALTER TABLE subscribers
+      ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'RADIUS',
+      ADD COLUMN IF NOT EXISTS router_id UUID REFERENCES network_routers(id) ON DELETE SET NULL;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscribers_router_id ON subscribers(router_id);`);
+
   await pool.query(`INSERT INTO wg_hub_config(id) VALUES(1) ON CONFLICT (id) DO NOTHING`);
 
   // seed Phase 3 sample data
@@ -563,7 +704,9 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS balance NUMERIC(12,2) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(12,2) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS reseller_id UUID,
-      ADD COLUMN IF NOT EXISTS suspension_reason TEXT;
+      ADD COLUMN IF NOT EXISTS suspension_reason TEXT,
+      ADD COLUMN IF NOT EXISTS suspension_source TEXT NOT NULL DEFAULT 'POLICY';
+    UPDATE subscribers SET suspension_source='MANUAL' WHERE suspension_reason ILIKE 'Manual%';
 
     CREATE TABLE IF NOT EXISTS billing_policies (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -749,6 +892,17 @@ export async function initDb() {
       ON CONFLICT (gateway) DO NOTHING;
   `).catch(e => console.error('[DB] Phase 4 schema extension error', e.message));
 
+  // Uniqueness is applied separately so legacy duplicate rows cannot abort the
+  // rest of the migration. Existing deployments with duplicates retain the old
+  // non-unique indexes and a warning; new rows are still guarded in application code.
+  for (const statement of [
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_gateway_trx ON payments(gateway, trx_id) WHERE trx_id IS NOT NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_idempotency ON payments(idempotency_key) WHERE idempotency_key IS NOT NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_sms_gateway_trx ON payment_sms_events(gateway, trx_id) WHERE trx_id IS NOT NULL`,
+  ]) {
+    await pool.query(statement).catch((e: any) => console.warn('[DB] payment idempotency index skipped:', e.message));
+  }
+
   await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS data_cap_gb NUMERIC(12,2)`).catch(()=>{});
   await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS fup_speed_mbps INTEGER`).catch(()=>{});
 
@@ -774,25 +928,6 @@ export async function initDb() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fup_logs_sub ON fup_enforcement_logs(subscriber_id, created_at DESC)`).catch(()=>{});
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS reseller_share_entries (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      reseller_id UUID NOT NULL REFERENCES resellers(id) ON DELETE CASCADE,
-      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
-      payment_ref TEXT,
-      wallet_transaction_id UUID,
-      retail_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
-      partner_share NUMERIC(12,2) NOT NULL DEFAULT 0,
-      isp_share NUMERIC(12,2) NOT NULL DEFAULT 0,
-      margin_percent NUMERIC(8,2) NOT NULL DEFAULT 0,
-      package_name TEXT,
-      period_month DATE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      metadata JSONB DEFAULT '{}'::jsonb
-    );
-  `).catch(()=>{});
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_reseller_share_entries_reseller ON reseller_share_entries(reseller_id, created_at DESC)`).catch(()=>{});
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS saved_payment_methods (
@@ -986,6 +1121,45 @@ export async function initDb() {
         ('daily_revenue_summary_telegram', 'TELEGRAM', 'DAILY_REVENUE_SUMMARY', NULL, '📊 Daily Revenue Summary ({{date}})\nCollections: {{collections}}\nInvoices: {{invoices}}\nDue Outstanding: {{outstanding}}', '["date","collections","invoices","outstanding"]'::jsonb)
       ON CONFLICT DO NOTHING;
   `).catch(e => console.error('[DB] Phase 5 schema extension error', e.message));
+
+  // subscribers.reseller_id was introduced in an earlier block without a
+  // foreign key, so the later ADD COLUMN IF NOT EXISTS ... REFERENCES was a
+  // no-op. Add the constraint explicitly, but skip it if legacy orphan rows
+  // exist so a fresh migration never wipes a working deployment.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_subscribers_reseller_id')
+         AND NOT EXISTS (
+           SELECT 1 FROM subscribers s
+           WHERE s.reseller_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM resellers r WHERE r.id = s.reseller_id)
+         ) THEN
+        ALTER TABLE subscribers ADD CONSTRAINT fk_subscribers_reseller_id
+          FOREIGN KEY (reseller_id) REFERENCES resellers(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `).catch((e: any) => console.warn('[DB] subscribers.reseller_id FK skipped:', e.message));
+
+  // Depends on resellers, so it is created after the Phase 5 block above.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reseller_share_entries (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      reseller_id UUID NOT NULL REFERENCES resellers(id) ON DELETE CASCADE,
+      subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,
+      payment_ref TEXT,
+      wallet_transaction_id UUID,
+      retail_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      partner_share NUMERIC(12,2) NOT NULL DEFAULT 0,
+      isp_share NUMERIC(12,2) NOT NULL DEFAULT 0,
+      margin_percent NUMERIC(8,2) NOT NULL DEFAULT 0,
+      package_name TEXT,
+      period_month DATE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      metadata JSONB DEFAULT '{}'::jsonb
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_reseller_share_entries_reseller ON reseller_share_entries(reseller_id, created_at DESC)`);
 
   // Phase 7: Finance, HRM, Procurement/Assets, Hotspot, Reporting & Audit foundations
   await pool.query(`

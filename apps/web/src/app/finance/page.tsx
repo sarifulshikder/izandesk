@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { apiFetch, getApiBaseUrl } from '@/lib/api';
+import { apiFetch, downloadAuthenticatedFile } from '@/lib/api';
 import { RefreshCw, Plus, Landmark, ArrowDownCircle, ArrowUpCircle, Wallet, Download } from 'lucide-react';
 
 function money(v: any) { const n = Number(v || 0); return `৳${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
@@ -42,7 +42,10 @@ export default function FinancePage() {
 
   const addTxn = async () => { if (!token) return; setErr(null); setMsg(null); try { await apiFetch('/api/finance/transactions', { method:'POST', body: JSON.stringify({ ...txnForm, amount: Number(txnForm.amount), account_id: txnForm.account_id || null, counter_account_id: txnForm.counter_account_id || null }) }, token); setMsg('Transaction recorded (journal auto-posted when debit/credit accounts provided)'); setTxnForm((f:any)=>({ ...f, amount:'', description:'', reference_id:'' })); await load(); } catch(e:any){ setErr(e.message); } };
   const addVoucher = async () => { if (!token) return; setErr(null); setMsg(null); try { await apiFetch('/api/finance/vouchers', { method:'POST', body: JSON.stringify({ ...voucherForm, amount: Number(voucherForm.amount) }) }, token); setMsg('Voucher posted (transaction + journal created)'); setVoucherForm((f:any)=>({ ...f, amount:'', narration:'' })); await load(); } catch(e:any){ setErr(e.message); } };
-  const exportCsv = (path:string, name:string) => { const base=getApiBaseUrl(); const url=`${base}${path}`; const a=document.createElement('a'); a.href=url; a.download=name; a.click(); };
+  const exportCsv = async (path:string, name:string) => {
+    try { await downloadAuthenticatedFile(path, name, token); }
+    catch (e:any) { setErr(e.message); }
+  };
 
   return (
     <div className="space-y-5">

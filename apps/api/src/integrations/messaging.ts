@@ -161,7 +161,19 @@ export async function trySendTemplateToSubscriber(subscriberId: string, template
       WHERE s.id=$1`, [subscriberId])).rows[0];
     if (!s) return null;
     const to = s.phone || s.whatsapp || s.email || null;
-    const vars = { ...s, ...extraVars, name: s.full_name, due: s.current_due, amount: extraVars.amount ?? s.monthly_bill, pdf_url: extraVars.pdf_url || '' };
+    // Seeded templates use {{invoice_no}}/{{brand}}/{{amount}}. Callers have
+    // historically passed invoice_number instead, which rendered blank values.
+    const vars = {
+      ...s,
+      ...extraVars,
+      brand: extraVars.brand ?? 'IzanDesk',
+      name: s.full_name,
+      invoice_no: extraVars.invoice_no ?? extraVars.invoice_number ?? s.invoice_number,
+      due: extraVars.due ?? s.current_due,
+      amount: extraVars.amount ?? s.monthly_bill,
+      due_date: extraVars.due_date,
+      pdf_url: extraVars.pdf_url || '',
+    };
     return await dispatchMessage({ template_name: templateName, channel_type: channelPref?.channel_type, provider: channelPref?.provider, to, variables: vars, related_type: 'SUBSCRIBER', related_id: subscriberId, requireEnabled: false });
   } catch { return null; }
 }
@@ -173,10 +185,21 @@ export async function runMessagingSchedulerSweep() {
     if (channels.length) {
       const today = new Date().toISOString().slice(0,10);
       const metrics = (await pool.query(`SELECT COALESCE(SUM(amount),0)::float as revenue_today, COUNT(*)::int as payments_today FROM payments WHERE status='COMPLETED' AND created_at::date = CURRENT_DATE`)).rows[0] || { revenue_today: 0, payments_today: 0 };
-      const due = (await pool.query(`SELECT COALESCE(SUM(due_amount),0)::float as due, COUNT(*)::int as due_invoices FROM invoices WHERE status IN ('DUE','PARTIAL','OVERDUE')`)).rows[0] || { due: 0, due_invoices: 0 };
-      const vars = { date: today, revenue_today: metrics.revenue_today, payments_today: metrics.payments_today, due_total: due.due, due_invoices: due.due_invoices };
+      const due = (await pool.query(`SELECT COALESCE(SUM(due_amount),0)::float as due, COUNT(*)::int as due_invoices FROM invoices WHERE status IN ('UNPAID','PARTIAL','OVERDUE')`)).rows[0] || { due: 0, due_invoices: 0 };
+      // The seeded Telegram template expects collections/invoices/outstanding.
+      const vars = {
+        date: today,
+        collections: metrics.revenue_today,
+        invoices: metrics.payments_today,
+        outstanding: due.due,
+        revenue_today: metrics.revenue_today,
+        payments_today: metrics.payments_today,
+        due_total: due.due,
+        due_invoices: due.due_invoices,
+      };
       for (const ch of channels) {
-        const sent = (await pool.query(`SELECT 1 FROM message_logs WHERE channel_id=$1 AND related_type='DAILY_REVENUE_SUMMARY' AND created_at::date=CURRENT_DATE LIMIT 1`, [ch.id])).rows[0];
+        // Failed sends must be retried; only a delivered/simulated send counts.
+        const sent = (await pool.query(`SELECT 1 FROM message_logs WHERE channel_id=$1 AND related_type='DAILY_REVENUE_SUMMARY' AND status IN ('SENT','SIMULATED') AND created_at::date=CURRENT_DATE LIMIT 1`, [ch.id])).rows[0];
         if (sent) continue;
         await dispatchMessage({ channel_id: ch.id, template_name: 'daily_revenue_summary_telegram', variables: vars, related_type: 'DAILY_REVENUE_SUMMARY', to: ch.config?.chat_id || ch.credentials?.chat_id || null, requireEnabled: false }).catch(()=>{});
       }
@@ -190,13 +213,13 @@ export async function runMessagingSchedulerSweep() {
     const rows = (await pool.query(`
       SELECT i.id as invoice_id, i.invoice_number, i.due_amount::float as due_amount, i.due_date, s.id as subscriber_id, s.full_name, s.phone
       FROM invoices i JOIN subscribers s ON s.id=i.subscriber_id
-      WHERE i.status IN ('DUE','PARTIAL','OVERDUE') AND i.due_amount > 0 AND s.phone IS NOT NULL AND s.phone <> ''
-        AND i.due_date <= (CURRENT_DATE + ($1::int * INTERVAL '1 day')) AND i.due_date >= CURRENT_DATE
+      WHERE i.status IN ('UNPAID','PARTIAL','OVERDUE') AND i.due_amount > 0 AND s.phone IS NOT NULL AND s.phone <> ''
+        AND i.due_date <= (CURRENT_DATE + ($1::int * INTERVAL '1 day'))
       ORDER BY i.due_date ASC LIMIT 100`, [warnDays])).rows;
     for (const r of rows) {
-      const sent = (await pool.query(`SELECT 1 FROM message_logs WHERE related_type='INVOICE_DUE_REMINDER' AND related_id=$1 AND created_at::date=CURRENT_DATE LIMIT 1`, [String(r.invoice_id)])).rows[0];
+      const sent = (await pool.query(`SELECT 1 FROM message_logs WHERE related_type='INVOICE_DUE_REMINDER' AND related_id=$1 AND status IN ('SENT','SIMULATED') AND created_at::date=CURRENT_DATE LIMIT 1`, [String(r.invoice_id)])).rows[0];
       if (sent) continue;
-      await dispatchMessage({ channel_type: 'SMS', template_name: 'invoice_due_reminder_sms', to: r.phone, variables: { name: r.full_name, invoice_number: r.invoice_number, due: r.due_amount, due_date: r.due_date }, related_type: 'INVOICE_DUE_REMINDER', related_id: String(r.invoice_id), requireEnabled: false }).catch(()=>{});
+      await dispatchMessage({ channel_type: 'SMS', template_name: 'invoice_due_reminder_sms', to: r.phone, variables: { name: r.full_name, invoice_no: r.invoice_number, invoice_number: r.invoice_number, amount: r.due_amount, due: r.due_amount, due_date: r.due_date, brand: 'IzanDesk' }, related_type: 'INVOICE_DUE_REMINDER', related_id: String(r.invoice_id), requireEnabled: false }).catch(()=>{});
     }
   } catch {}
 }

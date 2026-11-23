@@ -11,11 +11,12 @@
  * creation time. Verification uses timingSafeEqual.
  */
 import crypto = require('crypto');
-import jwt = require('jsonwebtoken');
 import type { Request, Response, NextFunction } from 'express';
 import { pool } from '../db';
 import { getCached } from './settings';
 import { auditLog } from './audit';
+import { ipAllowed } from '../security/guards';
+import { verifyStaffToken } from '../security/staff-tokens';
 
 export type McpKeyRecord = {
   name?: string;
@@ -75,7 +76,7 @@ export function createMcpAuth(opts: McpAuthOptions) {
 
     if (header.startsWith('Bearer ') && !header.slice(7).startsWith('izmc_')) {
       try {
-        jwt.verify(header.slice(7), opts.jwtSecret);
+        verifyStaffToken(header.slice(7), opts.jwtSecret);
       } catch {
         return res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Invalid or expired token' } });
       }
@@ -113,6 +114,10 @@ export function createMcpAuth(opts: McpAuthOptions) {
 
       const user = (record.user_id && opts.findUser(record.user_id)) || opts.findUserByRole(String(record.role || 'SUPER_ADMIN'));
       if (!user) throw new Error('MCP key is bound to an unknown user');
+      const adminAllowlist = await getCached('security.admin_ip_allowlist', []);
+      if (user.role === 'SUPER_ADMIN' && !ipAllowed(req.ip || String(req.headers['x-forwarded-for'] || ''), adminAllowlist)) {
+        throw new Error('Admin access from this IP is not allowed');
+      }
       if (await getCached('security.maintenance_mode', false) && user.role !== 'SUPER_ADMIN') {
         throw new Error('IzanDesk is under maintenance');
       }

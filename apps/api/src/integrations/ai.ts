@@ -307,6 +307,33 @@ export function detectIntent(message: string): Detection {
 type Ctx = { role: string; actor: AIActor };
 type Row = Record<string, any>;
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Valid UUID that cannot belong to any reseller. Used to fail closed when a
+// legacy token carries an unresolvable code instead of opening up the scope.
+const NO_RESELLER_UUID = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * Older JWTs store the reseller *code* (e.g. RES-CYBERNET) in `resellerId`,
+ * while resellers.id and every reseller-scoped column are UUIDs. Resolve the
+ * reference once per request so scoped queries compare UUID to UUID instead
+ * of throwing "invalid input syntax for type uuid" on every AI call.
+ */
+async function normalizeActor(pool: any, actor: AIActor): Promise<AIActor> {
+  if (actor.role !== 'RESELLER' || !actor.resellerId) return actor;
+  const ref = String(actor.resellerId).trim();
+  if (UUID_RE.test(ref)) return actor;
+  try {
+    const r = await pool.query(
+      'SELECT id FROM resellers WHERE lower(code)=lower($1) OR lower(subdomain)=lower($1) OR id::text=$1 LIMIT 1',
+      [ref],
+    );
+    if (r.rows?.[0]?.id) return { ...actor, resellerId: String(r.rows[0].id) };
+  } catch (e: any) {
+    console.error('[AI] reseller scope resolution failed:', e?.message || e);
+  }
+  return { ...actor, resellerId: NO_RESELLER_UUID };
+}
+
 async function one(pool: any, sql: string, params: any[] = []): Promise<Row> {
   try { const r = await pool.query(sql, params); return r.rows?.[0] || {}; } catch (e: any) { console.error('[AI] one() query failed:', e?.message || e); return {}; }
 }
@@ -523,7 +550,9 @@ async function intentExtras(pool: any, ctx: Ctx, intent: string, entity?: string
     }
     case 'kyc': {
       if (can(CRM_ROLES)) {
-        stats.kyc_pending = num((await one(pool, `SELECT COUNT(*)::int n FROM kyc_documents WHERE status IN ('PENDING','UNDER_REVIEW')`)).n);
+        stats.kyc_pending = num((await one(pool, `SELECT COUNT(*)::int n FROM kyc_documents WHERE status IN ('PENDING','UNDER_REVIEW','RESUBMISSION_REQUIRED')`)).n);
+        stats.kyc_expiring = num((await one(pool, `SELECT COUNT(*)::int n FROM kyc_documents WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_DATE + 30 AND status NOT IN ('EXPIRED','NOT_APPLICABLE')`)).n);
+        stats.kyc_attention = num((await one(pool, `SELECT COUNT(*)::int n FROM subscriber_kyc_profiles WHERE overall_status='ATTENTION'`)).n);
       }
       break;
     }
@@ -776,8 +805,11 @@ export function render(intent: string, lang: 'bn' | 'en', s: Record<string, any>
     }
     case 'kyc': {
       if (!CRM_ROLES.includes(ctx.actor.role)) { body = `### ${T.kyc}\n\n${denyText(bn)}`; break; }
-      body = `### ${T.kyc}\n\n` + (bn ? `🪪 **${s.kyc_pending ?? 0}** টি KYC ডকুমেন্ট পেন্ডিং আছে।` : `🪪 **${s.kyc_pending ?? 0}** KYC documents pending.`);
+      body = `### ${T.kyc}\n\n` + (bn
+        ? `🪪 **${s.kyc_pending ?? 0}** টি KYC ডকুমেন্ট পেন্ডিং, **${s.kyc_expiring ?? 0}** টি শীঘ্রই মেয়াদোত্তীর্ণ, **${s.kyc_attention ?? 0}** টি প্রোফাইলে মনোযোগ প্রয়োজন।`
+        : `🪪 **${s.kyc_pending ?? 0}** KYC documents pending, **${s.kyc_expiring ?? 0}** expiring within 30 days, **${s.kyc_attention ?? 0}** profiles need attention.`);
       cards.push({ title: bn ? 'গ্রাহক তালিকা' : 'Subscribers', url: '/clients' });
+      cards.push({ title: bn ? 'KYC রিভিউ কুইয়ু' : 'KYC review queue', url: '/kyc-review' });
       break;
     }
     case 'gis_sites': {
@@ -1227,7 +1259,8 @@ async function freeFormExternal(pool: any, ctx: Ctx, message: string, lang: 'bn'
 
 /* ------------------------------- public -------------------------------- */
 
-export async function askAI(pool: any, actor: AIActor, message: string, history: Array<{ role: string; content: string }> = [], opts?: { mode?: 'auto' | 'local' | 'llm' }): Promise<AIResult> {
+export async function askAI(pool: any, actorInput: AIActor, message: string, history: Array<{ role: string; content: string }> = [], opts?: { mode?: 'auto' | 'local' | 'llm' }): Promise<AIResult> {
+  const actor = await normalizeActor(pool, actorInput);
   // 'local': built-in engine only — never call the external provider.
   // 'llm': ask the external provider for free-form questions (falls back to
   //        the local answer if the provider isn't ready).
@@ -1296,9 +1329,10 @@ export async function askAI(pool: any, actor: AIActor, message: string, history:
  */
 export async function runAIIntent(
   pool: any,
-  actor: AIActor,
+  actorInput: AIActor,
   target: { intent: string; lang?: 'bn' | 'en'; entity?: string },
 ): Promise<AIResult> {
+  const actor = await normalizeActor(pool, actorInput);
   const start = Date.now();
   const ctx: Ctx = { role: actor.role, actor };
   const detected: Detection = {

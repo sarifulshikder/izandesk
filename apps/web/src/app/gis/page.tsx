@@ -68,6 +68,7 @@ export default function GisPage() {
   const [liveSessions, setLiveSessions] = useState<any[]>([]);
   const [bbox, setBbox] = useState<[number, number, number, number] | null>(null);
   const bboxTimer = useRef<any>(null);
+  useEffect(() => () => { if (bboxTimer.current) clearTimeout(bboxTimer.current); }, []);
   const [importText, setImportText] = useState('');
   const [importResult, setImportResult] = useState<any>(null);
   const [geoQuery, setGeoQuery] = useState('');
