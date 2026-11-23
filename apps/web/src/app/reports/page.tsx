@@ -22,7 +22,8 @@ export default function ReportsPage() {
   const [schedules, setSchedules] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string|null>(null);
-  const [sched, setSched] = useState<any>({ name:'Daily Collections', report_key:'collections', format:'CSV', interval_minutes: 1440 });
+  const [sched, setSched] = useState<any>({ name:'Daily Collections', report_key:'collections', format:'CSV', interval_minutes: 1440, recipients: [] as any[] });
+  const [rcpt, setRcpt] = useState<any>({ channel_type: 'SMS', to: '' });
   const searchParams = useSearchParams();
 
   useEffect(() => {
@@ -125,8 +126,23 @@ export default function ReportsPage() {
       <div className="card p-4">
         <h2 className="card-title mb-3">Report Schedules (delivery hook)</h2>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 table-wrap overflow-auto max-h-[220px]"><Table cols={['Name','Report','Format','Interval','Enabled']} rows={schedules.map((s:any)=>[s.name,s.report_key,s.format,s.interval_minutes ? `${s.interval_minutes} min` : (s.schedule_cron || '-'),s.enabled?'Yes':'No'])} empty="No schedules configured." /></div>
-          <div className="space-y-2 text-sm"><input className="form-control" placeholder="Schedule name" value={sched.name} onChange={e=>setSched({...sched,name:e.target.value})} /><select className="form-select" value={sched.report_key} onChange={e=>setSched({...sched,report_key:e.target.value})}>{['collections','dues-aging','profit-loss','expenses','resellers','payroll','kyc-compliance'].map(x=><option key={x} value={x}>{x}</option>)}</select><input className="form-control" type="number" min={5} step={5} placeholder="Interval (minutes)" value={sched.interval_minutes} onChange={e=>setSched({...sched,interval_minutes:Number(e.target.value||0)})} /><button onClick={createSchedule} className="btn btn-primary w-full">Save Schedule</button><div className="text-xs text-muted-foreground">Schedules run by interval (minutes). Existing legacy cron values are still read for compatibility.</div></div>
+          <div className="lg:col-span-2 table-wrap overflow-auto max-h-[260px]"><Table cols={['Name','Report','Format','Interval','Recipients','Enabled']} rows={schedules.map((s:any)=>[s.name,s.report_key,s.format,s.interval_minutes ? `${s.interval_minutes} min` : (s.schedule_cron || '-'), Array.isArray(s.recipients)?s.recipients.length:0, s.enabled?'Yes':'No'])} empty="No schedules configured." /></div>
+          <div className="space-y-2 text-sm">
+            <input className="form-control" placeholder="Schedule name" value={sched.name} onChange={e=>setSched({...sched,name:e.target.value})} />
+            <select className="form-select" value={sched.report_key} onChange={e=>setSched({...sched,report_key:e.target.value})}>{['collections','dues-aging','profit-loss','expenses','resellers','payroll','kyc-compliance'].map(x=><option key={x} value={x}>{x}</option>)}</select>
+            <input className="form-control" type="number" min={5} step={5} placeholder="Interval (minutes)" value={sched.interval_minutes} onChange={e=>setSched({...sched,interval_minutes:Number(e.target.value||0)})} />
+            <div className="border border-border rounded-lg p-2 space-y-2">
+              <div className="text-xs font-semibold text-muted-foreground">Recipients</div>
+              <div className="flex gap-2">
+                <select className="form-select" value={rcpt.channel_type} onChange={e=>setRcpt({...rcpt,channel_type:e.target.value})}>{['SMS','WHATSAPP','TELEGRAM','EMAIL'].map(x=><option key={x} value={x}>{x}</option>)}</select>
+                <input className="form-control" placeholder="To / chat id" value={rcpt.to} onChange={e=>setRcpt({...rcpt,to:e.target.value})} />
+                <button type="button" className="btn btn-ghost" onClick={()=>{ const to=String(rcpt.to||'').trim(); if(!to) return; setSched({...sched, recipients:[...(sched.recipients||[]), { channel_type: rcpt.channel_type, to }]}); setRcpt({...rcpt,to:''}); }}>Add</button>
+              </div>
+              {(sched.recipients||[]).length ? <div className="space-y-1">{(sched.recipients||[]).map((r:any,i:number)=>(<div key={i} className="flex items-center justify-between gap-2 text-xs bg-muted/30 rounded px-2 py-1"><span>{r.channel_type}: {r.to}</span><button type="button" className="text-danger" onClick={()=>setSched({...sched, recipients:(sched.recipients||[]).filter((_x:any,j:number)=>j!==i)})}>Remove</button></div>))}</div> : <div className="text-xs text-muted-foreground">No recipients added.</div>}
+            </div>
+            <button onClick={createSchedule} className="btn btn-primary w-full">Save Schedule</button>
+            <div className="text-xs text-muted-foreground">Schedules run by interval (minutes). Recipients are dispatched through configured messaging channels.</div>
+          </div>
         </div>
       </div>
     </div>
