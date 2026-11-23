@@ -153,7 +153,9 @@ router.get('/health', asyncHandler(async (_req, res) => {
     }
   } catch { checks.disk = { ok: null, note: 'disk check unavailable' }; }
   const ok = checks.api.ok && checks.db.ok;
-  res.json({ ok, checks });
+  // Keep the payload for the UI, but fail the HTTP status too so probes and
+  // load balancers do not treat an unhealthy service as healthy.
+  res.status(ok ? 200 : 503).json({ ok, checks });
 }));
 
 router.get('/diagnostics', asyncHandler(async (req, res) => {

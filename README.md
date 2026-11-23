@@ -14,8 +14,8 @@ All complete architectural blueprints, database schemas, and feature catalogs ar
 2. **[Software Requirements Specification (SRS) & Architecture](./docs/izandesk_software_requirements_specification.md)**  
    *Carrier-grade FreeRADIUS 3 AAA, Dynamic CoA, TR-069 GenieACS, MikroTik RouterOS automation, OLT telemetry, and the Hot-Reload Plugin Kernel.*
 
-3. **[Database Schema & Data Dictionary](./docs/izandesk_database_schema_and_models.md)**  
-   *PostgreSQL 16 + PostGIS relational schema, double-entry general ledger, hardware inventory serials, and multi-tier reseller wallets.*
+3. **[Database Design & Data Dictionary (target schema)](./docs/izandesk_database_schema_and_models.md)**
+   *Design reference for PostgreSQL 16 + PostGIS, double-entry ledger and reseller wallets. The live schema is bootstrapped in `apps/api/src/db/index.ts`; where the two differ, that file is authoritative.*
 
 4. **[Phased Implementation Roadmap & Verification Plan](./docs/izandesk_phase_implementation_roadmap.md)**  
    *Detailed step-by-step 6-phase engineering milestones with browser verification criteria.*
@@ -35,12 +35,12 @@ All complete architectural blueprints, database schemas, and feature catalogs ar
 ## ⚡ Core Architecture Highlights
 
 - **Frontend:** Next.js 16 (App Router, React 19, Turbopack; `proxy.ts` network boundary) + Tailwind CSS 4 (CSS-first `@theme` config) + Shadcn UI + Lucide Icons ("Neo-Telecom" Dark/Light responsive design).
-- **Backend API:** Express 5 (TypeScript) + Event-Driven Workers + Hot-Reload Plugin Kernel.
-- **Database & Storage:** PostgreSQL 16 (with PostGIS 3.4 for fiber mapping) + Redis 7 & BullMQ.
+- **Backend API:** Express 5 (TypeScript) + in-process periodic schedulers with database-backed locks + Hot-Reload Plugin Kernel. A BullMQ worker tier is a planned design item, not shipped.
+- **Database & Storage:** PostgreSQL 16 (with PostGIS 3.4 for fiber mapping) + Redis 7 (status/cache); scheduled jobs currently run inside the API process.
 - **Network Engine:** FreeRADIUS 3.2 (with Dynamic CoA / PoD) + MikroTik RouterOS REST/API + SNMP OLT Poller + TR-069 GenieACS.
 - **Extensibility:** Hot-reloadable plugins in `/plugins/` (payment gateways, SMS providers, OLT vendor CLI profiles) loaded dynamically at runtime without server restarts.
-- **Runtime/Toolchain:** Node.js 24 + pnpm 12 (monorepo workspaces).
-- **Deployment:** 1-Click Plug-and-Play containerized with Docker and Docker Compose (`node:24-alpine` images).
+- **Runtime/Toolchain:** Node.js 24 (dev/base compose images) + pnpm 12 (monorepo workspaces); published multi-arch production images use Node.js 22.
+- **Deployment:** 1-Click Plug-and-Play containerized with Docker and Docker Compose (`node:24-alpine` base for local compose, `node:22-alpine` for published images).
 
 ---
 
@@ -86,9 +86,11 @@ All complete architectural blueprints, database schemas, and feature catalogs ar
   - **Omnichannel messaging engine:** channel/config/template/log models and APIs for Local BD SMS (GreenWeb), Twilio SMS, WhatsApp Business API (invoice delivery/PDF link support hooks), and Telegram Bot (NOC alerts/daily revenue summary hooks), plus built-in **Gateway Tester** for test dispatch (`/api/messaging`, `/messaging`).
   - *Notes:* Live external delivery requires provider credentials/tokens and API-specific integration setup (Twilio/GreenWeb/Meta WhatsApp Cloud/Telegram). White-label subdomain/custom-domain routing requires DNS and reverse-proxy host mapping in deployment.
 - **Phase 6:** Customer Self-Care Portal & 1-Click Plug-and-Play Packaging *(Implemented foundation)*
-- **Phase 7:** Settings & Security module *(Implemented)*
-  - Schema-driven settings store (`settings` table, key=`<category>.<field>` JSONB) with categories **General** (company profile, timezone/currency/date format/language, invoice prefix + sequence), **Security**, **Notifications**, **Branding**, **Billing**, **Network**, **ACS**, **AI Copilot**; seeded defaults, per-category reset, secrets masked on read (`••••••••`, blank = keep on write)
-  - APIs: `GET /api/settings` (+`/schema`, `/:category`), `PUT /api/settings/:category` (SUPER_ADMIN, validated + coerced + audited), `POST /api/settings/reset/:category`, `POST /api/settings/test-smtp` (live SMTP EHLO test), `GET /api/settings/audit/recent` (`/api/settings`, `/settings`)
+- **Phase 7:** Finance, HRM, Reporting & Commercial Operations *(Implemented — see the roadmap for details)*
+  - Finance journal/transactions, HRM and payroll, procurement, hotspot vouchers, aggregate reports, audit & field ops, leads and installation orders (`/api/finance`, `/api/hr`, `/api/procurement`, `/api/hotspot`, `/api/reports`, `/api/audit`, `/api/leads`, `/api/installation-orders`).
+- **Cross-cutting: Settings & Security** *(Implemented)*
+  - Schema-driven settings store (`settings` table, key=`<category>.<field>` JSONB) with categories **General** (company profile, timezone/currency/date format/language, invoice prefix + sequence), **Security**, **Notifications**, **Branding**, **Billing**, **Network**, **ACS**, **AI Copilot**, **MCP Server**, **KYC & Compliance**; seeded defaults, per-category reset, secrets masked on read (`••••••••`, blank = keep on write)
+  - APIs: `GET /api/settings` (+`/schema`, `/:category`), `PUT /api/settings/:category` (SUPER_ADMIN, validated + coerced + audited), `POST /api/settings/reset/:category`, `POST /api/settings/test-smtp` (live SMTP EHLO test), `GET /api/settings/audit/recent` (`/api/settings`, `/settings`). Aggregate settings, `/schema` and all categories other than `general` are SUPER_ADMIN-only; `general` is readable by any authenticated user.
   - **Live enforcement from settings:** session timeout on issued JWTs (`security.session_timeout_minutes`), login lockout (`login_max_attempts`/`login_lockout_minutes` → 429 + audit), maintenance mode (non-SUPER_ADMIN API → 503 with message), password policy on `POST /api/auth/change-password` (bcrypt-hashed overrides persisted in `security.password_overrides`, re-applied at boot), invoice numbering uses `general.invoice_prefix`/`invoice_next_number`
   - **UI:** `/settings` — tabbed editor per category (auto-rendered from schema), save/reset per tab, SMTP test button, change-password card, maintenance banner, recent-changes audit feed
 
@@ -128,18 +130,29 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up 
 # 1) Install deps
 pnpm install
 
-# 2) Start infra (Postgres/PostGIS, Redis, Caddy, FreeRADIUS, WireGuard hub)
-docker compose -f docker/docker-compose.yml up -d
-# includes: izandesk-postgres, izandesk-redis, izandesk-caddy, izandesk-freeradius (UDP 1812/1813), izandesk-wg-hub (UDP 51820)
+# 2) Configure the compose environment (required before a production/strict start)
+cp docker/.env.example docker/.env
+# edit docker/.env: JWT_SECRET, POSTGRES_PASSWORD, WEB_ORIGIN,
+#   KYC_ENCRYPTION_KEYS / KYC_ENCRYPTION_ACTIVE_KEY_ID, and
+#   BOOTSTRAP_ADMIN_EMAIL + BOOTSTRAP_ADMIN_PASSWORD_HASH when demos are disabled.
+# docker/.env is gitignored; the API container forwards these variables.
 
-# 3) Build shared types
+# 3) Start infra only (Postgres/PostGIS, Redis, FreeRADIUS, WireGuard hub)
+docker compose -f docker/docker-compose.yml up -d postgres redis freeradius wg-hub
+# includes: izandesk-postgres, izandesk-redis, izandesk-freeradius (UDP 1812/1813),
+#           izandesk-wg-hub (UDP 51820)
+# To run the whole stack in containers instead of steps 5/6, use:
+# docker compose -f docker/docker-compose.yml up -d
+# Caddy is started separately from the HTTPS section below (it depends on web).
+
+# 4) Build shared types
 pnpm --filter @izandesk/shared-types build
 
-# 4) Start API (hot-reload plugin kernel, auth, BSS/OSS, network/RADIUS/WireGuard integrations)
+# 5) Start API locally (hot-reload plugin kernel, auth, BSS/OSS, network/RADIUS/WireGuard integrations)
 pnpm --filter api build
 pnpm --filter api start   # http://localhost:4000
 
-# 5) Start Web
+# 6) Start Web locally
 pnpm --filter web dev     # http://localhost:3000
 ```
 
@@ -165,7 +178,7 @@ docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
 
 Notes:
 
-- All images use **Node.js 22**: Node 24 no longer ships `linux/arm/v7` binaries.
+- The published multi-arch images use **Node.js 22** because Node 24 no longer ships `linux/arm/v7` binaries. The local dev/base compose files use `node:24-alpine`.
 - The API is compiled natively per platform so native modules (`bcrypt`) load correctly.
 - Next.js 16 has no `linux/arm/v7` SWC binary, so the web build runs on the host
   architecture and only its architecture-independent `standalone` output is copied into
@@ -196,7 +209,7 @@ Notes:
 - **WireGuard overlay (optional):** `izandesk-wg-hub` exposes UDP `51820` (configurable) for spoke routers behind NAT/CGNAT to dial out; set the hub public endpoint/port in `/wireguard`, allow/forward the UDP port, and apply per-peer bootstrap/provisioning. Declare OLT management CIDRs per peer and ensure tunnel↔LAN routing/firewall on spokes for OLT reachability. Hub/peer private keys and preshared keys are never returned by list/detail APIs (only presence flags); bootstrap scripts embed a peer private key by design and are restricted to `SUPER_ADMIN`/`NOC_ENGINEER`.
 - **Network/OSS credential boundary:** routers, OLTs, RADIUS, WireGuard and ACS are staff-only (`SUPER_ADMIN`, `NOC_ENGINEER`, `BILLING_OPERATOR`, `TECHNICIAN`); only `SUPER_ADMIN`/`NOC_ENGINEER` may mutate them. Device passwords, RADIUS shared secrets, MikroTik PPP secrets and raw `wg show` dumps are stripped from API responses. Router management TLS currently accepts self-signed certificates (`rejectUnauthorized: false`) — verify/terminate TLS at the network layer for production. `GET /api/network/sessions` is an operational dashboard read that also refreshes the session cache and best-effort ONU↔subscriber links; it is not a pure read.
 
-**Demo RBAC accounts:** `admin@izandesk.com/admin123`, `noc@izandesk.com/noc123`, `billing@izandesk.com/billing123`, `tech@izandesk.com/tech123`, `reseller@cybernet.bd/reseller123`. These accounts have well-known passwords — set `DISABLE_DEMO_ACCOUNTS=true` for any real deployment (there is no database-backed user store yet, so configure a real identity source before doing so). Customer-portal sessions are invalidated when the subscriber changes their password, and portal login is rate-limited. Subscriber KYC uploads are limited to 5 MB of PNG/JPEG/WebP/GIF/PDF. Subscriber portal credentials are stored as a separate bcrypt hash (`portal_password`) from the cleartext PPPoE/RADIUS secret (`password`); the migration backfills legacy hashes and never returns either field in subscriber API responses.
+**Demo RBAC accounts:** `admin@izandesk.com/admin123`, `noc@izandesk.com/noc123`, `billing@izandesk.com/billing123`, `tech@izandesk.com/tech123`, `reseller@cybernet.bd/reseller123`. These accounts have well-known passwords — set `DISABLE_DEMO_ACCOUNTS=true` for any real deployment. With demos disabled, the API creates one bootstrap SUPER_ADMIN from `BOOTSTRAP_ADMIN_EMAIL` plus `BOOTSTRAP_ADMIN_PASSWORD_HASH` (preferred) or `BOOTSTRAP_ADMIN_PASSWORD`; without those variables no staff user can sign in. Customer-portal sessions are invalidated when the subscriber changes their password, and portal login is rate-limited. Subscriber KYC uploads are limited to 5 MB of PNG/JPEG/WebP/GIF/PDF. Subscriber portal credentials are stored as a separate bcrypt hash (`portal_password`) from the cleartext PPPoE/RADIUS secret (`password`); the migration backfills legacy hashes and never returns either field in subscriber API responses.
 
 **Staff account security:** staff JWTs now carry a revocable session id (`jti`) backed by `auth_sessions`. Settings → Security → Multi-factor authentication supports TOTP enrollment (AES-256-GCM encrypted seed at rest), one-time recovery codes, password change revoking other sessions, and "log out all devices". SUPER_ADMINs with TOTP must supply a fresh 5-minute step-up token to create or revoke MCP keys. Audit logs can be filtered/exported as CSV from Audit & Field Ops, with a configurable daily retention sweep. See `docs/security-hardening.md`.
 

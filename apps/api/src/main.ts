@@ -59,6 +59,31 @@ import { startNetworkCollector } from './integrations/network-collector';
 import { LITE_MODE } from './config/runtime';
 import { probeWithDeadline } from './health';
 
+/**
+ * Readiness probe that returns its client to the pool. On timeout the client is
+ * destroyed instead of left checked out, so repeated failed probes cannot
+ * starve the pool.
+ */
+async function probeDbReady(): Promise<boolean> {
+  let client: any = null;
+  try {
+    client = await pool.connect();
+    const ok = await probeWithDeadline(async () => { await client.query('SELECT 1'); return true; }, 2000);
+    if (!ok) {
+      const stale = client; client = null;
+      try { stale.release(new Error('readiness probe timed out')); } catch { /* already released */ }
+    }
+    return ok;
+  } catch {
+    return false;
+  } finally {
+    if (client) {
+      const held = client; client = null;
+      try { held.release(); } catch { /* already released */ }
+    }
+  }
+}
+
 const PORT = Number(process.env.API_PORT || 4000);
 // Fail loudly before any route is mounted when the deployment is insecure.
 // The public demo can opt into the known-credentials profile explicitly.
@@ -239,7 +264,7 @@ async function bootstrap() {
   app.get('/api/health', async (_req, res) => {
     // Probe the database on every request. A cached startup flag alone reports
     // 200 after the DB has gone away, which would keep a broken pod in rotation.
-    const liveDbReady = dbReady && await probeWithDeadline(() => pool.query('SELECT 1'), 2000);
+    const liveDbReady = dbReady && await probeDbReady();
     const kernelReady = kernel.isReady();
     const ok = liveDbReady && kernelReady;
     res.status(ok ? 200 : 503).json({ ok, service: 'izandesk-api', phase: 7, dbReady: liveDbReady, kernelReady, pluginCount: kernel.listPlugins().length, lite: LITE_MODE });
@@ -594,7 +619,10 @@ async function bootstrap() {
     console.log(`[Bootstrap] DB ready: ${dbReady}, Plugins loaded: ${kernel.listPlugins().length}`);
   });
 
-  if (dbReady) {
+  let schedulersStarted = false;
+  const startSchedulers = () => {
+    if (schedulersStarted || !dbReady) return;
+    schedulersStarted = true;
     startBillingScheduler();
     startBackupScheduler();
     startReportScheduler();
@@ -607,6 +635,23 @@ async function bootstrap() {
       void runAuditRetention();
       void runKycMaintenance();
     }, 24 * 60 * 60 * 1000).unref();
+  };
+
+  if (dbReady) {
+    startSchedulers();
+  } else {
+    // A DB outage at boot must not permanently strand readiness and disable
+    // every scheduler. Retry schema initialization until the DB returns.
+    const retry = setInterval(async () => {
+      try {
+        await initDb();
+        dbReady = true;
+        console.log('[DB] Schema ready after delayed recovery');
+        startSchedulers();
+        clearInterval(retry);
+      } catch { /* keep retrying until the database is reachable */ }
+    }, 15000);
+    retry.unref();
   }
 }
 

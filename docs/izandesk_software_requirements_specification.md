@@ -29,15 +29,15 @@ It merges **Business Support Systems (BSS)** (automated recurring billing, multi
 ```mermaid
 graph TB
     subgraph ClientTier["Cross-Platform Client Tier (Responsive Web, Mobile, Tablet)"]
-        AdminWeb["Admin & NOC Web App (Next.js 15 / React 19)"]
+        AdminWeb["Admin & NOC Web App (Next.js 16 / React 19)"]
         MobilePWA["Field Engineer & Customer PWA (Mobile / Tablet)"]
         ResellerWeb["White-Label Reseller Portal"]
     end
 
     subgraph APITier["API & Gateway Tier"]
         NginxProxy["Nginx Gateway / Reverse Proxy"]
-        NestAPI["IzanDesk Core API (NestJS + TypeScript)"]
-        WebSocketEngine["WebSocket Telemetry Engine (Socket.io)"]
+        NestAPI["IzanDesk Core API (Express 5 + TypeScript)"]
+        WebSocketEngine["WebSocket Telemetry Engine (ws)"]
         PluginKernel["Dynamic Hot-Reload Plugin Kernel (Chokidar + Isolated VM)"]
     end
 
@@ -48,7 +48,7 @@ graph TB
     end
 
     subgraph WorkerTier["Async Network & Event Workers"]
-        BullMQWorkers["BullMQ Job Workers (Redis)"]
+        BullMQWorkers["DB-locked in-process schedulers (BullMQ workers planned)"]
         MikrotikEngine["MikroTik RouterOS Worker (API / REST)"]
         OLTEngine["OLT Telemetry Worker (SNMP v2c/v3 + Telnet/SSH)"]
         ACSBridge["TR-069 GenieACS Bridge (NBI REST API)"]
@@ -155,7 +155,7 @@ sequenceDiagram
 ```
 
 ### 4.2 TR-069 / GenieACS Customer Wi-Fi Remote Management
-- **Zero-Touch Provisioning (ZTP)**: On connection, the customer router issues a CWMP Inform request. IzanDesk automatically maps the serial number to the subscriber's account and injects PPPoE credentials and Wi-Fi SSID.
+- **Zero-Touch Provisioning (ZTP)** *(planned)*: On connection, the customer router issues a CWMP Inform request; a future workflow would map the serial to the subscriber and inject PPPoE credentials/Wi-Fi. Today the GenieACS integration provides device visibility, diagnostics, parameters and queued tasks/provisions via `/api/acs` — automatic serial-to-subscriber enrollment is not implemented.
 - **Remote Wi-Fi Password Changes**: Directly updates the `InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.PreSharedKey` parameter tree.
 - **Signal Quality Telemetry**: Automatically queries the optical module transceiver parameters (`RxOpticalPower`, `TxOpticalPower`) and graphs signal fluctuations over time.
 

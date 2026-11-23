@@ -14,6 +14,10 @@ Set these in `apps/api/.env` (and the matching compose variables):
 | `WEB_ORIGIN` | Explicit comma-separated origins | Browser origin allowlist |
 | `ALLOW_LAN_ORIGINS` | `false` | Stops automatic private-network origin access |
 | `SECURITY_STRICT_MODE` | `true` (optional) | Applies the same fatal checks in staging/CI |
+| `KYC_ENCRYPTION_KEYS` | `v1:<base64 32-byte key>[,v2:...]` | AES-256-GCM keys for KYC files at rest |
+| `KYC_ENCRYPTION_ACTIVE_KEY_ID` | Active key id, e.g. `v1` | Selects the key used for new uploads |
+
+With demos disabled, also set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD_HASH` (or `BOOTSTRAP_ADMIN_PASSWORD` for a local demo). Without them no staff user can sign in. When using `docker/docker-compose.yml`, put these values in `docker/.env` — the compose file forwards them to the API container.
 
 When `NODE_ENV=production` or `SECURITY_STRICT_MODE=true`, a failed check throws during bootstrap and the process exits with the list of problems. For a local demo that intentionally runs the insecure profile in production mode, set `SECURITY_ALLOW_INSECURE_DEMO=true` (never on a real deployment).
 

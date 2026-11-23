@@ -63,7 +63,9 @@ router.get('/routers', asyncHandler(async (req, res) => {
         }
       }
     } else if (row.is_enabled && imode === 'RADIUS') {
-      t = { status: row.status || 'ONLINE', last_seen_at: new Date().toISOString() };
+      // RADIUS NAS health is not polled here. Reporting a fabricated fresh
+      // last_seen_at/ONLINE makes dead gear look healthy to operators.
+      t = { status: row.status || 'UNKNOWN', last_seen_at: row.last_seen_at };
     } else {
       t = { status: 'DISABLED', last_seen_at: row.last_seen_at };
     }

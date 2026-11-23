@@ -350,7 +350,18 @@ export async function evaluateDuePolicies() {
         try {
           const profileOverride = walled ? (policy.walled_garden_profile || 'izn-walled-garden') : undefined;
           const coaAction: 'DISCONNECT'|'COA' = ((targetStatus === 'SUSPENDED' || targetStatus === 'EXPIRED') && !walled) ? 'DISCONNECT' : 'COA';
-          await applyProvisioningState(s.id, { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction, profileOverride, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? 'izn-walled-garden' : undefined });
+          const applied = await applyProvisioningState(s.id, { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction, profileOverride, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? 'izn-walled-garden' : undefined });
+          // applyProvisioningState returns ok:true even when an individual
+          // router/RADIUS/CoA step failed. Do not silently record a successful
+          // enforcement when the subscriber state was changed but the network
+          // was not.
+          const failed = Object.entries(applied?.results || {})
+            .filter(([, v]: any) => v && v.ok === false && !v.skipped)
+            .map(([k]) => k);
+          if (failed.length) {
+            await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'ENFORCEMENT_ERROR',$2,$3,$4::jsonb,'policy_engine')`,
+              [s.id, targetStage, `Enforcement failed: ${failed.join(', ')}`, JSON.stringify({ failed, results: applied.results })]);
+          }
         } catch (e:any) {
           await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'ENFORCEMENT_ERROR',$2,$3,$4::jsonb,'policy_engine')`, [s.id, targetStage, e.message, JSON.stringify({})]);
         }
@@ -801,6 +812,8 @@ export function startBillingScheduler() {
     try { await ensureOverdueInvoiceStatuses(); await evaluateDuePolicies(); } catch (e:any) { console.error('[BillingScheduler] error', e.message); }
   };
   const runMsg = async () => {
+    const got = await tryAcquireSchedulerLock('messaging-sweep', 9 * 60 * 1000).catch(()=>false);
+    if (!got) return;
     try { await runMessagingSchedulerSweep(); } catch (e:any) { console.error('[MessagingScheduler] error', e.message); }
   };
   setTimeout(run, 5000);

@@ -11,7 +11,7 @@ function parseUptimeSimple(s: string): number {
 let sessionsRunning = false;
 let telemetryRunning = false;
 
-export async function collectSessionsOnce(): Promise<{ ok: boolean; routers: number; active: number; error?: string }> {
+export async function collectSessionsOnce(): Promise<{ ok: boolean; routers: number; active: number; failed?: number; error?: string }> {
   if (sessionsRunning) return { ok: true, routers: 0, active: 0 };
   sessionsRunning = true;
   try {
@@ -22,13 +22,17 @@ export async function collectSessionsOnce(): Promise<{ ok: boolean; routers: num
     const directRouters = allRouters.filter((r: any) => ['API', 'REST'].includes(String(r.integration_mode).toUpperCase()) && r.is_enabled);
 
     const realMap = new Map<string, { router_id: string; address?: string; caller_id?: string; uptime?: string; rx_bps?: number; tx_bps?: number }>();
+    const failedRouters = new Set<string>();
     for (const rt of directRouters) {
       try {
         const actives = await mikrotikActiveSessions(rt);
         for (const a of (actives || [])) {
           if (a && a.name) realMap.set(String(a.name), { router_id: rt.id, address: a.address, caller_id: a.caller_id, uptime: a.uptime, rx_bps: Number(a.rx_bps || 0), tx_bps: Number(a.tx_bps || 0) });
         }
-      } catch (_e) { /* unreachable router - skip */ }
+      } catch (e: any) {
+        failedRouters.add(String(rt.id));
+        await pool.query('UPDATE network_routers SET last_error=$1, updated_at=now() WHERE id=$2', [String(e?.message || 'session collection failed').slice(0, 500), rt.id]).catch(() => {});
+      }
     }
 
     for (let i = 0; i < subs.rows.length; i++) {
@@ -47,6 +51,9 @@ export async function collectSessionsOnce(): Promise<{ ok: boolean; routers: num
         rt = directRouters[i % Math.max(1, directRouters.length)] || allRouters[0] || null;
       }
       if (!rt) continue;
+      // A failed poll is not evidence that everyone went offline. Preserve the
+      // last known session state until the next successful collection.
+      if (failedRouters.has(String(rt.id))) continue;
 
       const isDirect = ['API', 'REST'].includes(String(rt.integration_mode || '').toUpperCase());
       let online = false; let ip = s.ip_address; let mac = s.mac_address; let uptimeSec = 0; let rx = 0; let tx = 0;
@@ -84,7 +91,7 @@ export async function collectSessionsOnce(): Promise<{ ok: boolean; routers: num
       }
     } catch (_e) { /* radacct not available */ }
 
-    return { ok: true, routers: directRouters.length, active: realMap.size };
+    return { ok: true, routers: directRouters.length, active: realMap.size, failed: failedRouters.size };
   } catch (e: any) {
     return { ok: false, routers: 0, active: 0, error: e?.message || String(e) };
   } finally {

@@ -1,7 +1,7 @@
-# IzanDesk ERP — Master Catalog: 550+ Production-Ready Features
+# IzanDesk ERP — 565-Feature Design & Requirements Catalog
 
 **Document Version:** 1.1.0  
-**Status:** Comprehensive Working Specification  
+**Status:** Design/requirements catalog — not every entry is implemented (see README phases and the roadmap for shipped capability)
 **Architecture:** Modular, Event-Driven, Hot-Reloadable Plugin Kernel  
 
 ---
@@ -12,7 +12,7 @@ To ensure IzanDesk is **infinitely extendable without requiring server downtime 
 
 ```mermaid
 flowchart TD
-    subgraph CoreEngine["IzanDesk Core Engine (NestJS + Next.js)"]
+    subgraph CoreEngine["IzanDesk Core Engine (Express 5 + Next.js 16)"]
         EventBus["Internal Event Bus (EventEmitter2 / Redis PubSub)"]
         HookRegistry["Global Hook & Filter Registry"]
         PluginManager["Plugin Manager & Hot-Reload Watcher"]
@@ -481,7 +481,7 @@ flowchart TD
 ---
 
 ### Domain 12: GIS, Fiber & FTTH Cable Route Mapping (Features 386 – 415)
-386. **Interactive PostGIS Spatial Map**: High-performance interactive geospatial map powered by Leaflet and Mapbox GL.
+386. **Interactive PostGIS Spatial Map**: High-performance interactive geospatial map powered by MapLibre GL with a local no-key basemap style.
 387. **Distribution Box (TJ Box) Mapping**: Place Terminal Junction (TJ) boxes on the map with visual port capacity indicators.
 388. **Optical Splitter Tree Visualization**: Hierarchical tree tracking 1:2, 1:4, 1:8, 1:16, and 1:32 optical splitters.
 389. **Fiber Cable Path Tracing**: Draw and trace physical fiber trunk, distribution, and drop cable routes on streets and utility poles.
