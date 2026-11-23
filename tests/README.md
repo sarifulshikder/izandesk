@@ -23,7 +23,7 @@ run `pnpm seed:e2e` once against the disposable stack first. CI does this
 automatically.
 
 CI (`.github/workflows/e2e-smoke.yml`) boots `postgres`, `redis`, `api` and `web`
-from `docker/docker-compose.yml`, waits for `/api/health` and the web root, then
+from `docker/docker-compose.yml`, waits for `/api/health` (readiness) and the web root, then
 runs the default (non-mutating) suite against `http://localhost:3000` on every
 push to `master`, pull request and manual dispatch. CI also typechecks both apps
 and runs the standalone `pnpm test:mcp` protocol smoke plus `scripts/smoke-security.mjs`.

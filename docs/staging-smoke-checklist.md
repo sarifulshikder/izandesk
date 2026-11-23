@@ -50,10 +50,11 @@ recent database backup; mutation tests must never target a live customer stack.
    - FreeRADIUS SQL template values rendered from `.env`
    - payment gateways: intended `enabled` values; gateways seed as disabled
 
-5. Confirm readiness probes tolerate `/api/health` returning **503** while DB or
-   kernel are not ready; do not treat the old always-200 response as healthy.
+5. Confirm probes: `/api/live` returns **200** while the process is alive (even
+   during DB outage), while `/api/ready` and `/api/health` return **503** when DB
+   or kernel are not ready. Do not treat the old always-200 response as healthy.
    The API performs a live `SELECT 1` probe and keeps an `error` listener on the
-   pg pool, so a DB restart must produce 503 without crashing the process.
+   pg pool, so a DB restart must produce 503 on readiness/health without crashing the process.
 
 ## 2. Deploy to staging
 

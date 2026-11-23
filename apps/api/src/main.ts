@@ -283,9 +283,22 @@ async function bootstrap() {
   await kernel.init();
   setKernel(kernel);
 
+  app.get('/api/live', (_req, res) => {
+    // Liveness: process can answer. Do not couple to DB so a DB outage causes
+    // traffic removal, not a restart loop.
+    res.status(200).json({ ok: true, service: 'izandesk-api', live: true });
+  });
+
+  app.get('/api/ready', async (_req, res) => {
+    const liveDbReady = dbReady && await probeDbReady();
+    const kernelReady = kernel.isReady();
+    const ok = liveDbReady && kernelReady;
+    res.status(ok ? 200 : 503).json({ ok, service: 'izandesk-api', ready: ok, dbReady: liveDbReady, kernelReady, pluginCount: kernel.listPlugins().length, lite: LITE_MODE });
+  });
+
   app.get('/api/health', async (_req, res) => {
-    // Probe the database on every request. A cached startup flag alone reports
-    // 200 after the DB has gone away, which would keep a broken pod in rotation.
+    // Backwards-compatible readiness probe. Prefer /api/ready for orchestrators;
+    // keep /api/health for existing monitors and UI checks.
     const liveDbReady = dbReady && await probeDbReady();
     const kernelReady = kernel.isReady();
     const ok = liveDbReady && kernelReady;
