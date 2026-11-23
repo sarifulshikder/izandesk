@@ -22,7 +22,7 @@ export default function ReportsPage() {
   const [schedules, setSchedules] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string|null>(null);
-  const [sched, setSched] = useState<any>({ name:'Daily Collections', report_key:'collections', format:'CSV', schedule_cron:'0 23 * * *' });
+  const [sched, setSched] = useState<any>({ name:'Daily Collections', report_key:'collections', format:'CSV', interval_minutes: 1440 });
   const searchParams = useSearchParams();
 
   useEffect(() => {
@@ -125,8 +125,8 @@ export default function ReportsPage() {
       <div className="card p-4">
         <h2 className="card-title mb-3">Report Schedules (delivery hook)</h2>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 table-wrap overflow-auto max-h-[220px]"><Table cols={['Name','Report','Format','Cron','Enabled']} rows={schedules.map((s:any)=>[s.name,s.report_key,s.format,s.schedule_cron||'-',s.enabled?'Yes':'No'])} empty="No schedules configured." /></div>
-          <div className="space-y-2 text-sm"><input className="form-control" placeholder="Schedule name" value={sched.name} onChange={e=>setSched({...sched,name:e.target.value})} /><select className="form-select" value={sched.report_key} onChange={e=>setSched({...sched,report_key:e.target.value})}>{['collections','dues-aging','profit-loss','expenses','resellers','payroll','kyc-compliance'].map(x=><option key={x} value={x}>{x}</option>)}</select><input className="form-control" placeholder="Cron (e.g. 0 23 * * *)" value={sched.schedule_cron} onChange={e=>setSched({...sched,schedule_cron:e.target.value})} /><button onClick={createSchedule} className="btn btn-primary w-full">Save Schedule</button><div className="text-xs text-muted-foreground">Schedules are stored for report generation/delivery; connect a cron/worker and email/messaging channel to auto-deliver outputs.</div></div>
+          <div className="lg:col-span-2 table-wrap overflow-auto max-h-[220px]"><Table cols={['Name','Report','Format','Interval','Enabled']} rows={schedules.map((s:any)=>[s.name,s.report_key,s.format,s.interval_minutes ? `${s.interval_minutes} min` : (s.schedule_cron || '-'),s.enabled?'Yes':'No'])} empty="No schedules configured." /></div>
+          <div className="space-y-2 text-sm"><input className="form-control" placeholder="Schedule name" value={sched.name} onChange={e=>setSched({...sched,name:e.target.value})} /><select className="form-select" value={sched.report_key} onChange={e=>setSched({...sched,report_key:e.target.value})}>{['collections','dues-aging','profit-loss','expenses','resellers','payroll','kyc-compliance'].map(x=><option key={x} value={x}>{x}</option>)}</select><input className="form-control" type="number" min={5} step={5} placeholder="Interval (minutes)" value={sched.interval_minutes} onChange={e=>setSched({...sched,interval_minutes:Number(e.target.value||0)})} /><button onClick={createSchedule} className="btn btn-primary w-full">Save Schedule</button><div className="text-xs text-muted-foreground">Schedules run by interval (minutes). Existing legacy cron values are still read for compatibility.</div></div>
         </div>
       </div>
     </div>

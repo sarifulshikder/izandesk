@@ -113,8 +113,10 @@ router.get('/schedules', asyncHandler(async (req,res)=>{
 }));
 router.post('/schedules', asyncHandler(async (req,res)=>{
   if(!guard(req,res)) return; const b=req.body||{}; if(!b.name||!b.report_key) return res.status(400).json({message:'name and report_key required'});
-  const r=await pool.query(`INSERT INTO report_schedules(name,report_key,format,schedule_cron,recipients,enabled,config) VALUES($1,$2,$3,$4,$5::jsonb,$6,$7::jsonb) RETURNING *`,
-    [b.name,b.report_key,b.format||'CSV',b.schedule_cron||null,JSON.stringify(b.recipients||[]),b.enabled!==false,JSON.stringify(b.config||{})]).catch((e:any)=>({rows:[],error:e}));
+  const intervalMinutes = Number(b.interval_minutes);
+  const safeInterval = Number.isFinite(intervalMinutes) && intervalMinutes > 0 ? Math.max(5, Math.round(intervalMinutes)) : null;
+  const r=await pool.query(`INSERT INTO report_schedules(name,report_key,format,schedule_cron,interval_minutes,recipients,enabled,config) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb) RETURNING *`,
+    [b.name,b.report_key,b.format||'CSV',b.schedule_cron||null,safeInterval,JSON.stringify(b.recipients||[]),b.enabled!==false,JSON.stringify(b.config||{})]).catch((e:any)=>({rows:[],error:e}));
   if((r as any).error) return res.status(500).json({message:(r as any).error.message});
   res.status(201).json({ok:true,data:r.rows[0]});
 }));

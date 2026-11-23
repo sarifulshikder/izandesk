@@ -1454,6 +1454,7 @@ export async function initDb() {
       report_key TEXT NOT NULL,
       format TEXT NOT NULL DEFAULT 'CSV',
       schedule_cron TEXT,
+      interval_minutes INTEGER,
       recipients JSONB DEFAULT '[]'::jsonb,
       enabled BOOLEAN NOT NULL DEFAULT true,
       last_run_at TIMESTAMPTZ,
@@ -1461,6 +1462,7 @@ export async function initDb() {
       config JSONB DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE report_schedules ADD COLUMN IF NOT EXISTS interval_minutes INTEGER;
 
     ALTER TABLE assets ADD COLUMN IF NOT EXISTS depreciation_rate NUMERIC(8,4) DEFAULT 0;
     ALTER TABLE assets ADD COLUMN IF NOT EXISTS accumulated_depreciation NUMERIC(14,2) DEFAULT 0;

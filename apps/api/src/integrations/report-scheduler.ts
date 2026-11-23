@@ -40,18 +40,25 @@ async function generateReport(key: string) {
   }
 }
 
-function intervalFor(s:any){
-  const cron = String(s.schedule_cron||'').toLowerCase();
-  if (cron.includes('@hour') || cron.startsWith('0 *')) return 3600*1000;
-  if (cron.includes('@week')) return 7*24*3600*1000;
-  if (cron.includes('*/10')) return 10*60*1000;
-  return 24*3600*1000; // default daily
+export function scheduleIntervalMinutes(s: any): number {
+  const explicit = Number(s?.interval_minutes);
+  if (Number.isFinite(explicit) && explicit > 0) return Math.max(5, Math.round(explicit));
+  const cron = String(s?.schedule_cron || '').trim().toLowerCase();
+  if (!cron) return 24 * 60;
+  if (cron.includes('@hour')) return 60;
+  if (cron.includes('@week')) return 7 * 24 * 60;
+  if (cron.includes('@day')) return 24 * 60;
+  const m = cron.match(/^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/);
+  if (m) return Math.max(5, Number(m[1]));
+  if (/^0\s+\*\s+\*\s+\*\s+\*$/.test(cron)) return 60;
+  if (/^\d{1,2}\s+\d{1,2}\s+\*\s+\*\s+\*$/.test(cron)) return 24 * 60;
+  return 24 * 60; // legacy fallback
 }
 
-function dueToRun(s:any, now=Date.now()){
+function dueToRun(s: any, now = Date.now()) {
   if (s.enabled === false) return false;
   const last = s.last_run_at ? new Date(s.last_run_at).getTime() : 0;
-  return !last || (now - last) >= intervalFor(s);
+  return !last || (now - last) >= scheduleIntervalMinutes(s) * 60 * 1000;
 }
 
 export async function runReportSchedulesOnce(){
@@ -62,7 +69,7 @@ export async function runReportSchedulesOnce(){
     // Atomic claim: with more than one API process, only one may run a due
     // schedule. last_run_at is claimed before work so a crash cannot cause a
     // duplicate send on the next tick.
-    const threshold = new Date(Date.now() - intervalFor(s)).toISOString();
+    const threshold = new Date(Date.now() - scheduleIntervalMinutes(s) * 60 * 1000).toISOString();
     const claim = await pool.query(
       `UPDATE report_schedules SET last_run_at=now(), last_status='RUNNING' WHERE id=$1 AND (last_run_at IS NULL OR last_run_at < $2::timestamptz) RETURNING id`,
       [s.id, threshold]

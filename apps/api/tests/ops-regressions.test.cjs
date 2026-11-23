@@ -104,6 +104,10 @@ async function reportScheduleTest() {
       check('report: recipient-less schedule is honest about delivery', final?.params[1] === 'NO_RECIPIENTS');
     } finally { fake.restore(); }
   }
+  {
+    check('report: interval_minutes takes precedence over legacy cron', reports.scheduleIntervalMinutes({ interval_minutes: 15, schedule_cron: '0 8 * * *' }) === 15);
+    check('report: legacy daily cron maps to 1440 minutes', reports.scheduleIntervalMinutes({ schedule_cron: '0 8 * * *' }) === 1440);
+  }
 }
 
 async function systemHealthTest() {
