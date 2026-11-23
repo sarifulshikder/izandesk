@@ -11,7 +11,7 @@ import {
   LayoutDashboard, Users, Wifi, Wallet, ArrowLeftRight, Receipt, RadioTower, RefreshCw,
   Search, ArrowUpRight, ArrowDownLeft, Building2, Plus, UserCheck,
   UserX, Clock3, Ban, Activity, Phone, Mail, CreditCard, ChevronRight, PlugZap, Eye,
-  ScrollText, Download, MessageSquare, Send, X, Edit3, CalendarPlus, CheckSquare, Square, FileText, UserPlus, KeyRound, Save, BarChart3, Trash2, AlertCircle, FileSpreadsheet, RefreshCcw, Settings2, BellRing
+  ScrollText, Download, MessageSquare, Send, X, Edit3, CalendarPlus, CheckSquare, Square, FileText, UserPlus, BarChart3, Trash2, AlertCircle, FileSpreadsheet, RefreshCcw, BellRing
 } from 'lucide-react';
 
 type AnyObj = Record<string, any>;
@@ -167,19 +167,15 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const [topupForm, setTopupForm] = useState<AnyObj>({ amount: '', gateway: 'bKash', method: 'Billpay', trx_id: '', payer_number: '', notes: '', terms_accepted: false });
   const [topupBusy, setTopupBusy] = useState(false);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
-  const [msgTarget, setMsgTarget] = useState<AnyObj | null>(null);
-  const [msgForm, setMsgForm] = useState({ channel_type: 'SMS', provider: 'GREENWEB', to: '', subject: '', body: '', templateId: '' });
-  const [templates, setTemplates] = useState<AnyObj[]>([]); const [msgLogs, setMsgLogs] = useState<AnyObj[]>([]); const [showMsgLogs, setShowMsgLogs] = useState(false);
-  const [saveTplName, setSaveTplName] = useState('');
-  const [bulkMsgReport, setBulkMsgReport] = useState<AnyObj[] | null>(null);
+  const [, setMsgTarget] = useState<AnyObj | null>(null);
+  const [, setMsgForm] = useState({ channel_type: 'SMS', provider: 'GREENWEB', to: '', subject: '', body: '', templateId: '' });
+  const [templates, setTemplates] = useState<AnyObj[]>([]);
+  const [, setSaveTplName] = useState('');
+  const [, setBulkMsgReport] = useState<AnyObj[] | null>(null);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
-  const [importOpen, setImportOpen] = useState(false);
-  const [importFile, setImportFile] = useState<File | null>(null);
-  const [importPreview, setImportPreview] = useState<AnyObj | null>(null);
-  const [importBusy, setImportBusy] = useState(false);
-  const [bulkEditOpen, setBulkEditOpen] = useState(false);
-  const [bulkEditForm, setBulkEditForm] = useState<AnyObj>({ package_name: '', monthly_bill: '', status: '', expiry_date: '', prefix: '', suffix: '' });
-  const [bulkMode, setBulkMode] = useState<'EDIT' | 'RENAME'>('EDIT');
+  const [, setImportOpen] = useState(false);
+  const [, setBulkEditOpen] = useState(false);
+  const [, setBulkMode] = useState<'EDIT' | 'RENAME'>('EDIT');
   const [sessionSelected, setSessionSelected] = useState<Record<string, boolean>>({});
 
   const [viewUser, setViewUser] = useState<AnyObj | null>(null);
@@ -192,7 +188,8 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const [payBusy, setPayBusy] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AnyObj | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [editPay, setEditPay] = useState<AnyObj | null>(null); const [editPayForm, setEditPayForm] = useState<AnyObj>({});
+  const [, setEditPay] = useState<AnyObj | null>(null);
+  const [, setEditPayForm] = useState<AnyObj>({});
   const [wizard, setWizard] = useState<{ initial?: AnyObj } | null>(null);
 
   const reseller = dashboard?.reseller || balance?.reseller || null;
@@ -328,7 +325,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   };
   const loadNotifLog = useCallback(async () => { if (!token) return; const r = await apiFetch<any>(`/api/resellers/${resellerId}/notification-log`, {}, token); setNotifLog(r.data || []); setNotifUnread(r.unread || 0); }, [token, resellerId]);
 
-  const loadTab = useCallback(async (t: TabKey) => { if (parityKeys.has(t)) return; setLoading(true); setErr(null); try { if (t === 'dashboard') await loadDashboard(); if (t === 'users') await Promise.all([loadUsers(), loadKyc().catch(()=>{}), dashboard ? Promise.resolve() : loadDashboard().catch(()=>{})]); if (t === 'sessions') await loadSessions(); if (t === 'balance') await Promise.all([loadBalance(), loadTopups()]); if (t === 'sharing') await loadSharing(); if (t === 'payments') await loadPayments(); if (t === 'onus') await Promise.all([loadOnus(), users.length ? Promise.resolve() : loadUsers().catch(()=>{})]); if (t === 'logs') await loadLogs(); if (t === 'notifications') await loadNotifLog(); if (t === 'branches') await loadBranches(); if (t === 'complaints') await loadComplaints(); if (t === 'parental') await loadParental(); } catch (e: any) { setErr(e.message || 'Failed to load'); } finally { setLoading(false); } }, [loadDashboard, loadUsers, loadKyc, loadSessions, loadBalance, loadSharing, loadPayments, loadOnus, loadLogs, loadNotifLog, loadBranches, loadComplaints, loadParental, dashboard, users.length]);
+  const loadTab = useCallback(async (t: TabKey) => { if (parityKeys.has(t)) return; setLoading(true); setErr(null); try { if (t === 'dashboard') await loadDashboard(); if (t === 'users') await Promise.all([loadUsers(), loadKyc().catch(()=>{}), dashboard ? Promise.resolve() : loadDashboard().catch(()=>{})]); if (t === 'sessions') await loadSessions(); if (t === 'balance') await Promise.all([loadBalance(), loadTopups()]); if (t === 'sharing') await loadSharing(); if (t === 'payments') await loadPayments(); if (t === 'onus') await Promise.all([loadOnus(), users.length ? Promise.resolve() : loadUsers().catch(()=>{})]); if (t === 'logs') await loadLogs(); if (t === 'notifications') await loadNotifLog(); if (t === 'branches') await loadBranches(); if (t === 'complaints') await loadComplaints(); if (t === 'parental') await loadParental(); } catch (e: any) { setErr(e.message || 'Failed to load'); } finally { setLoading(false); } }, [loadDashboard, loadUsers, loadKyc, loadSessions, loadBalance, loadTopups, loadSharing, loadPayments, loadOnus, loadLogs, loadNotifLog, loadBranches, loadComplaints, loadParental, dashboard, users.length]);
   useEffect(() => { loadTab('dashboard'); }, [resellerId]); // eslint-disable-line
   useEffect(() => { if (tab !== 'dashboard') loadTab(tab); }, [tab, payKind]); // eslint-disable-line
   useEffect(() => { if (tab === 'payments') { const t = setTimeout(() => loadPayments().catch(()=>{}), 250); return () => clearTimeout(t); } }, [payQ, payStatus, payGateway, payMethod, payType, payApproval]); // eslint-disable-line
@@ -351,7 +348,8 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   };
   useEffect(() => { if (tab==='users' && userQ===globalSearch.trim() && globalSearch.trim()) loadUsers().catch(()=>{}); }, [userQ]); // eslint-disable-line
   useEffect(() => { const t = setTimeout(() => { if (globalSearch.trim().length >= 2) doGlobalSearch(); else { setGlobalResults(null); setGlobalOpen(false); } }, 350); return () => clearTimeout(t); }, [globalSearch]); // eslint-disable-line
-  const goSearchResult = (type: 'users'|'payments'|'sessions'|'onus', row?: any) => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const goSearchResult = (type: 'users'|'payments'|'sessions'|'onus', _row?: any) => {
     setGlobalOpen(false);
     if (type === 'users') { setUserQ(globalSearch.trim()); setUserStatus(''); setTab('users'); }
     if (type === 'payments') { setPayQ(globalSearch.trim()); setPayKind('all'); setTab('payments'); }
@@ -394,77 +392,20 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const printInvoice = (invoiceId: string) => { if (!token || !viewUser) return; fetch(`/api/resellers/${resellerId}/customers/${viewUser.id}/invoices/${invoiceId}/pdf`, { headers: { Authorization: `Bearer ${token}` } }).then(async r => { if (!r.ok) { setErr('Invoice PDF unavailable'); return; } const blob = await r.blob(); const url = URL.createObjectURL(blob); window.open(url, '_blank'); setTimeout(()=>URL.revokeObjectURL(url), 60000); }); };
   const openView = async (s: AnyObj) => { setViewUser(s); setCustomerDetail(null); setDetailTab('basic'); setDetailLoading(true); try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/customers/${s.id}/detail`, {}, token || ''); setCustomerDetail(r.data || null); } catch { /* show basic fallback */ } finally { setDetailLoading(false); } };
   const openEdit = (s: AnyObj) => setWizard({ initial: s });
-  const uploadImport = async (execute: boolean) => {
-    if (!token || !importFile) return;
-    setImportBusy(true); setErr(null);
-    try {
-      const fd = new FormData(); fd.append('file', importFile);
-      const res = await fetch(`/api/subscribers/import/${execute ? 'execute' : 'preview'}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd });
-      const data = await res.json().catch(()=>({}));
-      if (!res.ok) throw new Error(data.message || 'Import failed');
-      if (execute) { setMsg(`Import complete: ${data.created || 0} created, ${data.failed || 0} failed.`); setImportOpen(false); setImportPreview(null); setImportFile(null); await loadUsers().catch(()=>{}); }
-      else setImportPreview(data);
-    } catch (e: any) { setErr(e.message); }
-    finally { setImportBusy(false); }
-  };
-  const applyBulkEdit = async () => {
-    if (!token || !selectedIds.length) return;
-    setActionBusy('bulkedit'); setErr(null); setMsg(null);
-    let ok = 0, fail = 0;
-    for (const id of selectedIds) {
-      const s = users.find(u => u.id === id);
-      if (!s) { fail++; continue; }
-      const payload: AnyObj = { full_name: s.full_name, username: s.username, connection_type: s.connection_type || 'PPPOE', status: s.status || 'PENDING' };
-      if (bulkMode === 'RENAME') {
-        const base = String(bulkEditForm.prefix || '') + String(s.username || '') + String(bulkEditForm.suffix || '');
-        if (!bulkEditForm.prefix && !bulkEditForm.suffix) { setErr('Enter a prefix and/or suffix'); break; }
-        payload.username = base;
-      } else {
-        if (bulkEditForm.package_name) payload.package_name = bulkEditForm.package_name;
-        if (bulkEditForm.monthly_bill !== '') payload.monthly_bill = Number(bulkEditForm.monthly_bill);
-        if (bulkEditForm.status) payload.status = bulkEditForm.status;
-        if (bulkEditForm.expiry_date) payload.expiry_date = bulkEditForm.expiry_date;
-      }
-      try { await apiFetch(`/api/subscribers/${id}`, { method: 'PUT', body: JSON.stringify(payload) }, token); ok++; }
-      catch { fail++; }
-    }
-    setMsg(`Bulk ${bulkMode === 'RENAME' ? 'rename' : 'edit'}: ${ok} updated${fail ? `, ${fail} failed` : ''}.`);
-    setBulkEditOpen(false); setSelected({}); await loadUsers().catch(()=>{}); setActionBusy(null);
-  };
   const deleteSubscriber = async () => { if (!token || !deleteTarget) return; setDeleting(true); setErr(null); setMsg(null); try {
-    const r = await apiFetch<any>(`/api/subscribers/${deleteTarget.id}`, { method: 'DELETE' }, token);
+    await apiFetch<any>(`/api/subscribers/${deleteTarget.id}`, { method: 'DELETE' }, token);
     setMsg(`Deleted ${deleteTarget.full_name || deleteTarget.username}.`);
     setDeleteTarget(null); await Promise.all([loadUsers().catch(()=>{}), loadDashboard().catch(()=>{})]);
   } catch (e: any) { setErr(e.message || 'Delete failed'); setDeleteTarget(null); } finally { setDeleting(false); } };
 
   const loadTemplates = async () => { if (!token) return; try { const r = await apiFetch<any>('/api/messaging/templates', {}, token); setTemplates(r.data || []); } catch { setTemplates([]); } };
-  const loadMsgLogs = async () => { if (!token || !canMessage) return; try { const r = await apiFetch<any>('/api/messaging/logs?limit=100', {}, token); setMsgLogs(r.data || []); } catch { setMsgLogs([]); } };
   const openMessage = async (s: AnyObj) => { setMsgTarget(s); setSaveTplName(''); setBulkMsgReport(null); setMsgForm({ channel_type: 'SMS', provider: 'GREENWEB', to: s.phone || s.email || '', subject: '', body: `Dear ${s.full_name || s.username || 'Customer'}, `, templateId: '' }); if (!templates.length) await loadTemplates(); };
-  const applyTemplate = (id: string) => { const t = templates.find(x=>String(x.id)===String(id)); if (!t) { setMsgForm(f=>({...f, templateId:id })); return; } setMsgForm(f=>({ ...f, templateId: id, channel_type: t.channel_type || f.channel_type, subject: t.subject || f.subject, body: t.body || f.body })); };
-  const saveTemplate = async () => { if(!token || !canMessage) return; const name = saveTplName.trim(); if(!name || !msgForm.body){ setErr('Template name and body required'); return;} setErr(null); setActionBusy('savetpl'); try { await apiFetch<any>('/api/messaging/templates', { method:'POST', body: JSON.stringify({ name, channel_type: msgForm.channel_type, purpose: 'RESELLER_PORTAL', subject: msgForm.subject || null, body: msgForm.body, variables: ['name','username','due','expiry','package','phone'], is_active: true }) }, token); setMsg(`Template "${name}" saved.`); setSaveTplName(''); await loadTemplates(); } catch(e:any){ setErr(e.message);} finally { setActionBusy(null);} };
-  const deleteTemplate = async () => { if(!token || !canMessage || !msgForm.templateId) return; if(!confirm('Delete selected template?')) return; setActionBusy('deltpl'); setErr(null); try { await apiFetch<any>(`/api/messaging/templates/${msgForm.templateId}`, { method:'DELETE' }, token); setMsg('Template deleted.'); setMsgForm(f=>({...f, templateId:''})); await loadTemplates(); } catch(e:any){ setErr(e.message);} finally { setActionBusy(null);} };
-  const sendMessage = async (bulk = false) => {
-    if (!token) return; const targets = bulk ? users.filter(u => selected[u.id]) : (msgTarget ? [msgTarget] : []);
-    if (!targets.length) { setErr('No recipient selected'); return; } if (!msgForm.body) { setErr('Message body is required'); return; }
-    setErr(null); setMsg(null); setActionBusy(bulk ? 'bulkmsg' : 'msg'); let ok = 0, fail = 0; const report: AnyObj[] = [];
-    for (const t of targets) {
-      const to = bulk ? (t.phone || t.email || '') : (msgForm.to || t.phone || t.email || '');
-      if (!to) { fail++; report.push({ user: t.full_name||t.username, to: '', status:'SKIPPED', error:'No recipient' }); continue; }
-      const body = msgForm.body.replace(/\{name\}/g, t.full_name || '').replace(/\{username\}/g, t.username || '').replace(/\{due\}/g, String(t.current_due ?? '')).replace(/\{expiry\}/g, String(t.expiry_date || '').slice(0,10)).replace(/\{package\}/g, String(t.package_name || '')).replace(/\{phone\}/g, String(t.phone || ''));
-      try { await apiFetch<any>('/api/messaging/send', { method: 'POST', body: JSON.stringify({ channel_type: msgForm.channel_type, provider: msgForm.provider, to, subject: msgForm.subject || undefined, body, related_type: 'SUBSCRIBER', related_id: t.id, requireEnabled: false }) }, token); ok++; report.push({ user: t.full_name||t.username, to, status:'SENT' }); }
-      catch (e:any) { fail++; report.push({ user: t.full_name||t.username, to, status:'FAILED', error: e.message }); }
-    }
-    setMsg(`Message sent/queued: ${ok} ok${fail ? `, ${fail} failed/skipped` : ''}.`);
-    if (bulk) { setBulkMsgReport(report); setSelected({}); } else { setMsgTarget(null); }
-    setActionBusy(null); if (showMsgLogs) await loadMsgLogs();
-  };
   const bulkRenew = async () => { const ids = selectedIds; if (!ids.length) return; if (!confirm(`Renew ${ids.length} selected subscriber(s) using reseller wallet?`)) return; setErr(null); setMsg(null); setActionBusy('bulkrenew'); let ok=0, fail=0; for (const id of ids) { try { await apiFetch<any>(`/api/resellers/${resellerId}/renew-subscriber`, { method: 'POST', body: JSON.stringify({ subscriber_id: id }) }, token); ok++; } catch { fail++; } } setMsg(`Bulk renew: ${ok} ok${fail ? `, ${fail} failed` : ''}.`); await Promise.all([loadUsers().catch(()=>{}), loadBalance().catch(()=>{}), loadDashboard().catch(()=>{})]); setActionBusy(null); };
 
   const assignOnu = async (onuId: string) => { if (!token) return; const subscriber_id = onuAssign[onuId]; if (!subscriber_id) { setErr('Select a subscriber to assign ONU'); return; } setErr(null); setMsg(null); setActionBusy(`onu:${onuId}`); try { await apiFetch<any>(`/api/resellers/${resellerId}/onus/${onuId}/assign`, { method: 'POST', body: JSON.stringify({ subscriber_id }) }, token); setMsg('ONU assigned/linked to subscriber.'); await loadOnus().catch(()=>{}); } catch (e:any) { setErr(e.message); } finally { setActionBusy(null); } };
 
   const pingTarget = async (sub: AnyObj) => { if (!token) return; setErr(null); setMsg(null); setActionBusy(`ping:${sub.id || sub.subscriber_id}`); try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/ping`, { method: 'POST', body: JSON.stringify({ subscriber_id: sub.id || sub.subscriber_id, ip_address: sub.ip_address }) }, token); setMsg(r.ok ? `Ping ${r.ip}: reachable${r.avg_ms!=null ? ` (avg ${r.avg_ms} ms)` : ''}` : `Ping ${r.ip || sub.ip_address || ''}: unreachable${r.error ? ` (${r.error})` : ''}`); } catch (e:any) { setErr(e.message); } finally { setActionBusy(null); } };
   const openEditPayment = (p: AnyObj) => { setEditPay(p); setEditPayForm({ payment_type: p.payment_type || '', collector_name: p.collector_name || '', approval_status: p.approval_status || 'APPROVED', approval_note: p.approval_note || '' }); };
-  const savePayment = async () => { if (!token || !editPay) return; setErr(null); setMsg(null); setActionBusy('editpay'); try { await apiFetch<any>(`/api/resellers/${resellerId}/payments/${editPay.id}`, { method: 'PATCH', body: JSON.stringify(editPayForm) }, token); setMsg('Payment updated.'); setEditPay(null); await loadPayments().catch(()=>{}); } catch (e:any) { setErr(e.message); } finally { setActionBusy(null); } };
 
   const stats = dashboard?.stats || {}; const walletInfo = dashboard?.wallet || { balance: reseller?.wallet_balance || 0 };
   const openProfile = () => { setProfileForm({ company_name: reseller?.company_name || '', email: reseller?.email || '', phone: reseller?.phone || '', address: reseller?.address || '', brand_name: reseller?.brand_name || '', logo_url: reseller?.logo_url || '', primary_color: reseller?.primary_color || '', secondary_color: reseller?.secondary_color || '', portal_title: reseller?.portal_title || '', avatar_url: reseller?.avatar_url || '', notify_expiry: reseller?.notify_expiry !== false, notify_payment: reseller?.notify_payment !== false, notify_system: reseller?.notify_system !== false, notes: reseller?.notes || '' }); setProfileOpen(true); };
@@ -907,7 +848,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
           {[['Logo URL', 'logo_url'], ['Primary Color', 'primary_color'], ['Secondary Color', 'secondary_color']].map(([label, key]: any) => (
             <label key={key} className="block"><div className="text-xs text-muted-foreground mb-1">{label}</div><input className="form-control" value={profileForm[key] || ''} onChange={e=>setProfileForm(f=>({...f,[key]:e.target.value}))} /></label>
           ))}
-          <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Profile Photo</div><div className="flex items-center gap-3">{profileForm.avatar_url ? <img src={profileForm.avatar_url} alt="avatar" className="w-12 h-12 rounded-full object-cover border border-border" /> : <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center text-lg">{user?.name?.charAt(0)}</div>}<input type="file" accept="image/*" className="text-xs" onChange={e=>{ const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=()=>setProfileForm((p:any)=>({...p,avatar_url:String(reader.result)})); reader.readAsDataURL(f); }} /></div></label>
+          <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Profile Photo</div><div className="flex items-center gap-3">{profileForm.avatar_url ? /* eslint-disable-line @next/next/no-img-element */ <img src={profileForm.avatar_url} alt="avatar" className="w-12 h-12 rounded-full object-cover border border-border" /> : <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center text-lg">{user?.name?.charAt(0)}</div>}<input type="file" accept="image/*" className="text-xs" onChange={e=>{ const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=()=>setProfileForm((p:any)=>({...p,avatar_url:String(reader.result)})); reader.readAsDataURL(f); }} /></div></label>
           <div className="md:col-span-2 flex flex-wrap gap-4 text-xs">{([['notify_expiry','Expiry alerts'],['notify_payment','Payment alerts'],['notify_system','System alerts']] as [string,string][]).map(([key,label])=><label key={key} className="flex items-center gap-2"><input type="checkbox" checked={!!profileForm[key]} onChange={e=>setProfileForm((p:any)=>({...p,[key]:e.target.checked}))} />{label}</label>)}</div>
           <label className="block md:col-span-2"><div className="text-xs text-muted-foreground mb-1">Notes</div><textarea className="form-control min-h-[70px]" value={profileForm.notes || ''} onChange={e=>setProfileForm(f=>({...f,notes:e.target.value}))} /></label>
         </div>

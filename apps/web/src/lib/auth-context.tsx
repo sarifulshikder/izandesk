@@ -219,6 +219,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     activeRole,
     switchRole: (role: UserRole) => setActiveRole(role),
     can,
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- functions are stable in this context shape
   }), [user, token, loading, error, mfaRequired, mfaToken, mfaEnrollmentRequired, mfaEnrollment, theme, isCommandPaletteOpen, isMobileMenuOpen, activeRole]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

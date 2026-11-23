@@ -8,7 +8,14 @@ import { Receipt, CreditCard, Globe2, Radio, ScrollText, RefreshCw, Download, Pr
 type AnyObj = Record<string, any>;
 const money = (v: any) => `৳${Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const dt = (v: any) => v ? new Date(v).toLocaleString() : '-';
-const gb = (v: any) => { const b = Number(v || 0); return b >= 1073741824 ? `${(b / 1073741824).toFixed(2)} GB` : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${b} B`; };
+
+const endpoint: Record<ParityTab, string> = {
+  billing: 'billing-overview',
+  'invoice-payments': 'invoice-payments',
+  'online-payments': 'online-payments',
+  'radius-log': 'radius-log',
+  'login-log': 'login-log',
+};
 
 export const parityTabs = [
   { key: 'billing', label: 'Billing Overview', icon: Receipt },
@@ -56,14 +63,6 @@ export function ResellerParityPanel({ tab, resellerId }: { tab: ParityTab; resel
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-
-  const endpoint: Record<ParityTab, string> = {
-    billing: 'billing-overview',
-    'invoice-payments': 'invoice-payments',
-    'online-payments': 'online-payments',
-    'radius-log': 'radius-log',
-    'login-log': 'login-log',
-  };
 
   const load = useCallback(async () => {
     if (!token) return;

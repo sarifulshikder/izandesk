@@ -10,7 +10,7 @@ export default function BandwidthPage() {
   const [packages, setPackages] = useState<any[]>([]);
   const [routers, setRouters] = useState<any[]>([]);
   const [syncStatus, setSyncStatus] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<any>(null);
   const [form, setForm] = useState<any>({});

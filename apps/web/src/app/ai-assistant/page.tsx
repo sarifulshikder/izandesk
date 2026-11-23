@@ -83,7 +83,7 @@ export default function AiAssistantPage() {
       setErr(e.message);
       setMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${e.message || 'Request failed.'}` }]);
     } finally { setBusy(false); inputRef.current?.focus(); }
-  }, [token, busy, messages, status, speak]);
+  }, [token, busy, messages, status, speak, chatMode]);
 
   const newChat = () => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();

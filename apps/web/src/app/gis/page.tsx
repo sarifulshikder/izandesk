@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import {
   MapPin, Route, Plus, RefreshCw, X, Box, LocateFixed, Search, Maximize2,
-  Download, Pencil, Trash2, Layers, Building2, Users, Network, Info, CheckCircle2, Upload, Flame, Radio,
+  Download, Pencil, Trash2, Layers, Building2, Users, Network, Info, CheckCircle2, Upload,
 } from 'lucide-react';
 
 const GisMap = dynamic(() => import('./gis-map'), { ssr: false, loading: () => <div className="h-[650px] card flex items-center justify-center text-muted-foreground">Loading map...</div> });

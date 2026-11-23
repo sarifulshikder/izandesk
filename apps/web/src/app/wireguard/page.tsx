@@ -19,7 +19,7 @@ export default function WireGuardPage() {
   const [runtime, setRuntime] = useState<any>(null);
   const [peers, setPeers] = useState<any[]>([]);
   const [routers, setRouters] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hubForm, setHubForm] = useState<any>({});
   const [hubModal, setHubModal] = useState(false);

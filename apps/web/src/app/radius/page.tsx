@@ -11,7 +11,7 @@ export default function RadiusPage() {
   const [coa, setCoa] = useState<any[]>([]);
   const [subscribers, setSubscribers] = useState<any[]>([]);
   const [routers, setRouters] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);

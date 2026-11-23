@@ -4,8 +4,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { apiFetch, getApiBaseUrl } from '@/lib/api';
-import { Search, Plus, Pencil, Trash2, X, Phone, Mail, MessageSquare, MapPin, User, ChevronLeft, ChevronRight, CheckCircle2, ArrowRight, Filter, Filter as FunnelIcon } from 'lucide-react';
+import { apiFetch } from '@/lib/api';
+import { Search, Plus, Pencil, Trash2, X, MessageSquare, MapPin, User, ChevronLeft, ChevronRight, CheckCircle2, ArrowRight, Filter, Filter as FunnelIcon } from 'lucide-react';
 
 // Same MapLibre picker the subscriber wizard uses (free hybrid basemap, no key).
 const LocationPicker = dynamic(() => import('@/app/subscribers/location-picker'), {
@@ -38,7 +38,7 @@ export default function LeadsPage() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [source, setSource] = useState('');
-  const [assigned, setAssigned] = useState('');
+  const [assigned] = useState('');
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
@@ -49,7 +49,7 @@ export default function LeadsPage() {
   const [packages, setPackages] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState(1);
-  const [geoLoading, setGeoLoading] = useState(false);
+  const [, setGeoLoading] = useState(false);
   const [geoMsg, setGeoMsg] = useState<string | null>(null);
 
   const loadRefs = useCallback(async () => {

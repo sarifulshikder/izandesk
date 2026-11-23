@@ -2,7 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { AlertTriangle, ArrowRight, CheckCircle2, BellRing } from 'lucide-react';
+import { ArrowRight, CheckCircle2, BellRing } from 'lucide-react';
 
 export type Alert = {
   icon: any;

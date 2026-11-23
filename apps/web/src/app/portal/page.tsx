@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { getApiBaseUrl } from '@/lib/api';
 import { Wifi, Receipt, CreditCard, Gauge, LogOut, RefreshCw, Download, User, LifeBuoy, BarChart3, Bell, KeyRound, Send, Package, FileText, Upload, Menu, X } from 'lucide-react';
 
@@ -51,7 +51,7 @@ export default function CustomerPortalPage() {
 
   useEffect(() => { const t = localStorage.getItem('portal_token'); if (t) setToken(t); }, []);
 
-  const load = async (tkn = token) => {
+  const load = useCallback(async (tkn = token) => {
     if (!tkn) return;
     try {
       const [m, inv, pay, gw, acsStatus, tix, usg, an, pkgs, docs, notifs, prefRes, liveRes, pmRes] = await Promise.all([
@@ -83,8 +83,8 @@ export default function CustomerPortalPage() {
       const s = m.subscriber || {};
       setProfile({ phone: s.phone||'', email: s.email||'', address: s.address||'', nid_number: s.nid_number||'' });
     } catch (e:any) { setErr(e.message); if (String(e.message).includes('session') || String(e.message).includes('token')) { localStorage.removeItem('portal_token'); setToken(null); } }
-  };
-  useEffect(() => { if (token) load(token); }, [token]);
+  }, [token]);
+  useEffect(() => { if (token) load(token); }, [token, load]);
   useEffect(() => {
     if (!token) return;
     const poll = async () => { try { const r = await pfetch('/api/portal/live', {}, token); const sess = r.session||null; setLive(sess); if (sess) setLiveHistory(h => [...h.slice(-29), { t: Date.now(), rx: Number(sess.rx_bps||0), tx: Number(sess.tx_bps||0) }]); } catch {} };

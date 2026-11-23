@@ -12,7 +12,7 @@ const statusBadge = (s: string) => String(s || '').toUpperCase() === 'ONLINE' ? 
 export default function RoutersPage() {
   const { token } = useAuth();
   const [routers, setRouters] = useState<any[]>([]);
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [, setSessions] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>({ online: 0, total: 0, aggRxBps: 0, aggTxBps: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

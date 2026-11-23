@@ -13,10 +13,6 @@ import {
   Radio,
   ArrowRight,
   LayoutDashboard,
-  MapPin,
-  Boxes,
-  LifeBuoy,
-  Settings,
 } from 'lucide-react';
 
 interface SearchResult {

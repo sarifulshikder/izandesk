@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
@@ -76,7 +76,7 @@ export default function GatewayConfigPage() {
   const gateway = String(params?.gateway || '').toLowerCase();
   const meta = GATEWAY_META[gateway] || { title: `${gateway.toUpperCase()} Configuration`, fields: [] };
   const { token, user } = useAuth();
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);

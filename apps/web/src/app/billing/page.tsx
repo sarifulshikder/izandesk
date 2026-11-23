@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { RefreshCw, FileText, PlusCircle, Play, AlertTriangle, ShieldAlert, CheckCircle2, CreditCard, Wallet, Send, RotateCcw, Ban, Clock3 } from 'lucide-react';
+import { RefreshCw, FileText, Play, AlertTriangle, ShieldAlert, CheckCircle2, CreditCard, Wallet, Send, RotateCcw, Ban, Clock3 } from 'lucide-react';
 
 type AnyObj = Record<string, any>;
 
@@ -30,9 +30,8 @@ export default function BillingPage() {
   const [subscribers, setSubscribers] = useState<AnyObj[]>([]);
   const [gateways, setGateways] = useState<AnyObj[]>([]);
   const [gatewayPlugins, setGatewayPlugins] = useState<AnyObj[]>([]);
-  const [policies, setPolicies] = useState<AnyObj[]>([]);
   const [logs, setLogs] = useState<AnyObj[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -64,7 +63,7 @@ export default function BillingPage() {
     if (!token) return;
     setLoading(true); setError(null);
     try {
-      const [m, inv, pays, subs, gws, pol, lg] = await Promise.all([
+      const [m, inv, pays, subs, gws, , lg] = await Promise.all([
         apiFetch<any>('/api/billing/metrics', {}, token),
         apiFetch<any>('/api/billing/invoices', {}, token),
         apiFetch<any>('/api/billing/payments', {}, token),
@@ -79,14 +78,13 @@ export default function BillingPage() {
       setSubscribers(subs.data || []);
       setGateways(gws.data || []);
       setGatewayPlugins(gws.plugins || []);
-      setPolicies(pol.data || []);
       setLogs(lg.data || []);
       if (!payForm.invoice_id && (inv.data || []).length) {
         const first = (inv.data || []).find((i:any)=>Number(i.due_amount||0)>0) || inv.data[0];
         if (first) setPayForm(f => ({ ...f, invoice_id: first.id, amount: String(first.due_amount || first.total_amount || '') }));
       }
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
-  }, [token]);
+  }, [token, payForm.invoice_id]);
 
   useEffect(() => { load(); }, [load]);
 

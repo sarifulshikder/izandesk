@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { RefreshCw, Plug, CreditCard, MessageSquare, Cpu, Puzzle, RotateCcw, Settings, ExternalLink, CheckCircle2, XCircle } from 'lucide-react';
+import { RefreshCw, Plug, CreditCard, MessageSquare, Cpu, Puzzle, RotateCcw, Settings, CheckCircle2, XCircle } from 'lucide-react';
 
 type AnyObj = Record<string, any>;
 
@@ -23,7 +23,7 @@ function gatewayLabel(id: string) {
 export default function PluginsPage() {
   const { token, user } = useAuth();
   const [data, setData] = useState<AnyObj>({ plugins: [], categories: {}, paymentGateways: [] });
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [reloading, setReloading] = useState<string | null>(null);

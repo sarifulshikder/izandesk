@@ -49,7 +49,8 @@ export async function copyText(text: string) {
 }
 
 export default function ChatMessage({
-  msg, index, voice = false, compact = false, onAction,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  msg, index: _index, voice = false, compact = false, onAction,
 }: { msg: AiMessage; index: number; voice?: boolean; compact?: boolean; onAction?: (action: AiMessageAction) => void }) {
   const [copied, setCopied] = useState(false);
   const appliedAction = useRef(false);

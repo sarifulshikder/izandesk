@@ -12,7 +12,7 @@ export default function HotspotPage() {
   const [vouchers, setVouchers] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [recon, setRecon] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [err, setErr] = useState<string|null>(null);
   const [msg, setMsg] = useState<string|null>(null);
   const canManage = ['SUPER_ADMIN','BILLING_OPERATOR'].includes(String(user?.role));

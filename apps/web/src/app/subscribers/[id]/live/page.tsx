@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { ArrowLeft, RefreshCw, Wifi, Activity, Gauge, Globe, Router, KeyRound, Signal, Server, AlertTriangle, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Wifi, Activity, Gauge, Globe, KeyRound, Signal, Server, AlertTriangle, Eye, EyeOff } from 'lucide-react';
 
 function fmtBps(bps: number) {
   const n = Number(bps || 0);

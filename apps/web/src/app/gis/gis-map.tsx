@@ -107,7 +107,7 @@ function popupWithActions(map: MapLibreMap, lngLat: [number, number], html: stri
 export default function GisMap(props: GisMapProps) {
   const {
     data, draftLine, layers, focus, fitKey, locateKey, selectedBoxId,
-    mapStyle = 'satellite', satelliteLabels = true, readOnly, heatmap, liveSessions,
+    mapStyle = 'satellite', satelliteLabels = true, heatmap, liveSessions,
   } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -353,7 +353,7 @@ export default function GisMap(props: GisMapProps) {
     const lngs = pts.map(p => p[1]), lats = pts.map(p => p[0]);
     map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
       { padding: 48, maxZoom: 17, duration: 700 });
-  }, [ready, fitKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ready, fitKey]);  
   useEffect(() => {
     if (!locateKey || !navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
@@ -361,7 +361,7 @@ export default function GisMap(props: GisMapProps) {
       () => propsRef.current.onLocateError?.(),
       { enableHighAccuracy: false, timeout: 8000 },
     );
-  }, [locateKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [locateKey]);  
 
   return (
     <div className="h-full w-full" data-map-style={mapStyle} data-labels={satelliteLabels ? 'on' : 'off'}

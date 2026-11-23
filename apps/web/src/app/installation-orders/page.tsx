@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { apiFetch, getApiBaseUrl } from '@/lib/api';
-import { Search, Plus, Pencil, Trash2, X, User, ChevronLeft, ChevronRight, CheckCircle2, Calendar, Clock, MapPin, Wrench, AlertTriangle, CheckCircle, Package, Truck, ArrowRight } from 'lucide-react';
+import { apiFetch } from '@/lib/api';
+import { Search, Plus, Pencil, Trash2, X, Calendar, Clock, Wrench, AlertTriangle, CheckCircle, Package, Truck, ArrowRight } from 'lucide-react';
 
 const ORDER_TYPES = ['INSTALLATION', 'REPAIR', 'RELOCATION', 'UPGRADE', 'DISCONNECTION', 'EQUIPMENT_SWAP'];
 const ORDER_STATUSES = ['PENDING', 'SCHEDULED', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'ON_HOLD'];
@@ -28,8 +28,8 @@ export default function InstallationOrdersPage() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [type, setType] = useState('');
-  const [technician, setTechnician] = useState('');
-  const [subscriber, setSubscriber] = useState('');
+  const [technician] = useState('');
+  const [subscriber] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [loading, setLoading] = useState(false);

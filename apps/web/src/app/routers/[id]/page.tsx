@@ -54,7 +54,7 @@ export default function RouterDetailPage() {
   const { token } = useAuth();
   const [router, setRouter] = useState<any>(null);
   const [sessions, setSessions] = useState<any[]>([]);
-  const [summary, setSummary] = useState<any>(null);
+  const [, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

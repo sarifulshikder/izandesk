@@ -87,7 +87,7 @@ export function Sidebar() {
     if (pathname.startsWith('/finance') || pathname.startsWith('/hr') || pathname.startsWith('/procurement') || pathname.startsWith('/hotspot') || pathname.startsWith('/reports') || pathname.startsWith('/audit')) open('Finance & Ops');
     if (pathname.startsWith('/plugins')) { open('Plugins'); setOpenSub(s => ({ ...s, 'Payment Gateways': true })); }
     if (pathname.startsWith('/settings') || pathname.startsWith('/system')) open('System');
-  }, [pathname]);
+  }, [pathname, isReseller]);
 
   if (!user || !activeRole) return null;
 

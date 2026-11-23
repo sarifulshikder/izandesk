@@ -71,7 +71,7 @@ export default function AiChatBubble() {
       setErr(e.message);
       setMessages((prev) => [...prev, { role: 'assistant', content: `⚠️ ${e.message || 'Request failed.'}` }]);
     } finally { setBusy(false); inputRef.current?.focus(); }
-  }, [token, busy, messages, voice]);
+  }, [token, busy, messages, voice, chatMode]);
 
   const newChat = () => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) window.speechSynthesis.cancel();

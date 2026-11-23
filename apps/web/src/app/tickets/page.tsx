@@ -3,13 +3,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { RefreshCw, Plus, Ticket, UserCog, MapPin, Navigation, Clock, MessageSquare, CheckCircle2, AlertTriangle, Phone } from 'lucide-react';
+import { RefreshCw, Plus, Ticket, UserCog, Navigation, Clock, MessageSquare, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 type AnyObj = Record<string, any>;
 const fmt = (d:any) => d ? new Date(d).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '-';
 
 export default function TicketsPage() {
-  const { token, user } = useAuth();
+  const { token } = useAuth();
   const [tickets, setTickets] = useState<AnyObj[]>([]);
   const [selected, setSelected] = useState<AnyObj|null>(null);
   const [loading, setLoading] = useState(false);
@@ -35,6 +35,7 @@ export default function TicketsPage() {
         if (d?.data) setSelected(d.data);
       }
     } catch(e:any){ setErr(e.message); } finally { setLoading(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- only track selected id to avoid refetch loop
   }, [token, statusFilter, selected?.id]);
 
   useEffect(()=>{ load(); }, [load]);

@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { SubscriberFormWizard } from '@/components/subscribers/subscriber-form-wizard';
-import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, Download, Upload as UploadIcon, Eye, History, FileSpreadsheet, AlertCircle, CheckCircle, MinusCircle, Package, MessageSquare, Phone, Mail, Activity, Users, UserCheck, UserX, Clock3 } from 'lucide-react';
+import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, Download, Upload as UploadIcon, History, FileSpreadsheet, AlertCircle, CheckCircle, Package, MessageSquare, Phone, Mail, Activity, Users, UserCheck, UserX, Clock3 } from 'lucide-react';
 
 export default function SubscribersPage() {
   const { token, user } = useAuth();
@@ -52,8 +52,7 @@ export default function SubscribersPage() {
   const [detailTab, setDetailTab] = useState<'profile' | 'equipment' | 'communications' | 'history'>('profile');
   const [equipment, setEquipment] = useState<any[]>([]);
   const [communications, setCommunications] = useState<any[]>([]);
-  const [equipLoading, setEquipLoading] = useState(false);
-  const [commLoading, setCommLoading] = useState(false);
+  const [, setEquipLoading] = useState(false);
   const [showEquipModal, setShowEquipModal] = useState(false);
   const [editEquip, setEditEquip] = useState<any | null>(null);
   const [equipForm, setEquipForm] = useState<any>({
@@ -89,7 +88,7 @@ export default function SubscribersPage() {
   useEffect(() => {
     const wantsNew = searchParams?.get('new') === '1' || searchParams?.get('action') === 'new' || searchParams?.get('add') === '1';
     if (wantsNew) openCreate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [searchParams]);
   const openEdit = (row: any) => { setEditing(row); setShowForm(true); };
 

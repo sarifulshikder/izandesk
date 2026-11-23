@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { RefreshCw, Send, MessageSquare, Mail, Bot, Smartphone, FileText, CheckCircle2 } from 'lucide-react';
+import { RefreshCw, Send, MessageSquare, Bot, Smartphone, FileText } from 'lucide-react';
 
 type AnyObj = Record<string, any>;
 
@@ -12,7 +12,7 @@ export default function MessagingPage() {
   const [channels, setChannels] = useState<AnyObj[]>([]);
   const [templates, setTemplates] = useState<AnyObj[]>([]);
   const [logs, setLogs] = useState<AnyObj[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [err, setErr] = useState<string|null>(null);
   const [msg, setMsg] = useState<string|null>(null);
   const [test, setTest] = useState<any>({ channel_id:'', to:'', body:'Test SMS from IzanDesk Gateway Tester.', variables:'{}' });
@@ -32,7 +32,7 @@ export default function MessagingPage() {
       setChannels(c.data || []); setTemplates(t.data || []); setLogs(l.data || []);
       if (!test.channel_id && (c.data||[]).length) setTest((v:any)=>({...v, channel_id: c.data[0].id}));
     } catch(e:any){ setErr(e.message); } finally { setLoading(false); }
-  }, [token]);
+  }, [token, test.channel_id]);
 
   useEffect(()=>{ load(); }, [load]);
 
@@ -55,8 +55,6 @@ export default function MessagingPage() {
       await load();
     } catch(e:any){ setErr(e.message); }
   };
-
-  const smsChannels = channels.filter(c=>String(c.channel_type).toUpperCase()==='SMS');
 
   return (
     <div className="space-y-5">
