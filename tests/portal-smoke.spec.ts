@@ -731,11 +731,11 @@ test.describe('network & OSS access control', () => {
 
     const billingToken = await loginToken(request, { email: 'billing@izandesk.com', password: 'billing123' });
     const headers = { Authorization: `Bearer ${billingToken}` };
-    expect((await request.get('/api/network/routers', { headers })).status()).toBe(200);
+    expect((await request.get('/api/network/routers?nopoll=1', { headers })).status()).toBe(200);
     expect((await request.post('/api/network/routers', { headers, data: {} })).status()).toBe(403);
     expect((await request.post('/api/radius/coa', { headers, data: { username: 'x', action: 'DISCONNECT' } })).status()).toBe(403);
 
-    const routers = await (await request.get('/api/network/routers', { headers: { Authorization: `Bearer ${adminToken}` } })).json();
+    const routers = await (await request.get('/api/network/routers?nopoll=1', { headers: { Authorization: `Bearer ${adminToken}` } })).json();
     const routerId = (routers.data || [])[0]?.id;
     if (routerId) {
       expect((await request.get(`/api/network/routers/${routerId}/mikrotik/import-preview?type=ppp-secrets`, { headers })).status()).toBe(403);

@@ -416,6 +416,7 @@ export async function initDb() {
       is_enabled BOOLEAN NOT NULL DEFAULT true,
       last_seen_at TIMESTAMPTZ,
       status TEXT NOT NULL DEFAULT 'UNKNOWN',
+      last_error TEXT,
       cpu_load NUMERIC(5,2),
       memory_used_mb NUMERIC(12,2),
       memory_total_mb NUMERIC(12,2),
@@ -632,6 +633,7 @@ export async function initDb() {
       ADD COLUMN IF NOT EXISTS nas_identifier TEXT;
   `);
   await pool.query(`ALTER TABLE network_routers ALTER COLUMN api_port DROP NOT NULL;`).catch(() => {});
+  await pool.query(`ALTER TABLE network_routers ADD COLUMN IF NOT EXISTS last_error TEXT;`);
   await pool.query(`
     ALTER TABLE subscribers
       ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'RADIUS',

@@ -631,27 +631,15 @@ router.get('/:id/logs', asyncHandler(async (req, res) => {
   if (kind === 'all' || kind === 'auth') {
     try {
       const params: any[] = [id];
-      let where = `WHERE (l.username IN (SELECT username FROM subscribers WHERE reseller_id=$1 AND username IS NOT NULL) OR l.subscriber_id IN (SELECT id FROM subscribers WHERE reseller_id=$1))`;
-      if (q) { params.push(like); where += ` AND (lower(COALESCE(l.username,'')) LIKE $${params.length} OR lower(COALESCE(l.ip_address,'')) LIKE $${params.length} OR lower(COALESCE(l.mac_address,'')) LIKE $${params.length} OR lower(COALESCE(l.status,'')) LIKE $${params.length} OR lower(COALESCE(l.result,'')) LIKE $${params.length})`; }
+      let where = `WHERE ra.username IN (SELECT username FROM subscribers WHERE reseller_id=$1 AND username IS NOT NULL)`;
+      if (q) { params.push(like); where += ` AND (lower(COALESCE(ra.username,'')) LIKE $${params.length} OR lower(COALESCE(ra.framedipaddress,'')) LIKE $${params.length} OR lower(COALESCE(ra.callingstationid,'')) LIKE $${params.length} OR lower(COALESCE(ra.acctterminatecause,'')) LIKE $${params.length})`; }
       params.push(limit);
       out.auth = (await pool.query(
-        `SELECT l.*
-         FROM user_auth_logs l ${where}
-         ORDER BY COALESCE(l.created_at, l.timestamp, now()) DESC LIMIT $${params.length}`, params
+        `SELECT ra.radacctid as id, ra.username, ra.acctstarttime as created_at, ra.acctstoptime, ra.framedipaddress as ip_address, ra.callingstationid as mac_address, ra.acctterminatecause as status
+         FROM radacct ra ${where}
+         ORDER BY ra.acctstarttime DESC NULLS LAST LIMIT $${params.length}`, params
       )).rows;
-    } catch {
-      try {
-        const params: any[] = [id];
-        let where = `WHERE ra.username IN (SELECT username FROM subscribers WHERE reseller_id=$1 AND username IS NOT NULL)`;
-        if (q) { params.push(like); where += ` AND (lower(COALESCE(ra.username,'')) LIKE $${params.length} OR lower(COALESCE(ra.framedipaddress,'')) LIKE $${params.length} OR lower(COALESCE(ra.callingstationid,'')) LIKE $${params.length} OR lower(COALESCE(ra.acctterminatecause,'')) LIKE $${params.length})`; }
-        params.push(limit);
-        out.auth = (await pool.query(
-          `SELECT ra.radacctid as id, ra.username, ra.acctstarttime as created_at, ra.acctstoptime, ra.framedipaddress as ip_address, ra.callingstationid as mac_address, ra.acctterminatecause as status
-           FROM radacct ra ${where}
-           ORDER BY ra.acctstarttime DESC NULLS LAST LIMIT $${params.length}`, params
-        )).rows;
-      } catch { out.auth = []; }
-    }
+    } catch { out.auth = []; }
   }
 
   if (kind === 'all' || kind === 'wallet') {
