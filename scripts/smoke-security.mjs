@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -76,7 +77,7 @@ assert.equal(rl.check('ip-2').allowed, true);
 // 5. KYC/compliance upload guards: declared MIME type is not trusted, and
 //    identity numbers are masked before they reach the database.
 const files = require('../apps/api/dist/security/file-validation.js');
-const tmpDir = fs.mkdtempSync(path.join('/tmp/opencode', 'kyc-smoke-'));
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyc-smoke-'));
 try {
   const pdf = path.join(tmpDir, 'real.pdf');
   fs.writeFileSync(pdf, '%PDF-1.7\n% IzanDesk smoke\n%%EOF');
@@ -105,7 +106,7 @@ try {
 // 6. KYC file encryption: ciphertext on disk, AES-GCM tamper detection, and
 //    key rotation without losing access to the plaintext.
 const encryption = require('../apps/api/dist/security/file-encryption.js');
-const encDir = fs.mkdtempSync(path.join('/tmp/opencode', 'kyc-enc-smoke-'));
+const encDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kyc-enc-smoke-'));
 try {
   const content = '%PDF-1.7\n% KYC encryption smoke\n%%EOF';
 
