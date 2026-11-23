@@ -52,6 +52,8 @@ recent database backup; mutation tests must never target a live customer stack.
 
 5. Confirm readiness probes tolerate `/api/health` returning **503** while DB or
    kernel are not ready; do not treat the old always-200 response as healthy.
+   The API performs a live `SELECT 1` probe and keeps an `error` listener on the
+   pg pool, so a DB restart must produce 503 without crashing the process.
 
 ## 2. Deploy to staging
 
@@ -137,7 +139,8 @@ Review startup logs for:
 ### Operations
 
 - [ ] Stop DB briefly (or point at an invalid DB host) and confirm
-      `/api/health` returns 503 with `ok:false`.
+      `/api/health` returns 503 with `ok:false`, the API process stays up, and
+      health returns 200 again after the DB recovers.
 - [ ] Plugins appear in the kernel plugin list after a container restart.
 - [ ] FreeRADIUS authenticates a test subscriber using credentials from `.env`.
 - [ ] Scheduled report/message jobs produce no duplicate sends after a restart.

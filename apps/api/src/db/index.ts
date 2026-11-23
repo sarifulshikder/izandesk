@@ -8,6 +8,12 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD || 'izandesk_secret_password',
 });
 
+// A dropped idle connection is routine during DB restarts/failover. Without a
+// listener, pg emits an unhandled 'error' event and takes down the whole API.
+pool.on('error', (err) => {
+  console.error('[DB] idle connection error:', err.message);
+});
+
 export async function query<T = any>(text: string, params?: any[]): Promise<{ rows: T[] }> {
   return pool.query(text, params) as any;
 }

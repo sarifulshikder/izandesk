@@ -57,6 +57,7 @@ import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
 import { startNetworkCollector } from './integrations/network-collector';
 import { LITE_MODE } from './config/runtime';
+import { probeWithDeadline } from './health';
 
 const PORT = Number(process.env.API_PORT || 4000);
 // Fail loudly before any route is mounted when the deployment is insecure.
@@ -235,11 +236,13 @@ async function bootstrap() {
   await kernel.init();
   setKernel(kernel);
 
-  app.get('/api/health', (_req, res) => {
-    // A process that cannot reach its database is not healthy. Orchestrators
-    // and the CI smoke wait must see the failure instead of a fake 200.
-    const ok = dbReady && kernel.isReady();
-    res.status(ok ? 200 : 503).json({ ok, service: 'izandesk-api', phase: 7, dbReady, kernelReady: kernel.isReady(), pluginCount: kernel.listPlugins().length, lite: LITE_MODE });
+  app.get('/api/health', async (_req, res) => {
+    // Probe the database on every request. A cached startup flag alone reports
+    // 200 after the DB has gone away, which would keep a broken pod in rotation.
+    const liveDbReady = dbReady && await probeWithDeadline(() => pool.query('SELECT 1'), 2000);
+    const kernelReady = kernel.isReady();
+    const ok = liveDbReady && kernelReady;
+    res.status(ok ? 200 : 503).json({ ok, service: 'izandesk-api', phase: 7, dbReady: liveDbReady, kernelReady, pluginCount: kernel.listPlugins().length, lite: LITE_MODE });
   });
   app.use('/api/branding', brandingRouter);
   app.use('/api/portal', portalRouter);

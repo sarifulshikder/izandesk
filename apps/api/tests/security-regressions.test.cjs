@@ -13,6 +13,7 @@ const { enabled, ipAllowed } = require('../dist/security/guards.js');
 const db = require('../dist/db/index.js');
 const billingRouter = require('../dist/routes/billing.js').default;
 const settingsRouter = require('../dist/routes/settings.js').default;
+const { probeWithDeadline } = require('../dist/health.js');
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -197,6 +198,11 @@ check('ipAllowed: CIDR miss', ipAllowed('10.78.0.15', ['10.77.0.0/24']) === fals
   check('settings: aggregate view still admin-only', aggregateBilling.status === 403);
   const schemaBilling = await getSettings('/api/settings/schema', 'BILLING_OPERATOR');
   check('settings: schema still admin-only', schemaBilling.status === 403);
+
+  /* ---------------- health probe fails closed ---------------- */
+  check('health probe: successful query is healthy', await probeWithDeadline(async () => ({ rows: [{ ok: 1 }] })) === true);
+  check('health probe: rejected query is unhealthy', await probeWithDeadline(async () => { throw new Error('db down'); }) === false);
+  check('health probe: hung query is unhealthy', await probeWithDeadline(() => new Promise(() => {}), 20) === false);
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
