@@ -193,12 +193,91 @@ async function routerTestPersistenceTest() {
   }
 }
 
+async function probeRoutesTest() {
+  const { registerProbeRoutes } = require('../dist/routes/probes.js');
+  const mkKernel = (ready = true) => ({ isReady: () => ready, listPlugins: () => [{}, {}] });
+  {
+    const app = express();
+    registerProbeRoutes(app, { getDbReady: () => true, probeDbReady: async () => true, getKernel: () => mkKernel(true), lite: false });
+    const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+    try {
+      const { port } = server.address();
+      const live = await fetch(`http://127.0.0.1:${port}/api/live`);
+      const ready = await fetch(`http://127.0.0.1:${port}/api/ready`);
+      const metrics = await fetch(`http://127.0.0.1:${port}/api/metrics`);
+      const liveBody = await live.json();
+      const readyBody = await ready.json();
+      const metricsText = await metrics.text();
+      check('probe: /api/live returns 200', live.status === 200 && liveBody.live === true);
+      check('probe: /api/ready returns 200 when deps ready', ready.status === 200 && readyBody.ready === true);
+      check('probe: /api/metrics exposes prometheus gauges', metrics.status === 200 && metricsText.includes('izandesk_up 1') && metricsText.includes('izandesk_ready 1'));
+    } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
+  }
+  {
+    const app = express();
+    registerProbeRoutes(app, { getDbReady: () => false, probeDbReady: async () => false, getKernel: () => mkKernel(true), lite: false });
+    const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+    try {
+      const { port } = server.address();
+      const live = await fetch(`http://127.0.0.1:${port}/api/live`);
+      const ready = await fetch(`http://127.0.0.1:${port}/api/ready`);
+      const metrics = await fetch(`http://127.0.0.1:${port}/api/metrics`);
+      check('probe: /api/live stays 200 during DB outage', live.status === 200);
+      check('probe: /api/ready returns 503 during DB outage', ready.status === 503);
+      check('probe: /api/metrics reports not ready during DB outage', (await metrics.text()).includes('izandesk_ready 0'));
+    } finally { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
+  }
+}
+
+async function systemAlertsAndBackupRunsTest() {
+  // stub redis for system router
+  const redisPath = require.resolve('redis');
+  const previousRedis = require.cache[redisPath];
+  require.cache[redisPath] = {
+    id: redisPath, filename: redisPath, loaded: true,
+    exports: { createClient: () => ({ connect: async () => {}, ping: async () => 'PONG', info: async () => '', quit: async () => {}, disconnect: async () => {} }) },
+  };
+  delete require.cache[require.resolve('../dist/routes/system.js')];
+  const systemRouter = require('../dist/routes/system.js').default;
+  const alerts = [{ id: 'a1', severity: 'CRITICAL', source: 'ROUTER', title: 'Router offline', message: 'EHOSTUNREACH', acknowledged: false, created_at: new Date().toISOString() }];
+  const fake = makeDb([
+    { when: (c) => c.sql === 'SELECT 1', return: { rows: [{ '?column?': 1 }] } },
+    { when: (c) => has(c, 'FROM noc_alerts ORDER BY created_at DESC LIMIT'), return: { rows: alerts } },
+    { when: (c) => has(c, 'SELECT COUNT(*)::int AS c FROM noc_alerts WHERE acknowledged=false'), return: { rows: [{ c: 1 }] } },
+    { when: (c) => has(c, 'UPDATE noc_alerts SET acknowledged=true'), return: { rows: [{ ...alerts[0], acknowledged: true }] } },
+    { when: (c) => has(c, 'FROM backup_runs ORDER BY created_at DESC LIMIT'), return: { rows: [{ id: 'b1', trigger: 'manual', ok: true, file_name: 'izandesk.sql', created_at: new Date().toISOString() }] } },
+  ]);
+  const app = express();
+  app.use((req, _res, next) => { req.user = { role: 'SUPER_ADMIN' }; next(); });
+  app.use('/api/system', systemRouter);
+  const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  try {
+    const { port } = server.address();
+    const alertsRes = await fetch(`http://127.0.0.1:${port}/api/system/alerts`);
+    const alertsBody = await alertsRes.json();
+    check('system alerts: list returns alerts and unread count', alertsRes.status === 200 && alertsBody.unread === 1 && alertsBody.data[0].id === 'a1');
+    const ackRes = await fetch(`http://127.0.0.1:${port}/api/system/alerts/a1/ack`, { method: 'POST' });
+    check('system alerts: ack endpoint acknowledges alert', ackRes.status === 200 && (await ackRes.json()).data.acknowledged === true);
+    const backupsRes = await fetch(`http://127.0.0.1:${port}/api/system/backups`);
+    const backupsBody = await backupsRes.json();
+    check('backups: response includes persisted run history', backupsRes.status === 200 && Array.isArray(backupsBody.runs) && backupsBody.last_run?.id === 'b1');
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((r) => server.close(r));
+    fake.restore();
+    if (previousRedis) require.cache[redisPath] = previousRedis; else delete require.cache[redisPath];
+    delete require.cache[require.resolve('../dist/routes/system.js')];
+  }
+}
+
 (async () => {
   await dueReminderTest();
   await reportScheduleTest();
   await systemHealthTest();
   await mikrotikErrorTest();
   await routerTestPersistenceTest();
+  await probeRoutesTest();
+  await systemAlertsAndBackupRunsTest();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((err) => {

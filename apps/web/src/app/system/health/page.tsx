@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { RefreshCw, Database, Server, HardDrive, Activity, ShieldCheck, Clock, Gauge, Play } from 'lucide-react';
@@ -17,7 +17,7 @@ export default function SystemHealthPage() {
   const [busy, setBusy] = useState(false);
   const [fupBusy, setFupBusy] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!token) return;
     setErr(null);
     try {
@@ -31,8 +31,8 @@ export default function SystemHealthPage() {
       ]);
       setDiag(d); setBackups(b); setFupLogs(f?.data || []); setAlerts(a?.data || []);
     } catch(e:any){ setErr(e.message); }
-  };
-  useEffect(()=>{ load(); }, [token]);
+  }, [token]);
+  useEffect(()=>{ void load(); }, [load]);
 
   const runBackup = async () => {
     if (!token) return;
