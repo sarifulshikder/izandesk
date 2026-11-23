@@ -2,6 +2,7 @@ import { pool } from '../db';
 import { mikrotikActiveSessions, mikrotikTelemetry } from './mikrotik';
 import { mikrotikErrorMessage } from './mikrotik-errors';
 import { emitNocAlert } from './noc-alerts';
+import { probeRadiusNas } from './radius';
 import { LITE_MODE, SESSIONS_COLLECTOR_MS, TELEMETRY_COLLECTOR_MS } from '../config/runtime';
 
 function parseUptimeSimple(s: string): number {
@@ -118,7 +119,23 @@ export async function collectTelemetryOnce(): Promise<{ ok: boolean; routers: nu
         await emitNocAlert({ severity: 'CRITICAL', source: 'ROUTER', title: `Router offline: ${row.name || row.id}`, message: errMsg, details: { router_id: row.id, host: row.host }, dedupeMinutes: 30 }).catch(() => {});
       }
     }
-    return { ok: true, routers: rows.length };
+    const radiusRows = (await pool.query(`SELECT * FROM network_routers WHERE is_enabled = true AND upper(integration_mode) = 'RADIUS' ORDER BY created_at ASC`)).rows;
+    for (const row of radiusRows) {
+      try {
+        const probe = await probeRadiusNas(row);
+        if (probe.reachable) {
+          await pool.query('UPDATE network_routers SET status=$1,last_seen_at=now(),last_error=NULL,updated_at=now() WHERE id=$2', ['ONLINE', row.id]).catch(() => {});
+        } else {
+          const errMsg = String(probe.error || 'RADIUS NAS unreachable').slice(0, 500);
+          await pool.query('UPDATE network_routers SET status=$1,last_error=$2,updated_at=now() WHERE id=$3', ['OFFLINE', errMsg, row.id]).catch(() => {});
+          await emitNocAlert({ severity: 'WARNING', source: 'ROUTER', title: `RADIUS NAS offline: ${row.name || row.id}`, message: errMsg, details: { router_id: row.id, host: row.host }, dedupeMinutes: 30 }).catch(() => {});
+        }
+      } catch (e: any) {
+        const errMsg = String(e?.message || 'RADIUS probe failed').slice(0, 500);
+        await pool.query('UPDATE network_routers SET status=$1,last_error=$2,updated_at=now() WHERE id=$3', ['OFFLINE', errMsg, row.id]).catch(() => {});
+      }
+    }
+    return { ok: true, routers: rows.length + radiusRows.length };
   } catch (e: any) {
     return { ok: false, routers: 0, error: e?.message || String(e) };
   } finally {

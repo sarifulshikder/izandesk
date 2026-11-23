@@ -177,3 +177,21 @@ export async function sendCoaPacket(opts: { host: string; port: number; secret: 
   }
   return last;
 }
+
+export async function probeRadiusNas(router: any): Promise<{ ok: boolean; reachable: boolean; code?: number; error?: string }> {
+  const host = String(router?.host || '').trim();
+  const secret = String(router?.radius_secret || '').trim();
+  const port = Number(router?.coa_port || 3799);
+  if (!host || !secret) return { ok: false, reachable: false, error: 'Missing NAS host or radius_secret' };
+  const res = await sendCoaPacket({
+    host,
+    port,
+    secret,
+    username: '__izandesk_reachability_probe__',
+    action: 'DISCONNECT',
+  });
+  // Any valid RADIUS response (ACK/NAK) proves the NAS is reachable and
+  // authenticated the shared secret. Timeout/network errors mean unreachable.
+  const reachable = res.code === 41 || res.code === 42 || res.code === 44 || res.code === 45 || res.ok === true;
+  return { ok: reachable, reachable, code: res.code, error: reachable ? undefined : res.error };
+}

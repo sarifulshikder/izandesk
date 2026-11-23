@@ -4,7 +4,7 @@ import { asyncHandler, sanitizeRouter, sanitizeRouters, networkGuard, hasNetwork
 import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret } from '../integrations/mikrotik';
 import { invalidateMikrotikApi } from '../integrations/mikrotik-manager';
 import { mikrotikErrorMessage } from '../integrations/mikrotik-errors';
-import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas } from '../integrations/radius';
+import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas, probeRadiusNas } from '../integrations/radius';
 import { hashPassword } from '../utils/password';
 import { TELEMETRY_TTL_MS } from '../config/runtime';
 
@@ -64,9 +64,9 @@ router.get('/routers', asyncHandler(async (req, res) => {
         }
       }
     } else if (row.is_enabled && imode === 'RADIUS') {
-      // RADIUS NAS health is not polled here. Reporting a fabricated fresh
-      // last_seen_at/ONLINE makes dead gear look healthy to operators.
-      t = { status: row.status || 'UNKNOWN', last_seen_at: row.last_seen_at };
+      // RADIUS NAS reachability is polled by the network collector (CoA probe).
+      // Here we return stored status; avoid fabricating fresh ONLINE on reads.
+      t = { status: row.status || 'UNKNOWN', last_seen_at: row.last_seen_at, last_error: row.last_error };
     } else {
       t = { status: 'DISABLED', last_seen_at: row.last_seen_at };
     }
@@ -175,10 +175,15 @@ router.post('/routers/:id/test', asyncHandler(async (req, res) => {
       await pool.query(`UPDATE network_routers SET status='ONLINE', last_seen_at=now(), last_error=NULL, identity=$1, updated_at=now() WHERE id=$2`, [result.identity || row.identity || row.name, req.params.id]);
       return res.json({ ok: true, message: `Real ${mode} connection successful. Identity: ${result.identity}`, identity: result.identity, integration_mode: mode });
     } else {
-      // RADIUS NAS: verify config (real CoA reachability tested via CoA action); mark enabled NAS as configured
       if (!row.radius_secret) return res.status(400).json({ message: 'RADIUS shared secret is required' });
-      await pool.query(`UPDATE network_routers SET status='ONLINE', last_seen_at=now(), identity=COALESCE(identity,$1), updated_at=now() WHERE id=$2`, [row.nas_identifier || row.name.replace(/\s+/g,'-').toUpperCase(), req.params.id]);
-      return res.json({ ok: true, message: `RADIUS NAS configured. Secret set, CoA port ${row.coa_port||3799}. (Use CoA/PoD to verify real NAS response; FreeRADIUS handles AAA.)`, identity: row.nas_identifier || row.identity || row.name, integration_mode: mode, coa_port: row.coa_port || 3799 });
+      const probe = await probeRadiusNas(row);
+      if (probe.reachable) {
+        await pool.query(`UPDATE network_routers SET status='ONLINE', last_seen_at=now(), last_error=NULL, identity=COALESCE(identity,$1), updated_at=now() WHERE id=$2`, [row.nas_identifier || row.name.replace(/\s+/g,'-').toUpperCase(), req.params.id]);
+        return res.json({ ok: true, message: `RADIUS NAS reachable on CoA port ${row.coa_port||3799}.`, identity: row.nas_identifier || row.identity || row.name, integration_mode: mode, coa_port: row.coa_port || 3799, probe_code: probe.code ?? null });
+      }
+      const errMsg = String(probe.error || 'RADIUS NAS unreachable').slice(0, 500);
+      await pool.query(`UPDATE network_routers SET status='OFFLINE', last_error=$2, updated_at=now() WHERE id=$1`, [req.params.id, errMsg]);
+      return res.status(502).json({ ok: false, message: `RADIUS NAS unreachable: ${errMsg}`, integration_mode: mode, coa_port: row.coa_port || 3799 });
     }
   } catch (e: any) {
     await pool.query(`UPDATE network_routers SET status='OFFLINE', last_error=$2, updated_at=now() WHERE id=$1`, [req.params.id, mikrotikErrorMessage(e, row).slice(0, 500)]);
