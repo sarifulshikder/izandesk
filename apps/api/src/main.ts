@@ -56,7 +56,8 @@ import { startBillingScheduler } from './integrations/billing';
 import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
 import { startNetworkCollector } from './integrations/network-collector';
-import { LITE_MODE } from './config/runtime';
+import { writeHubConfigFile } from './integrations/wireguard';
+import { LITE_MODE, WG_CONFIG_DIR } from './config/runtime';
 import { probeWithDeadline } from './health';
 
 /**
@@ -81,6 +82,27 @@ async function probeDbReady(): Promise<boolean> {
       const held = client; client = null;
       try { held.release(); } catch { /* already released */ }
     }
+  }
+}
+
+/**
+ * The WireGuard hub file is generated state: the DB is authoritative. A wiped
+ * config dir, a restored backup or a disposable stack pointing at the shared
+ * path must not leave live peers out of wg0.conf after an API restart.
+ */
+async function reconcileWireGuardHub() {
+  try {
+    const hub = (await pool.query('SELECT * FROM wg_hub_config WHERE id=1')).rows[0];
+    if (!hub) return;
+    const peers = (await pool.query('SELECT * FROM wg_peers')).rows;
+    if (!peers.length) {
+      console.warn('[WireGuard] hub config reconciliation skipped: no peers in DB');
+      return;
+    }
+    const file = await writeHubConfigFile(WG_CONFIG_DIR, hub, peers);
+    console.log(`[WireGuard] hub config reconciled from DB: ${peers.length} peer(s) -> ${file}`);
+  } catch (e: any) {
+    console.warn('[WireGuard] hub config reconciliation skipped:', e?.message || e);
   }
 }
 
@@ -638,6 +660,7 @@ async function bootstrap() {
   };
 
   if (dbReady) {
+    await reconcileWireGuardHub();
     startSchedulers();
   } else {
     // A DB outage at boot must not permanently strand readiness and disable
@@ -647,6 +670,7 @@ async function bootstrap() {
         await initDb();
         dbReady = true;
         console.log('[DB] Schema ready after delayed recovery');
+        await reconcileWireGuardHub();
         startSchedulers();
         clearInterval(retry);
       } catch { /* keep retrying until the database is reachable */ }

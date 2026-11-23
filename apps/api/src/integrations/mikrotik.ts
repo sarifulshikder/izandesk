@@ -1,5 +1,6 @@
 import { RouterOSAPI } from 'node-routeros';
-import { acquireMikrotikApi, releaseMikrotikApi } from './mikrotik-manager';
+import { acquireMikrotikApi, releaseMikrotikApi, invalidateMikrotikApi } from './mikrotik-manager';
+import { isTransientMikrotikError, normalizeMikrotikError } from './mikrotik-errors';
 import * as https from 'https';
 
 export type RouterRow = any;
@@ -64,16 +65,29 @@ export async function mikrotikTest(r: RouterRow) {
     const data: any = await restFetch(o, '/system/identity').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/system/identity'); throw e; });
     return { ok: true, identity: data?.name || data?.identity || r.name, mode: 'REST' };
   }
-  const api = await acquireMikrotikApi(r, 'API');
-  let ok = false;
-  try {
-    const ident = await api.write('/system/identity/print');
-    const name = (ident && ident[0] && (ident[0].name || ident[0]['name'])) || r.name;
-    ok = true;
-    return { ok: true, identity: name, mode: 'API' };
-  } finally {
-    await releaseMikrotikApi(r, api, ok, 'API');
+  // A pooled API session can be stale even when it still reports `connected`.
+  // Retry once on a transport-style failure after discarding the session, so a
+  // transient socket drop is not reported as a dead router.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let api: RouterOSAPI | null = null;
+    let released = false;
+    try {
+      api = await acquireMikrotikApi(r, 'API');
+      const ident = await api.write('/system/identity/print');
+      const name = (ident && ident[0] && (ident[0].name || ident[0]['name'])) || r.name;
+      return { ok: true, identity: name, mode: 'API' };
+    } catch (e: any) {
+      if (api) {
+        await releaseMikrotikApi(r, api, false, 'API').catch(() => {});
+        released = true;
+      }
+      await invalidateMikrotikApi(String(r.id || r.host || 'unknown')).catch(() => {});
+      if (attempt === 1 || !isTransientMikrotikError(e)) throw normalizeMikrotikError(e, r);
+    } finally {
+      if (api && !released) await releaseMikrotikApi(r, api, true, 'API').catch(() => {});
+    }
   }
+  throw new Error('MikroTik API test failed');
 }
 
 export async function mikrotikTelemetry(r: RouterRow) {

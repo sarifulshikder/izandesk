@@ -1,5 +1,6 @@
 import { pool } from '../db';
 import { mikrotikActiveSessions, mikrotikTelemetry } from './mikrotik';
+import { mikrotikErrorMessage } from './mikrotik-errors';
 import { LITE_MODE, SESSIONS_COLLECTOR_MS, TELEMETRY_COLLECTOR_MS } from '../config/runtime';
 
 function parseUptimeSimple(s: string): number {
@@ -31,7 +32,7 @@ export async function collectSessionsOnce(): Promise<{ ok: boolean; routers: num
         }
       } catch (e: any) {
         failedRouters.add(String(rt.id));
-        await pool.query('UPDATE network_routers SET last_error=$1, updated_at=now() WHERE id=$2', [String(e?.message || 'session collection failed').slice(0, 500), rt.id]).catch(() => {});
+        await pool.query('UPDATE network_routers SET last_error=$1, updated_at=now() WHERE id=$2', [mikrotikErrorMessage(e, rt).slice(0, 500), rt.id]).catch(() => {});
       }
     }
 
@@ -111,7 +112,7 @@ export async function collectTelemetryOnce(): Promise<{ ok: boolean; routers: nu
         await pool.query('UPDATE network_routers SET cpu_load=$1,memory_used_mb=$2,memory_total_mb=$3,rx_bps=$4,tx_bps=$5,uptime_seconds=$6,status=$7,last_seen_at=COALESCE($8,last_seen_at),identity=COALESCE($9,identity),board_name=COALESCE($10,board_name),updated_at=now() WHERE id=$11',
           [merged.cpu_load ?? row.cpu_load ?? null, merged.memory_used_mb ?? row.memory_used_mb ?? null, merged.memory_total_mb ?? row.memory_total_mb ?? null, merged.rx_bps ?? row.rx_bps ?? 0, merged.tx_bps ?? row.tx_bps ?? 0, merged.uptime_seconds ?? row.uptime_seconds ?? null, merged.status || row.status, merged.last_seen_at || null, merged.identity || null, merged.board_name || null, row.id]);
       } catch (e: any) {
-        await pool.query('UPDATE network_routers SET status=$1,last_error=$2,updated_at=now() WHERE id=$3', ['OFFLINE', String(e?.message || 'unreachable').slice(0, 500), row.id]).catch(() => {});
+        await pool.query('UPDATE network_routers SET status=$1,last_error=$2,updated_at=now() WHERE id=$3', ['OFFLINE', mikrotikErrorMessage(e, row).slice(0, 500), row.id]).catch(() => {});
       }
     }
     return { ok: true, routers: rows.length };

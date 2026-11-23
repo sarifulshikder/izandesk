@@ -49,6 +49,9 @@ services:
       KYC_ENCRYPTION_ACTIVE_KEY_ID: ${KYC_ENCRYPTION_ACTIVE_KEY_ID:-}
       MFS_SMS_INGEST_TOKEN: ${MFS_SMS_INGEST_TOKEN:-}
       INVOICE_SHARE_SECRET: ${INVOICE_SHARE_SECRET:-}
+      # Default keeps the historical shared path for existing deployments.
+      # Disposable stacks must override this so hub/init cannot clobber prod.
+      WG_CONFIG_DIR: ${WG_CONFIG_DIR:-/app/docker/wg-hub/config}
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: ${POSTGRES_DB:-izandesk}

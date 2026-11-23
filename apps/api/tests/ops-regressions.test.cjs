@@ -4,11 +4,13 @@
  * - failed message logs do not suppress retries
  * - report schedules are claimed atomically and report real delivery status
  * - /api/system/health fails the HTTP status when dependencies are down
+ * - blank RosException errors are normalized and persisted by router tests
  * Run: node tests/ops-regressions.test.cjs (requires: pnpm --filter api build first) */
 const express = require('express');
 const db = require('../dist/db/index.js');
 const messaging = require('../dist/integrations/messaging.js');
 const reports = require('../dist/integrations/report-scheduler.js');
+const mikrotikErrors = require('../dist/integrations/mikrotik-errors.js');
 
 let pass = 0, fail = 0;
 function check(name, cond) {
@@ -134,10 +136,65 @@ async function systemHealthTest() {
   }
 }
 
+async function mikrotikErrorTest() {
+  const blankRos = { name: 'RosException', message: '', errno: -113 };
+  const msg = mikrotikErrors.mikrotikErrorMessage(blankRos, {
+    host: '10.77.0.2', api_port: 8730, integration_mode: 'API',
+  });
+  check('mikrotik: blank RosException exposes the OS error', msg.includes('EHOSTUNREACH'));
+  check('mikrotik: blank RosException includes non-secret endpoint', msg.includes('10.77.0.2:8730'));
+  check('mikrotik: auth failures are not retried', !mikrotikErrors.isTransientMikrotikError({ name: 'RosException', message: 'CANTLOGIN' }));
+  check('mikrotik: blank RosException is transient', mikrotikErrors.isTransientMikrotikError(blankRos));
+}
+
+async function routerTestPersistenceTest() {
+  const mikrotik = require('../dist/integrations/mikrotik.js');
+  const originalTest = mikrotik.mikrotikTest;
+  mikrotik.mikrotikTest = async () => {
+    const e = new Error('');
+    e.name = 'RosException';
+    e.errno = -113;
+    throw e;
+  };
+  delete require.cache[require.resolve('../dist/routes/network.js')];
+  const networkRouter = require('../dist/routes/network.js').default;
+  const fake = makeDb([
+    {
+      when: (c) => has(c, 'SELECT * FROM network_routers WHERE id=$1'),
+      return: { rows: [{ id: 'r1', name: 'RB1100AHx4', host: '10.77.0.2', api_port: 8730, integration_mode: 'API', identity: null, use_ssl: false }] },
+    },
+    {
+      when: (c) => has(c, "UPDATE network_routers SET status='OFFLINE'"),
+      return: { rows: [] },
+    },
+  ]);
+  const app = express();
+  app.use((req, _res, next) => { req.user = { role: 'SUPER_ADMIN' }; next(); });
+  app.use('/api/network', networkRouter);
+  const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  try {
+    const { port } = server.address();
+    const res = await fetch(`http://127.0.0.1:${port}/api/network/routers/r1/test`, { method: 'POST' });
+    const body = await res.json();
+    const update = fake.calls.find((c) => has(c, "UPDATE network_routers SET status='OFFLINE'"));
+    check('router test: transport failure returns HTTP 502', res.status === 502);
+    check('router test: response explains blank RosException', String(body.message).includes('EHOSTUNREACH') && String(body.message).includes('10.77.0.2:8730'));
+    check('router test: failure persists normalized last_error', String(update?.params[1] || '').includes('EHOSTUNREACH'));
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+    fake.restore();
+    mikrotik.mikrotikTest = originalTest;
+    delete require.cache[require.resolve('../dist/routes/network.js')];
+  }
+}
+
 (async () => {
   await dueReminderTest();
   await reportScheduleTest();
   await systemHealthTest();
+  await mikrotikErrorTest();
+  await routerTestPersistenceTest();
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch((err) => {

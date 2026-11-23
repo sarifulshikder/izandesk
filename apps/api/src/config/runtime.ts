@@ -1,3 +1,5 @@
+import * as path from 'path';
+
 /**
  * Runtime profile shared by the API services.
  *
@@ -25,3 +27,10 @@ export const SESSIONS_COLLECTOR_MS = LITE_MODE
 export const TELEMETRY_COLLECTOR_MS = LITE_MODE
   ? numEnv('TELEMETRY_COLLECTOR_MS', 60_000)
   : numEnv('TELEMETRY_COLLECTOR_MS', 60_000);
+
+/**
+ * Directory holding the WireGuard hub config. Disposable stacks must override
+ * this with a stack-local path; the default is the shared compose config dir.
+ */
+export const WG_CONFIG_DIR = process.env.WG_CONFIG_DIR
+  || path.resolve(__dirname, '../../../../docker/wg-hub/config');

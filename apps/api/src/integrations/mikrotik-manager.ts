@@ -1,5 +1,6 @@
 import { RouterOSAPI } from 'node-routeros';
 import type { RouterRow } from './mikrotik';
+import { normalizeMikrotikError } from './mikrotik-errors';
 
 type Managed = {
   key: string;
@@ -44,7 +45,13 @@ async function connectFresh(r: RouterRow, mode: 'API' | 'REST'): Promise<Managed
   const existing = pool.get(k);
   if (existing && (existing.api as any).connected) return existing;
   const api = makeApi(r, mode);
-  await api.connect();
+  try {
+    await api.connect();
+  } catch (e) {
+    // node-routeros loses the socket error code on raw connect failures. Keep
+    // the original as `cause` but expose a readable message to every caller.
+    throw normalizeMikrotikError(e, r);
+  }
   // Another caller may have connected while we were awaiting
   const existing2 = pool.get(k);
   if (existing2 && (existing2.api as any).connected) {

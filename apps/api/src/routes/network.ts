@@ -3,6 +3,7 @@ import { pool } from '../db';
 import { asyncHandler, sanitizeRouter, sanitizeRouters, networkGuard, hasNetworkWrite } from './helpers';
 import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret } from '../integrations/mikrotik';
 import { invalidateMikrotikApi } from '../integrations/mikrotik-manager';
+import { mikrotikErrorMessage } from '../integrations/mikrotik-errors';
 import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas } from '../integrations/radius';
 import { hashPassword } from '../utils/password';
 import { TELEMETRY_TTL_MS } from '../config/runtime';
@@ -53,7 +54,7 @@ router.get('/routers', asyncHandler(async (req, res) => {
               if (TELEMETRY_TTL_MS) telemetryCache.set(row.id, { at: Date.now(), data });
               return data;
             } catch (e: any) {
-              const data = { status: 'OFFLINE', last_seen_at: row.last_seen_at, last_error: e.message || 'unreachable' };
+              const data = { status: 'OFFLINE', last_seen_at: row.last_seen_at, last_error: mikrotikErrorMessage(e, row) };
               if (TELEMETRY_TTL_MS) telemetryCache.set(row.id, { at: Date.now(), data });
               return data;
             }
@@ -171,7 +172,7 @@ router.post('/routers/:id/test', asyncHandler(async (req, res) => {
   try {
     if (mode === 'API' || mode === 'REST') {
       const result = await mikrotikTest(row);
-      await pool.query(`UPDATE network_routers SET status='ONLINE', last_seen_at=now(), identity=$1, updated_at=now() WHERE id=$2`, [result.identity || row.identity || row.name, req.params.id]);
+      await pool.query(`UPDATE network_routers SET status='ONLINE', last_seen_at=now(), last_error=NULL, identity=$1, updated_at=now() WHERE id=$2`, [result.identity || row.identity || row.name, req.params.id]);
       return res.json({ ok: true, message: `Real ${mode} connection successful. Identity: ${result.identity}`, identity: result.identity, integration_mode: mode });
     } else {
       // RADIUS NAS: verify config (real CoA reachability tested via CoA action); mark enabled NAS as configured
@@ -180,8 +181,8 @@ router.post('/routers/:id/test', asyncHandler(async (req, res) => {
       return res.json({ ok: true, message: `RADIUS NAS configured. Secret set, CoA port ${row.coa_port||3799}. (Use CoA/PoD to verify real NAS response; FreeRADIUS handles AAA.)`, identity: row.nas_identifier || row.identity || row.name, integration_mode: mode, coa_port: row.coa_port || 3799 });
     }
   } catch (e: any) {
-    await pool.query(`UPDATE network_routers SET status='OFFLINE', updated_at=now() WHERE id=$1`, [req.params.id]);
-    return res.status(502).json({ ok: false, message: `Connection failed: ${e.message || e}`, integration_mode: mode });
+    await pool.query(`UPDATE network_routers SET status='OFFLINE', last_error=$2, updated_at=now() WHERE id=$1`, [req.params.id, mikrotikErrorMessage(e, row).slice(0, 500)]);
+    return res.status(502).json({ ok: false, message: `Connection failed: ${mikrotikErrorMessage(e, row)}`, integration_mode: mode });
   }
 }));
 
