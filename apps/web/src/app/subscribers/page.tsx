@@ -6,7 +6,7 @@ import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { SubscriberFormWizard } from '@/components/subscribers/subscriber-form-wizard';
-import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, Download, Upload as UploadIcon, History, FileSpreadsheet, AlertCircle, CheckCircle, Package, MessageSquare, Phone, Mail, Activity, Users, UserCheck, UserX, Clock3 } from 'lucide-react';
+import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, Download, Upload as UploadIcon, History, FileSpreadsheet, AlertCircle, CheckCircle, Package, MessageSquare, Phone, Mail, Activity, Users, UserCheck, UserX, Clock3, ExternalLink } from 'lucide-react';
 
 export default function SubscribersPage() {
   const { token, user } = useAuth();
@@ -508,7 +508,7 @@ export default function SubscribersPage() {
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="avatar avatar-sm avatar-primary">{String(r.full_name || '?').charAt(0).toUpperCase()}</span>
                         <div className="min-w-0">
-                          <div className="font-semibold text-foreground text-[12px] truncate max-w-[150px]">{r.full_name}</div>
+                          <Link href={`/subscribers/${r.id}`} onClick={(e)=>e.stopPropagation()} className="font-semibold text-foreground text-[12px] truncate max-w-[150px] hover:text-primary block">{r.full_name}</Link>
                           <div className="text-[10px] text-primary font-mono truncate max-w-[140px]">{r.client_code}</div>
                           {clientView !== 'detailed' && <div className="text-[10px] text-muted-foreground truncate max-w-[150px]">{r.phone || r.email || '-'}</div>}
                         </div>
@@ -546,6 +546,7 @@ export default function SubscribersPage() {
                     <td className="px-3 py-2.5"><div className="flex flex-col gap-1 items-start"><span className={`badge ${statusBadge(r.status)}`}>{r.status}</span>{r.fup_exceeded && <span className="badge badge-warning">FUP Throttled</span>}</div></td>
                     <td className="px-3 py-2.5 text-right" onClick={e=>e.stopPropagation()}>
                       <div className="inline-flex items-center gap-0.5">
+                        <Link href={`/subscribers/${r.id}`} onClick={e=>e.stopPropagation()} className="topbar-icon-btn !w-7 !h-7 !rounded-lg" title="Open 360° View"><ExternalLink className="w-3.5 h-3.5"/></Link>
                         <Link href={`/subscribers/${r.id}/live`} onClick={e=>e.stopPropagation()} className="topbar-icon-btn !w-7 !h-7 !rounded-lg" title="Open Live Dashboard"><Activity className="w-3.5 h-3.5"/></Link>
                         <button onClick={(e)=>{e.stopPropagation();openEdit(r)}} className="topbar-icon-btn !w-7 !h-7 !rounded-lg" title="Edit"><Pencil className="w-3.5 h-3.5"/></button>
                         <button onClick={(e)=>{e.stopPropagation();remove(r.id)}} className="topbar-icon-btn !w-7 !h-7 !rounded-lg hover:!text-danger" title="Delete"><Trash2 className="w-3.5 h-3.5"/></button>
@@ -586,6 +587,7 @@ export default function SubscribersPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  <Link href={`/subscribers/${detail.id}`} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border" title="Open 360° View"><ExternalLink className="w-4 h-4"/></Link>
                   <button onClick={()=>downloadCaf(detail.id)} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border" title="Download CAF PDF"><FileText className="w-4 h-4"/></button>
                   <button onClick={()=>openEdit(detail)} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border" title="Edit"><Pencil className="w-4 h-4"/></button>
                   <button onClick={()=>setDetail(null)} className="p-1.5 rounded-lg hover:bg-muted" title="Close"><X className="w-4 h-4"/></button>
