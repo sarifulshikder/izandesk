@@ -525,18 +525,24 @@ router.post('/', asyncHandler(async (req, res) => {
     p.reseller_id = scope.uuid;
   }
   // Auto-fill from package when assigned but fields were not explicitly set.
+  let pkgForExpiry: any = null;
   if (p.package_name) {
-    const pkg = (await pool.query('SELECT price, download_mbps, upload_mbps FROM bandwidth_packages WHERE name=$1 LIMIT 1', [p.package_name])).rows[0];
-    if (pkg) {
+    pkgForExpiry = (await pool.query('SELECT price, download_mbps, upload_mbps, validity_value, validity_unit FROM bandwidth_packages WHERE name=$1 LIMIT 1', [p.package_name])).rows[0] || null;
+    if (pkgForExpiry) {
       const reqBill = b.monthly_bill ?? b.monthlyBill;
-      if ((p.monthly_bill === 0 || p.monthly_bill == null) && Number(pkg.price || 0) > 0 && (reqBill === '' || reqBill == null || Number(reqBill) === 0)) p.monthly_bill = Number(pkg.price);
+      if ((p.monthly_bill === 0 || p.monthly_bill == null) && Number(pkgForExpiry.price || 0) > 0 && (reqBill === '' || reqBill == null || Number(reqBill) === 0)) p.monthly_bill = Number(pkgForExpiry.price);
       const reqBw = b.bandwidth_mbps ?? b.bandwidthMbps;
-      if ((p.bandwidth_mbps == null || p.bandwidth_mbps === 0) && Number(pkg.download_mbps || 0) > 0 && (reqBw === '' || reqBw == null || Number(reqBw) === 0)) p.bandwidth_mbps = Number(pkg.download_mbps);
+      if ((p.bandwidth_mbps == null || p.bandwidth_mbps === 0) && Number(pkgForExpiry.download_mbps || 0) > 0 && (reqBw === '' || reqBw == null || Number(reqBw) === 0)) p.bandwidth_mbps = Number(pkgForExpiry.download_mbps);
     }
   }
   if (!p.expiry_date && p.package_name) {
     const base = p.installation_date ? new Date(String(p.installation_date)) : new Date();
-    const exp = new Date(base); exp.setMonth(exp.getMonth() + 1);
+    const unit = String(pkgForExpiry?.validity_unit || 'CALENDAR_MONTH').toUpperCase();
+    const val = Math.max(1, Number(pkgForExpiry?.validity_value || 1));
+    const exp = new Date(base);
+    if (unit === 'DAYS') exp.setDate(exp.getDate() + val);
+    else if (unit === 'MONTHS') exp.setMonth(exp.getMonth() + val);
+    else exp.setMonth(exp.getMonth() + 1); // CALENDAR_MONTH default
     p.expiry_date = exp.toISOString().slice(0, 10);
   }
 
@@ -630,20 +636,26 @@ router.put('/:id', asyncHandler(async (req, res) => {
   // (or fail validation) at all.
   const body = scope.restricted ? { ...b, reseller_id: scope.uuid } : b;
   const p = await buildPayload(body, existing);
+  let pkgForExpiry: any = null;
   if (p.package_name) {
-    const pkg = (await pool.query('SELECT price, download_mbps FROM bandwidth_packages WHERE name=$1 LIMIT 1', [p.package_name])).rows[0];
-    if (pkg) {
+    pkgForExpiry = (await pool.query('SELECT price, download_mbps, validity_value, validity_unit FROM bandwidth_packages WHERE name=$1 LIMIT 1', [p.package_name])).rows[0] || null;
+    if (pkgForExpiry) {
       const reqBill = b.monthly_bill ?? b.monthlyBill;
       const reqExplicitBill = !(reqBill === '' || reqBill == null);
-      if ((p.monthly_bill === 0 || p.monthly_bill == null) && Number(pkg.price || 0) > 0 && !reqExplicitBill) p.monthly_bill = Number(pkg.price);
+      if ((p.monthly_bill === 0 || p.monthly_bill == null) && Number(pkgForExpiry.price || 0) > 0 && !reqExplicitBill) p.monthly_bill = Number(pkgForExpiry.price);
       const reqBw = b.bandwidth_mbps ?? b.bandwidthMbps;
       const reqExplicitBw = !(reqBw === '' || reqBw == null);
-      if ((p.bandwidth_mbps == null || p.bandwidth_mbps === 0) && Number(pkg.download_mbps || 0) > 0 && !reqExplicitBw) p.bandwidth_mbps = Number(pkg.download_mbps);
+      if ((p.bandwidth_mbps == null || p.bandwidth_mbps === 0) && Number(pkgForExpiry.download_mbps || 0) > 0 && !reqExplicitBw) p.bandwidth_mbps = Number(pkgForExpiry.download_mbps);
     }
   }
   if (!p.expiry_date && p.package_name) {
     const base = p.installation_date ? new Date(String(p.installation_date)) : new Date();
-    const exp = new Date(base); exp.setMonth(exp.getMonth() + 1);
+    const unit = String(pkgForExpiry?.validity_unit || 'CALENDAR_MONTH').toUpperCase();
+    const val = Math.max(1, Number(pkgForExpiry?.validity_value || 1));
+    const exp = new Date(base);
+    if (unit === 'DAYS') exp.setDate(exp.getDate() + val);
+    else if (unit === 'MONTHS') exp.setMonth(exp.getMonth() + val);
+    else exp.setMonth(exp.getMonth() + 1);
     p.expiry_date = exp.toISOString().slice(0, 10);
   }
   const statusChanged = p.status !== existing.status;

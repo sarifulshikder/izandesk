@@ -917,6 +917,8 @@ export async function initDb() {
 
   await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS data_cap_gb NUMERIC(12,2)`).catch(()=>{});
   await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS fup_speed_mbps INTEGER`).catch(()=>{});
+  await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS validity_value INTEGER`).catch(()=>{});
+  await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS validity_unit TEXT`).catch(()=>{});
 
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS fup_exceeded BOOLEAN NOT NULL DEFAULT false`).catch(()=>{});
   await pool.query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS fup_applied_at TIMESTAMPTZ`).catch(()=>{});
