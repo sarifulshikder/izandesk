@@ -75,7 +75,7 @@ export function NetworkHealthCard({ routers, olts, onus }: { routers: any[]; olt
             <span className="section-label">Optical / FTTH</span>
             <span className="flex items-center gap-1.5">
               {statusPill(oOn, olts.length)}
-              {onuCritical > 0 && <span className="badge badge-danger"><AlertOctagon className="w-2.5 h-2.5" />{onuCritical}</span>}
+              {onuCritical > 0 && <Link href="/olts?onu_status=CRITICAL_LOS" className="badge badge-danger hover:opacity-90"><AlertOctagon className="w-2.5 h-2.5" />{onuCritical}</Link>}
             </span>
           </div>
           <div className="flex items-center gap-1.5 mb-2 text-[9.5px] text-muted-foreground">

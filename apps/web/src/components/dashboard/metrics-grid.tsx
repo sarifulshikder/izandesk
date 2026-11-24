@@ -4,12 +4,8 @@ import React from 'react';
 import Link from 'next/link';
 import {
   Users, Wifi, UserCheck, WifiOff, UserX, Clock3, BellRing,
-  Receipt, Wallet, AlertTriangle, Router, RadioTower,
+  Router, RadioTower,
 } from 'lucide-react';
-
-function money(v: any) {
-  return `৳${Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-}
 
 type Tile = {
   label: string; value: string; hint: string; icon: any; accent: string; href: string;
@@ -35,10 +31,8 @@ export function MetricsGrid({ summary, billing, sessions, routers, olts }: {
     { label: 'Offline', value: String(Number(s.offline || Math.max(total - online, 0))), hint: 'No active PPPoE session', icon: WifiOff, accent: 'secondary', href: '/subscribers?status=OFFLINE' },
     { label: 'Suspended', value: String(Number(s.suspended || 0)), hint: 'Access currently restricted', icon: UserX, accent: 'danger', href: '/subscribers?status=SUSPENDED' },
     { label: 'Expired', value: String(Number(s.expired || 0)), hint: 'Awaiting renewal', icon: Clock3, accent: 'warning', href: '/subscribers?status=EXPIRED' },
-    { label: 'Expiring · 7 days', value: String(Number(s.expiring_soon || 0)), hint: 'Renewal window approaching', icon: BellRing, accent: 'orange', href: '/subscribers?status=EXPIRING' },
-    { label: 'This Month Bill', value: money(b.monthlyBillGenerated), hint: 'Net amount invoiced', icon: Receipt, accent: 'purple', href: '/billing' },
-    { label: 'Collected', value: money(b.thisMonthCollections), hint: 'Payments posted this month', icon: Wallet, accent: 'success', href: '/billing/payments' },
-    { label: 'Outstanding', value: money(b.totalDueOutstanding), hint: `${Number(b.overdueInvoices || 0)} overdue invoices`, icon: AlertTriangle, accent: 'danger', href: '/billing/unpaid' },
+    { label: 'Expiring Tomorrow', value: String(Number(s.expiring_tomorrow || 0)), hint: 'Act before expiry', icon: BellRing, accent: 'orange', href: '/subscribers?expiring=tomorrow' },
+    { label: 'Expiring · 7 days', value: String(Number(s.expiring_soon || 0)), hint: 'Renewal window approaching', icon: BellRing, accent: 'warning', href: '/subscribers?expiring=7' },
     { label: 'Routers Online', value: `${routersOnline}/${(routers || []).length}`, hint: 'Edge & NAS fleet', icon: Router, accent: 'info', href: '/routers' },
     { label: 'OLTs Online', value: `${oltsOnline}/${(olts || []).length}`, hint: 'Optical line terminals', icon: RadioTower, accent: 'indigo', href: '/olts' },
   ];
@@ -48,7 +42,7 @@ export function MetricsGrid({ summary, billing, sessions, routers, olts }: {
       {tiles.map((t) => {
         const Icon = t.icon;
         return (
-          <Link key={t.label} href={t.href} className={`dash-stat dash-stat-${t.accent}`} title={t.label}>
+          <Link key={t.label} href={t.href} className={`dash-stat dash-stat-${t.accent} compact`} title={t.label}>
             <span className="dash-stat-icon"><Icon /></span>
             <span className="dash-stat-body">
               <span className="dash-stat-label">{t.label}</span>
