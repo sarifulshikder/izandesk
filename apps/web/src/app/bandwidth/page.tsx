@@ -98,7 +98,7 @@ export default function BandwidthPage() {
           <button onClick={load} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
           <button onClick={()=>{ setShowImport(true); setImportItems([]); setImportSelected({}); setImportMsg(null); setError(null); }} className="btn btn-outline"><Download className="w-4 h-4"/>Import from Router</button>
           <button onClick={sync} disabled={syncing} className="btn btn-outline"><Router className="w-4 h-4"/>{syncing?'Syncing...':'Sync to Routers'}</button>
-          <button onClick={()=>{setForm({name:'',profile_name:'',download_mbps:20,upload_mbps:20,burst_download_mbps:'',burst_upload_mbps:'',burst_threshold_download_mbps:'',burst_threshold_upload_mbps:'',burst_time_sec:'',priority:8,queue_type:'',price:0,description:'',is_active:true,data_cap_gb:'',fup_speed_mbps:'',validity_value:1,validity_unit:'CALENDAR_MONTH'}); setModal('new');}} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Package</button>
+          <button onClick={()=>{setForm({name:'',profile_name:'',download_mbps:'',upload_mbps:'',burst_download_mbps:'',burst_upload_mbps:'',burst_threshold_download_mbps:'',burst_threshold_upload_mbps:'',burst_time_sec:'',priority:8,queue_type:'',price:0,description:'',is_active:true,data_cap_gb:'',fup_speed_mbps:'',validity_value:1,validity_unit:'CALENDAR_MONTH'}); setModal('new');}} className="btn btn-primary"><Plus className="w-4 h-4"/>Add Package</button>
         </div>
       </div>
       {error && <div className="alert alert-danger">{error}</div>}
@@ -117,7 +117,7 @@ export default function BandwidthPage() {
                   return (
                   <tr key={p.id} className="border-t border-border/70">
                     <td className="px-3 py-2.5"><div className="font-semibold">{p.name}</div><div className="text-xs text-muted-foreground font-mono">{p.profile_name || '-'}</div><div className="text-xs text-muted-foreground">{p.description || ''}</div></td>
-                    <td className="px-3 py-2.5"><div className="font-medium text-info tabular-nums">{p.download_mbps} / {p.upload_mbps} Mbps</div><div className="text-xs text-muted-foreground">Down / Up</div></td>
+                    <td className="px-3 py-2.5"><div className="font-medium text-info tabular-nums">{p.download_mbps != null || p.upload_mbps != null ? `${p.download_mbps ?? '-'} / ${p.upload_mbps ?? '-'} Mbps` : '-'}</div><div className="text-xs text-muted-foreground">Down / Up</div></td>
                     <td className="px-3 py-2.5 text-xs"><div>{p.queue_type || 'Auto'} • Priority {p.priority}</div><div className="text-muted-foreground tabular-nums">{p.burst_download_mbps ? `Burst ${p.burst_download_mbps}/${p.burst_upload_mbps}M, Thr ${p.burst_threshold_download_mbps||'-'}/${p.burst_threshold_upload_mbps||'-'}M, ${p.burst_time_sec||'-'}s` : 'No burst'}</div></td>
                     <td className="px-3 py-2.5 text-xs"><div>{validityLabel}</div><div className="text-muted-foreground">{vu === 'CALENDAR_MONTH' ? 'From activation' : ''}</div></td>
                     <td className="px-3 py-2.5 text-xs"><div>{p.data_cap_gb ? `${Number(p.data_cap_gb)} GB/mo` : 'Unlimited'}</div><div className="text-muted-foreground">{p.fup_speed_mbps ? `FUP ${p.fup_speed_mbps} Mbps` : (p.data_cap_gb ? 'No FUP speed set' : '')}</div></td>
@@ -222,8 +222,8 @@ export default function BandwidthPage() {
           <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-3">
             <F label="Name"><input className="form-control" value={form.name||''} onChange={e=>setForm({...form,name:e.target.value})}/></F>
             <F label="Profile Name"><input className="form-control" value={form.profile_name||''} onChange={e=>setForm({...form,profile_name:e.target.value})}/></F>
-            <F label="Download (Mbps)"><input className="form-control" type="number" value={form.download_mbps||0} onChange={e=>setForm({...form,download_mbps:Number(e.target.value)})}/></F>
-            <F label="Upload (Mbps)"><input className="form-control" type="number" value={form.upload_mbps||0} onChange={e=>setForm({...form,upload_mbps:Number(e.target.value)})}/></F>
+            <F label="Download (Mbps, Optional)"><input className="form-control" type="number" placeholder="Optional" value={form.download_mbps ?? ''} onChange={e=>setForm({...form,download_mbps:e.target.value===''?'':Number(e.target.value)})}/></F>
+            <F label="Upload (Mbps, Optional)"><input className="form-control" type="number" placeholder="Optional" value={form.upload_mbps ?? ''} onChange={e=>setForm({...form,upload_mbps:e.target.value===''?'':Number(e.target.value)})}/></F>
             <F label="Price (৳)"><input className="form-control" type="number" value={form.price||0} onChange={e=>setForm({...form,price:Number(e.target.value)})}/></F>
             <F label="Validity">
               <select className="form-select" value={form.validity_unit||'CALENDAR_MONTH'} onChange={e=>{ const u=e.target.value; setForm({...form, validity_unit:u, validity_value: u==='CALENDAR_MONTH' ? 1 : (form.validity_value||1)}); }}>
