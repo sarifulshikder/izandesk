@@ -1,6 +1,7 @@
 import { pool } from '../db';
 import { dispatchMessage } from './messaging';
 import { emitNocAlert } from './noc-alerts';
+import { withSchedulerRun } from './scheduler-observability';
 
 async function generateReport(key: string) {
   switch (String(key)) {
@@ -101,7 +102,12 @@ export async function runReportSchedulesOnce(){
 }
 
 export function startReportScheduler(){
-  const tick = async ()=>{ try { const r=await runReportSchedulesOnce(); if(r.ran) console.log(`[ReportScheduler] ran ${r.ran} schedule(s)`); } catch(e:any){ console.error('[ReportScheduler] error', e.message); } };
+  const tick = async ()=>{
+    try {
+      const r = await withSchedulerRun('report-scheduler', () => runReportSchedulesOnce());
+      if (r && r.ran) console.log(`[ReportScheduler] ran ${r.ran} schedule(s)`);
+    } catch(e:any){ console.error('[ReportScheduler] error', e.message); }
+  };
   setTimeout(tick, 30*1000);
   setInterval(tick, 10*60*1000);
 }

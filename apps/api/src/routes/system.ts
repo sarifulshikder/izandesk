@@ -7,6 +7,7 @@ import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { LITE_MODE } from '../config/runtime';
 import { emitNocAlert } from '../integrations/noc-alerts';
+import { withSchedulerRun, getSchedulerStatus, getSchedulerMetrics } from '../integrations/scheduler-observability';
 
 const router: Router = Router();
 function requireAdmin(req:any,res:any){ if (!['SUPER_ADMIN','NOC_ENGINEER'].includes(String((req as any).user?.role))) { res.status(403).json({ message: 'Forbidden' }); return false; } return true; }
@@ -102,15 +103,18 @@ export function startBackupScheduler() {
   console.log(`[BackupScheduler] enabled every ${cfg.hours}h, retention ${cfg.retentionCount} files / ${cfg.retentionDays} days`);
   const runOnce = async () => {
     try {
-      if (!(await tryAcquireBackupLock(Math.max(10, Math.min(55, cfg.hours*60 - 5))))) return;
-      const res = await runDbBackup('scheduled');
-      if (res.ok) {
-        console.log(`[BackupScheduler] backup ok: ${res.backup?.name} (${res.backup?.size} bytes), pruned=${res.retention?.deleted}`);
-      } else {
+      await withSchedulerRun('backup-scheduler', async () => {
+        if (!(await tryAcquireBackupLock(Math.max(10, Math.min(55, cfg.hours*60 - 5))))) return { skipped: 'lock' };
+        const res = await runDbBackup('scheduled');
+        if (res.ok) {
+          console.log(`[BackupScheduler] backup ok: ${res.backup?.name} (${res.backup?.size} bytes), pruned=${res.retention?.deleted}`);
+          return { ok: true, file: res.backup?.name, pruned: res.retention?.deleted };
+        }
         const fail: any = res;
         console.error('[BackupScheduler] backup failed:', fail.message, fail.detail || '');
         await emitNocAlert({ severity: 'CRITICAL', source: 'BACKUP', title: 'Scheduled backup failed', message: String(fail.message || 'Backup failed'), details: { detail: fail.detail || null } }).catch(() => {});
-      }
+        throw new Error(String(fail.message || 'Backup failed'));
+      });
     } catch (e:any) { console.error('[BackupScheduler] error', e.message); }
   };
   setTimeout(runOnce, 60 * 1000);
@@ -177,10 +181,14 @@ router.get('/health', asyncHandler(async (_req, res) => {
 
 router.get('/diagnostics', asyncHandler(async (req, res) => {
   if (!requireAdmin(req,res)) return;
-  const tables = await pool.query(`SELECT relname as table, n_live_tup::bigint as rows FROM pg_stat_user_tables ORDER BY n_live_tup DESC NULLS LAST LIMIT 50`).catch(()=>({ rows: [] as any[] }));
-  const subs = await pool.query(`SELECT status, COUNT(*)::int as count FROM subscribers GROUP BY status`).catch(()=>({ rows: [] as any[] }));
-  const invoices = await pool.query(`SELECT status, COUNT(*)::int as count, COALESCE(SUM(due_amount),0)::numeric(12,2) as due FROM invoices GROUP BY status`).catch(()=>({ rows: [] as any[] }));
-  res.json({ ok: true, version: 'phase-6', uptime_sec: Math.floor(process.uptime()), tables: tables.rows, subscribers: subs.rows, invoices: invoices.rows, env: { node: process.version, platform: process.platform } });
+  const [tables, subs, invoices, schedStatus, schedMetrics] = await Promise.all([
+    pool.query(`SELECT relname as table, n_live_tup::bigint as rows FROM pg_stat_user_tables ORDER BY n_live_tup DESC NULLS LAST LIMIT 50`).catch(()=>({ rows: [] as any[] })),
+    pool.query(`SELECT status, COUNT(*)::int as count FROM subscribers GROUP BY status`).catch(()=>({ rows: [] as any[] })),
+    pool.query(`SELECT status, COUNT(*)::int as count, COALESCE(SUM(due_amount),0)::numeric(12,2) as due FROM invoices GROUP BY status`).catch(()=>({ rows: [] as any[] })),
+    getSchedulerStatus().catch(()=>({ jobs: [], backoff: [] })),
+    getSchedulerMetrics().catch(()=>[]),
+  ]);
+  res.json({ ok: true, version: 'phase-6', uptime_sec: Math.floor(process.uptime()), tables: tables.rows, subscribers: subs.rows, invoices: invoices.rows, schedulers: { ...schedStatus, metrics: schedMetrics }, env: { node: process.version, platform: process.platform } });
 }));
 
 router.get('/backups', asyncHandler(async (req, res) => {
@@ -217,6 +225,12 @@ router.post('/alerts/:id/ack', asyncHandler(async (req, res) => {
   ).catch(()=>({rows:[]}));
   if (!r.rows[0]) return res.status(404).json({ ok: false, message: 'Alert not found' });
   res.json({ ok: true, data: r.rows[0] });
+}));
+
+router.get('/schedulers', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req,res)) return;
+  const [status, metrics] = await Promise.all([getSchedulerStatus(), getSchedulerMetrics()]);
+  res.json({ ok: true, ...status, metrics });
 }));
 
 export default router;

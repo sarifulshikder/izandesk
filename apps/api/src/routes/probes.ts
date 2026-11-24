@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from 'express';
+import { getSchedulerMetrics } from '../integrations/scheduler-observability';
 
 type ProbeDeps = {
   getDbReady: () => boolean;
@@ -56,6 +57,24 @@ export function registerProbeRoutes(app: Express, deps: ProbeDeps) {
       '# TYPE nodejs_heap_used_bytes gauge',
       `nodejs_heap_used_bytes ${mem.heapUsed}`,
     ];
+    if (liveDbReady) {
+      try {
+        const sched = await getSchedulerMetrics();
+        lines.push('# HELP izandesk_scheduler_runs_24h Scheduler runs in last 24h.');
+        lines.push('# TYPE izandesk_scheduler_runs_24h gauge');
+        lines.push('# HELP izandesk_scheduler_errors_24h Scheduler errors in last 24h.');
+        lines.push('# TYPE izandesk_scheduler_errors_24h gauge');
+        lines.push('# HELP izandesk_scheduler_last_success_timestamp_seconds Last successful scheduler run unix timestamp.');
+        lines.push('# TYPE izandesk_scheduler_last_success_timestamp_seconds gauge');
+        for (const j of sched) {
+          const name = String(j.job_name || 'unknown').replace(/[^a-zA-Z0-9_:]/g, '_');
+          lines.push(`izandesk_scheduler_runs_24h{job="${name}"} ${Number(j.runs_24h || 0)}`);
+          lines.push(`izandesk_scheduler_errors_24h{job="${name}"} ${Number(j.errors_24h || 0)}`);
+          const ts = j.last_run_at ? Math.floor(new Date(j.last_run_at).getTime() / 1000) : 0;
+          if (ts > 0) lines.push(`izandesk_scheduler_last_success_timestamp_seconds{job="${name}",status="${String(j.last_status || '')}"} ${ts}`);
+        }
+      } catch {}
+    }
     res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.status(200).send(lines.join('\n') + '\n');
   });

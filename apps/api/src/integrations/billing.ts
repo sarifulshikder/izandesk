@@ -1,5 +1,6 @@
 import crypto = require('crypto');
 import { pool } from '../db';
+import { withSchedulerRun } from './scheduler-observability';
 import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikEnsureParentalProfile, mikrotikDisconnectPppUser, PARENTAL_CONTROL_PROFILE } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
@@ -797,24 +798,38 @@ export async function runFupEnforcementSweep() {
 
 async function runFup() {
   try {
-    const locked = await tryAcquireSchedulerLock('fup-enforcement-sweep', 25 * 60 * 1000).catch(()=>false);
-    if (!locked) return;
-    const res = await runFupEnforcementSweep();
-    if (res.applied || res.cleared) console.log(`[FUP] evaluated=${res.evaluated} applied=${res.applied} cleared=${res.cleared} skipped=${res.skipped}`);
+    await withSchedulerRun('fup-enforcement-sweep', async () => {
+      const locked = await tryAcquireSchedulerLock('fup-enforcement-sweep', 25 * 60 * 1000).catch(()=>false);
+      if (!locked) return { skipped: 'lock' };
+      const res = await runFupEnforcementSweep();
+      if (res.applied || res.cleared) console.log(`[FUP] evaluated=${res.evaluated} applied=${res.applied} cleared=${res.cleared} skipped=${res.skipped}`);
+      return res;
+    });
   } catch (e:any) { console.error('[FUP] sweep failed', e.message); }
 }
 
 export function startBillingScheduler() {
   // in-process scheduler with DB-backed lock to avoid overlapping runs across instances
   const run = async () => {
-    const got = await tryAcquireSchedulerLock('billing-due-policy-sweep', 55_000).catch(()=>false);
-    if (!got) return;
-    try { await ensureOverdueInvoiceStatuses(); await evaluateDuePolicies(); } catch (e:any) { console.error('[BillingScheduler] error', e.message); }
+    try {
+      await withSchedulerRun('billing-due-policy-sweep', async () => {
+        const got = await tryAcquireSchedulerLock('billing-due-policy-sweep', 55_000).catch(()=>false);
+        if (!got) return { skipped: 'lock' };
+        await ensureOverdueInvoiceStatuses();
+        await evaluateDuePolicies();
+        return { ok: true };
+      });
+    } catch (e:any) { console.error('[BillingScheduler] error', e.message); }
   };
   const runMsg = async () => {
-    const got = await tryAcquireSchedulerLock('messaging-sweep', 9 * 60 * 1000).catch(()=>false);
-    if (!got) return;
-    try { await runMessagingSchedulerSweep(); } catch (e:any) { console.error('[MessagingScheduler] error', e.message); }
+    try {
+      await withSchedulerRun('messaging-sweep', async () => {
+        const got = await tryAcquireSchedulerLock('messaging-sweep', 9 * 60 * 1000).catch(()=>false);
+        if (!got) return { skipped: 'lock' };
+        await runMessagingSchedulerSweep();
+        return { ok: true };
+      });
+    } catch (e:any) { console.error('[MessagingScheduler] error', e.message); }
   };
   setTimeout(run, 5000);
   setInterval(run, 60 * 1000); // every minute for timely grace/suspension evaluation

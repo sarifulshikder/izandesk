@@ -855,6 +855,18 @@ export async function initDb() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS scheduler_job_runs (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      job_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'RUNNING',
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      finished_at TIMESTAMPTZ,
+      duration_ms INTEGER,
+      details JSONB DEFAULT '{}'::jsonb,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_scheduler_job_runs_name_started ON scheduler_job_runs(job_name, started_at DESC);
+
     CREATE TABLE IF NOT EXISTS billing_suspension_logs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       subscriber_id UUID REFERENCES subscribers(id) ON DELETE SET NULL,

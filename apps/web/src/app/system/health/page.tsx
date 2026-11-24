@@ -12,6 +12,7 @@ export default function SystemHealthPage() {
   const [backups, setBackups] = useState<any>(null);
   const [fupLogs, setFupLogs] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
+  const [schedulers, setSchedulers] = useState<any>(null);
   const [msg, setMsg] = useState<string|null>(null);
   const [err, setErr] = useState<string|null>(null);
   const [busy, setBusy] = useState(false);
@@ -23,13 +24,14 @@ export default function SystemHealthPage() {
     try {
       const h = await fetch(`${getApiBaseUrl()}/api/system/health`).then(r=>r.json());
       setHealth(h);
-      const [d,b,f,a] = await Promise.all([
+      const [d,b,f,a,s] = await Promise.all([
         apiFetch<any>('/api/system/diagnostics', {}, token).catch(()=>null),
         apiFetch<any>('/api/system/backups', {}, token).catch(()=>null),
         apiFetch<any>('/api/billing/fup/logs', {}, token).catch(()=>({data:[]})),
         apiFetch<any>('/api/system/alerts?limit=20', {}, token).catch(()=>({data:[]})),
+        apiFetch<any>('/api/system/schedulers', {}, token).catch(()=>null),
       ]);
-      setDiag(d); setBackups(b); setFupLogs(f?.data || []); setAlerts(a?.data || []);
+      setDiag(d); setBackups(b); setFupLogs(f?.data || []); setAlerts(a?.data || []); setSchedulers(s);
     } catch(e:any){ setErr(e.message); }
   }, [token]);
   useEffect(()=>{ void load(); }, [load]);
@@ -146,6 +148,18 @@ export default function SystemHealthPage() {
             </div>
           ))}
           {!alerts.length && <div className="empty-panel"><span className="empty-panel-icon"><ShieldCheck className="w-5 h-5"/></span><div><div className="text-sm font-semibold">No alerts</div><p className="text-[11px] text-muted-foreground mt-1">NOC alerts will appear here when emitted.</p></div></div>}
+        </div>
+      </div>
+
+      <div className="card p-4">
+        <div className="flex items-center justify-between mb-3"><h2 className="font-bold flex items-center gap-2"><Clock className="w-4 h-4 text-primary"/>Scheduler Status</h2><span className="text-xs text-muted-foreground">{(schedulers?.jobs||[]).length} jobs</span></div>
+        <div className="overflow-auto">
+          <table className="w-full text-xs"><thead><tr className="text-left text-muted-foreground border-b border-border"><th className="py-1.5 pr-2">Job</th><th className="py-1.5 pr-2">Last Status</th><th className="py-1.5 pr-2">Last Run</th><th className="py-1.5 pr-2">Duration</th><th className="py-1.5">24h Err</th></tr></thead>
+            <tbody>{(schedulers?.metrics||[]).map((j:any)=>(
+              <tr key={j.job_name} className="border-b border-border/40"><td className="py-1.5 pr-2 font-mono">{j.job_name}</td><td className="py-1.5 pr-2"><span className={`badge ${j.last_status==='OK'?'badge-success':j.last_status==='ERROR'?'badge-danger':'badge-secondary'}`}>{j.last_status || '—'}</span></td><td className="py-1.5 pr-2">{j.last_run_at ? new Date(j.last_run_at).toLocaleString() : '—'}</td><td className="py-1.5 pr-2">{j.avg_duration_ms_24h != null ? `${j.avg_duration_ms_24h}ms` : '—'}</td><td className="py-1.5">{j.errors_24h ?? 0}</td></tr>
+            ))}</tbody>
+          </table>
+          {!((schedulers?.metrics||[]).length) && <div className="text-xs text-muted-foreground mt-2">No scheduler runs recorded yet.</div>}
         </div>
       </div>
 

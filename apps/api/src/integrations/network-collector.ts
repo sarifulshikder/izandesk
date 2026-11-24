@@ -4,6 +4,8 @@ import { mikrotikErrorMessage } from './mikrotik-errors';
 import { emitNocAlert } from './noc-alerts';
 import { probeRadiusNas } from './radius';
 import { LITE_MODE, SESSIONS_COLLECTOR_MS, TELEMETRY_COLLECTOR_MS } from '../config/runtime';
+import { tryAcquireSchedulerLock } from './billing';
+import { withSchedulerRun } from './scheduler-observability';
 
 function parseUptimeSimple(s: string): number {
   let sec = 0; const re = /(\d+)(w|d|h|m|s)/g; let m: RegExpExecArray | null;
@@ -149,13 +151,33 @@ export function startNetworkCollector() {
     return;
   }
   if (SESSIONS_COLLECTOR_MS > 0) {
-    const run = async () => { const r = await collectSessionsOnce(); if (!r.ok) console.warn('[NetworkCollector] sessions error:', r.error); };
+    const run = async () => {
+      try {
+        await withSchedulerRun('collector:sessions', async () => {
+          const locked = await tryAcquireSchedulerLock('collector:sessions', Math.max(15_000, SESSIONS_COLLECTOR_MS - 5_000)).catch(() => false);
+          if (!locked) return { skipped: 'lock' };
+          const r = await collectSessionsOnce();
+          if (!r.ok) throw new Error(r.error || 'sessions collection failed');
+          return r;
+        });
+      } catch (e: any) { console.warn('[NetworkCollector] sessions error:', e.message); }
+    };
     run().catch(() => {});
     setInterval(run, SESSIONS_COLLECTOR_MS).unref?.();
     console.log(`[NetworkCollector] sessions every ${Math.round(SESSIONS_COLLECTOR_MS / 1000)}s`);
   }
   if (TELEMETRY_COLLECTOR_MS > 0) {
-    const run = async () => { const r = await collectTelemetryOnce(); if (!r.ok) console.warn('[NetworkCollector] telemetry error:', r.error); };
+    const run = async () => {
+      try {
+        await withSchedulerRun('collector:telemetry', async () => {
+          const locked = await tryAcquireSchedulerLock('collector:telemetry', Math.max(15_000, TELEMETRY_COLLECTOR_MS - 5_000)).catch(() => false);
+          if (!locked) return { skipped: 'lock' };
+          const r = await collectTelemetryOnce();
+          if (!r.ok) throw new Error(r.error || 'telemetry collection failed');
+          return r;
+        });
+      } catch (e: any) { console.warn('[NetworkCollector] telemetry error:', e.message); }
+    };
     run().catch(() => {});
     setInterval(run, TELEMETRY_COLLECTOR_MS).unref?.();
     console.log(`[NetworkCollector] telemetry every ${Math.round(TELEMETRY_COLLECTOR_MS / 1000)}s`);
