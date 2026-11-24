@@ -379,19 +379,40 @@ function buildFilters(req: any) {
   const resellerId = str(req.query.reseller_id);
   const routerId = str(req.query.router_id);
   const pkg = str(req.query.package);
+  const due = str(req.query.due || req.query.overdue);
+  const expiringRaw = str(req.query.expiring_days || req.query.expiring || req.query.expiring_soon);
+  const expiringTomorrow = str(req.query.expiring_tomorrow);
   const where: string[] = [];
   const params: any[] = [];
   if (q) {
     params.push(`%${q}%`);
     where.push(`(lower(s.full_name) LIKE $${params.length} OR lower(s.client_code) LIKE $${params.length} OR lower(COALESCE(s.username,'')) LIKE $${params.length} OR lower(COALESCE(s.phone,'')) LIKE $${params.length} OR lower(COALESCE(s.email,'')) LIKE $${params.length} OR lower(COALESCE(s.address,'')) LIKE $${params.length} OR lower(COALESCE(s.package_name,'')) LIKE $${params.length} OR lower(COALESCE(d.name,'')) LIKE $${params.length} OR lower(COALESCE(nr.name,'')) LIKE $${params.length})`);
   }
-  if (status) { params.push(status); where.push(`s.status = $${params.length}`); }
+  if (status) {
+    const st = status.toUpperCase();
+    if (st === 'EXPIRING' || st === 'EXPIRING_SOON') {
+      where.push(`s.expiry_date IS NOT NULL AND s.expiry_date <= CURRENT_DATE + 7 * INTERVAL '1 day' AND s.status NOT IN ('TERMINATED')`);
+    } else if (st === 'DUE' || st === 'OVERDUE' || st === 'HAS_DUE') {
+      where.push(`COALESCE(s.current_due, 0) > 0`);
+    } else {
+      params.push(status);
+      where.push(`s.status = $${params.length}`);
+    }
+  }
   if (type) { params.push(type); where.push(`s.subscriber_type = $${params.length}`); }
   if (zoneId) { params.push(zoneId); where.push(`s.zone_id = $${params.length}`); }
   if (areaId) { params.push(areaId); where.push(`s.area_id = $${params.length}`); }
   if (resellerId) { params.push(resellerId); where.push(`s.reseller_id = $${params.length}`); }
   if (routerId) { params.push(routerId); where.push(`s.router_id = $${params.length}`); }
   if (pkg) { params.push(`%${pkg}%`); where.push(`s.package_name LIKE $${params.length}`); }
+  if (due === '1' || due === 'true' || due === 'yes') { where.push(`COALESCE(s.current_due, 0) > 0`); }
+  if (expiringTomorrow === '1' || expiringTomorrow === 'true' || expiringRaw.toLowerCase() === 'tomorrow') {
+    where.push(`s.expiry_date = CURRENT_DATE + 1 AND s.status NOT IN ('TERMINATED')`);
+  } else if (expiringRaw) {
+    const days = Math.max(1, Math.min(365, parseInt(expiringRaw === '1' || expiringRaw === 'true' || expiringRaw === 'soon' ? '7' : expiringRaw, 10) || 7));
+    params.push(days);
+    where.push(`s.expiry_date IS NOT NULL AND s.expiry_date <= CURRENT_DATE + $${params.length} * INTERVAL '1 day' AND s.status NOT IN ('TERMINATED')`);
+  }
   return { whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
 }
 
@@ -402,13 +423,14 @@ function buildFilters(req: any) {
 // Status summary cards (must be registered before '/:id')
 router.get('/summary', asyncHandler(async (req, res) => {
   const scope = await resellerScope(req);
-  if (scope.restricted && !scope.uuid) return res.json({ ok: true, summary: { total: 0, by_status: {}, active: 0, pending: 0, suspended: 0, expired: 0, terminated: 0, expiring_soon: 0, overdue: 0 } });
+  if (scope.restricted && !scope.uuid) return res.json({ ok: true, summary: { total: 0, by_status: {}, active: 0, pending: 0, suspended: 0, expired: 0, terminated: 0, expiring_soon: 0, expiring_tomorrow: 0, overdue: 0 } });
   const params: any[] = [];
   let where = '';
   if (scope.uuid) { params.push(scope.uuid); where = 'WHERE reseller_id=$1'; }
   const total = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${where}`, params)).rows[0].c;
   const byStatus = (await pool.query(`SELECT status, COUNT(*)::int AS c FROM subscribers ${where} GROUP BY status`, params)).rows;
   const expiring = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${where}${where ? ' AND' : ' WHERE'} expiry_date IS NOT NULL AND expiry_date <= CURRENT_DATE + 7 AND status NOT IN ('TERMINATED')`, params)).rows[0].c;
+  const expiringTomorrow = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${where}${where ? ' AND' : ' WHERE'} expiry_date = CURRENT_DATE + 1 AND status NOT IN ('TERMINATED')`, params)).rows[0].c;
   const overdue = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${where}${where ? ' AND' : ' WHERE'} current_due > 0`, params)).rows[0].c;
   const by_status: Record<string, number> = {};
   for (const r of byStatus) by_status[r.status] = Number(r.c);
@@ -423,6 +445,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
       expired: by_status.EXPIRED || 0,
       terminated: by_status.TERMINATED || 0,
       expiring_soon: Number(expiring),
+      expiring_tomorrow: Number(expiringTomorrow),
       overdue: Number(overdue),
     },
   });

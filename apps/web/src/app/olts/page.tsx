@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import { Package, Plus, RefreshCw, Pencil, Trash2, Play, Search, Radio, X, Wifi, ExternalLink, Server, Activity, AlertTriangle } from 'lucide-react';
@@ -23,15 +24,25 @@ function Stat({ label, value, sub, tone = 'primary', icon: Icon = Radio }: { lab
 
 export default function OltsPage() {
   const { token } = useAuth();
+  const searchParams = useSearchParams();
   const [olts, setOlts] = useState<any[]>([]);
   const [onus, setOnus] = useState<any[]>([]);
   const [wgPeers, setWgPeers] = useState<any[]>([]);
   const [selectedOlt, setSelectedOlt] = useState<string>('');
+  const [onuStatusFilter, setOnuStatusFilter] = useState<string>('');
+  const [oltStatusFilter, setOltStatusFilter] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [modal, setModal] = useState<any>(null);
   const [form, setForm] = useState<any>({});
+
+  useEffect(() => {
+    const onuStatus = String(searchParams?.get('onu_status') || '').toUpperCase();
+    const oltStatus = String(searchParams?.get('olt_status') || '').toUpperCase();
+    if (onuStatus) setOnuStatusFilter(onuStatus);
+    if (oltStatus) setOltStatusFilter(oltStatus);
+  }, [searchParams]);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -76,6 +87,25 @@ export default function OltsPage() {
 
   const selected = selectedOlt ? olts.find(o => o.id === selectedOlt) : null;
 
+  const filteredOlts = useMemo(() => {
+    if (!oltStatusFilter) return olts;
+    if (oltStatusFilter === 'OFFLINE') return olts.filter(o => String(o.status || '').toUpperCase() !== 'ONLINE');
+    return olts.filter(o => String(o.status || '').toUpperCase() === oltStatusFilter);
+  }, [olts, oltStatusFilter]);
+
+  const filteredOnus = useMemo(() => {
+    if (!onuStatusFilter) return [] as any[];
+    return onus.filter(o => {
+      const st = String(o.status || '').toUpperCase();
+      const opt = String(o.optical_status || '').toUpperCase();
+      if (onuStatusFilter === 'CRITICAL_LOS') return opt === 'CRITICAL' || st === 'LOS';
+      if (onuStatusFilter === 'CRITICAL') return opt === 'CRITICAL';
+      if (onuStatusFilter === 'LOS') return st === 'LOS';
+      if (onuStatusFilter === 'WARNING') return opt === 'WARNING';
+      return st === onuStatusFilter || opt === onuStatusFilter;
+    });
+  }, [onus, onuStatusFilter]);
+
   return (
     <div className="space-y-5">
       <div className="page-header items-start">
@@ -104,6 +134,50 @@ export default function OltsPage() {
         <Stat label="View" value={selected ? <span className="text-base">{selected.name}</span> : 'All OLTs'} sub={selected ? 'filtered' : 'no filter'} tone="purple" icon={Package} />
       </div>
 
+      {(onuStatusFilter || oltStatusFilter) && (
+        <div className="card p-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+            <div>
+              <h2 className="font-bold flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-warning" />Attention Filter</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {onuStatusFilter === 'CRITICAL_LOS' ? `Showing ${filteredOnus.length} critical/LOS ONU(s).` : onuStatusFilter ? `Showing ${filteredOnus.length} ONU(s) matching ${onuStatusFilter}.` : ''}
+                {oltStatusFilter ? ` Showing ${filteredOlts.length} OLT(s) matching ${oltStatusFilter}.` : ''}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              {onuStatusFilter && <button onClick={()=>setOnuStatusFilter('')} className="btn btn-outline btn-sm">Clear ONU filter</button>}
+              {oltStatusFilter && <button onClick={()=>setOltStatusFilter('')} className="btn btn-outline btn-sm">Clear OLT filter</button>}
+            </div>
+          </div>
+          {onuStatusFilter && (
+            <div className="overflow-auto">
+              <table className="table table-hover text-[11px] w-full">
+                <thead><tr><th className="px-2 py-2 text-left">ONU / Serial</th><th className="px-2 py-2 text-left">OLT</th><th className="px-2 py-2 text-left">PON</th><th className="px-2 py-2 text-left">Status</th><th className="px-2 py-2 text-left">Optical</th><th className="px-2 py-2 text-left">RX (dBm)</th><th className="px-2 py-2 text-left">Subscriber</th><th className="px-2 py-2 text-right">Action</th></tr></thead>
+                <tbody>
+                  {filteredOnus.map((o:any) => {
+                    const st = String(o.status || '').toUpperCase();
+                    const opt = String(o.optical_status || '').toUpperCase();
+                    return (
+                      <tr key={o.id} className="border-t border-border/70">
+                        <td className="px-2 py-2"><div className="font-semibold">{o.name || o.serial_number || '-'}</div><div className="text-muted-foreground font-mono">{o.serial_number || ''}</div></td>
+                        <td className="px-2 py-2">{o.olt_name || '-'}</td>
+                        <td className="px-2 py-2 font-mono">{o.pon_port || '-'}</td>
+                        <td className="px-2 py-2"><span className={`badge ${st === 'LOS' || st === 'OFFLINE' ? 'badge-danger' : st === 'ONLINE' ? 'badge-success' : 'badge-secondary'}`}>{st || '-'}</span></td>
+                        <td className="px-2 py-2"><span className={`badge ${opt === 'CRITICAL' ? 'badge-danger' : opt === 'WARNING' ? 'badge-warning' : opt === 'OK' ? 'badge-success' : 'badge-secondary'}`}>{opt || '-'}</span></td>
+                        <td className="px-2 py-2 tabular-nums">{o.rx_power_dbm ?? '-'}</td>
+                        <td className="px-2 py-2">{o.subscriber_name || o.subscriber_code || '-'}</td>
+                        <td className="px-2 py-2 text-right">{o.olt_id ? <Link href={`/olts/${o.olt_id}`} className="btn btn-ghost btn-sm inline-flex items-center gap-1">Open OLT <ExternalLink className="w-3 h-3"/></Link> : '-'}</td>
+                      </tr>
+                    );
+                  })}
+                  {!filteredOnus.length && <tr><td colSpan={8} className="px-2 py-6 text-center text-muted-foreground">No ONUs match this filter.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="card p-4">
           <div className="flex items-center justify-between mb-3">
@@ -111,7 +185,7 @@ export default function OltsPage() {
             {selectedOlt && <button onClick={()=>setSelectedOlt('')} className="text-xs text-primary hover:underline">Clear filter</button>}
           </div>
           <div className="space-y-3 max-h-[700px] overflow-auto">
-            {olts.map(o => {
+            {filteredOlts.map(o => {
               const count = onus.filter(n => n.olt_id === o.id || n.olt_name === o.name).length;
               const disc = onus.filter(n => (n.olt_id === o.id || n.olt_name === o.name) && n.status === 'DISCOVERED').length;
               return (

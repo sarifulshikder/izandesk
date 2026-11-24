@@ -17,11 +17,39 @@ export default function SubscribersPage() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [type, setType] = useState('');
+  const [dueOnly, setDueOnly] = useState(false);
+  const [expiringDays, setExpiringDays] = useState<number | null>(null);
+  const [expiringTomorrow, setExpiringTomorrow] = useState(false);
   const [clientView, setClientView] = useState<'compact' | 'detailed'>('compact');
 
   useEffect(() => {
-    const s = searchParams?.get('status') || '';
-    if (s) setStatus(s);
+    const s = (searchParams?.get('status') || '').toUpperCase();
+    if (s === 'EXPIRING' || s === 'EXPIRING_SOON') {
+      setStatus('');
+      setExpiringDays(7);
+    } else if (s === 'DUE' || s === 'OVERDUE' || s === 'HAS_DUE') {
+      setStatus('');
+      setDueOnly(true);
+    } else {
+      if (s) setStatus(s);
+    }
+    const due = searchParams?.get('due') || searchParams?.get('overdue') || '';
+    if (due === '1' || due === 'true' || due === 'yes') setDueOnly(true);
+    else if (!(s === 'DUE' || s === 'OVERDUE' || s === 'HAS_DUE')) setDueOnly(false);
+    const expTomorrow = searchParams?.get('expiring_tomorrow') || '';
+    const exp = searchParams?.get('expiring') || searchParams?.get('expiring_days') || searchParams?.get('expiring_soon') || '';
+    const isTomorrow = expTomorrow === '1' || expTomorrow === 'true' || exp.toLowerCase() === 'tomorrow';
+    if (isTomorrow) {
+      setExpiringTomorrow(true);
+      setExpiringDays(null);
+    } else if (exp) {
+      setExpiringTomorrow(false);
+      const days = parseInt(exp === '1' || exp === 'true' || exp === 'soon' ? '7' : exp, 10);
+      setExpiringDays(Number.isFinite(days) && days > 0 ? Math.min(days, 365) : 7);
+    } else if (!(s === 'EXPIRING' || s === 'EXPIRING_SOON')) {
+      setExpiringTomorrow(false);
+      setExpiringDays(null);
+    }
     const v = String(searchParams?.get('view') || '').toLowerCase();
     if (v === 'all-info' || v === 'detailed' || v === 'all') setClientView('detailed');
   }, [searchParams]);
@@ -74,12 +102,15 @@ export default function SubscribersPage() {
       if (q) params.set('q', q);
       if (status) params.set('status', status);
       if (type) params.set('type', type);
+      if (dueOnly) params.set('due', '1');
+      if (expiringTomorrow) params.set('expiring_tomorrow', '1');
+      else if (expiringDays) params.set('expiring', String(expiringDays));
       params.set('limit', '100');
       const res = await apiFetch<{data:any[], total:number}>(`/api/subscribers?${params.toString()}`, {}, token);
       setRows(res.data || []); setTotal(res.total || 0);
     } catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
-  }, [token, q, status, type]);
+  }, [token, q, status, type, dueOnly, expiringDays, expiringTomorrow]);
 
   useEffect(() => { loadRefs(); }, [loadRefs]);
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
@@ -410,7 +441,7 @@ export default function SubscribersPage() {
       {error && <div className="alert alert-danger">{error}</div>}
 
       <div className="stat-grid-5">
-        <button onClick={()=>setStatus('')} className={`dash-stat dash-stat-primary compact ${status === '' ? '!border-primary/50' : ''}`}>
+        <button onClick={()=>{ setStatus(''); setDueOnly(false); setExpiringDays(null); setExpiringTomorrow(false); }} className={`dash-stat dash-stat-primary compact ${status === '' && !dueOnly && !expiringDays && !expiringTomorrow ? '!border-primary/50' : ''}`}>
           <span className="dash-stat-icon"><Users /></span>
           <span className="dash-stat-body"><span className="dash-stat-label">Total Clients</span><span className="dash-stat-value">{total}</span><span className="dash-stat-hint">all records</span></span>
         </button>
@@ -440,11 +471,27 @@ export default function SubscribersPage() {
           ['SUSPENDED', 'Suspended'],
           ['PENDING', 'Pending'],
         ].map(([k, label]) => (
-          <button key={k || 'all'} onClick={() => setStatus(k)} className={`filter-chip ${status === k ? 'active' : ''}`}>{label}</button>
+          <button key={k || 'all'} onClick={() => { setStatus(k); if (k === '') { setDueOnly(false); setExpiringDays(null); setExpiringTomorrow(false); } }} className={`filter-chip ${status === k ? 'active' : ''}`}>{label}</button>
         ))}
         <span className="toolbar-divider" />
         <Link href="/gis" className="btn btn-ghost btn-sm"><MapPin className="w-3.5 h-3.5"/>Client Locations</Link>
         <button onClick={() => setClientView(v => v === 'detailed' ? 'compact' : 'detailed')} className={`filter-chip ${clientView === 'detailed' ? 'active' : ''}`}>All Client Info</button>
+        {(dueOnly || expiringDays || expiringTomorrow) && <span className="toolbar-divider" />}
+        {dueOnly && (
+          <button onClick={() => setDueOnly(false)} className="filter-chip active !bg-warning/10 !text-warning !border-warning/30 inline-flex items-center gap-1">
+            <AlertCircle className="w-3 h-3" /> With Due <X className="w-3 h-3" />
+          </button>
+        )}
+        {expiringTomorrow && (
+          <button onClick={() => setExpiringTomorrow(false)} className="filter-chip active !bg-warning/10 !text-warning !border-warning/30 inline-flex items-center gap-1">
+            <Clock3 className="w-3 h-3" /> Expiring Tomorrow <X className="w-3 h-3" />
+          </button>
+        )}
+        {expiringDays && (
+          <button onClick={() => setExpiringDays(null)} className="filter-chip active !bg-warning/10 !text-warning !border-warning/30 inline-flex items-center gap-1">
+            <Clock3 className="w-3 h-3" /> Expiring in {expiringDays} days <X className="w-3 h-3" />
+          </button>
+        )}
         {selectedIds.length > 0 && (
           <>
             <span className="toolbar-divider" />
