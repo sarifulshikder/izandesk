@@ -301,7 +301,15 @@ export function SubscriberFormWizard({
                 <Select label="Connection Type" value={form.connection_type} onChange={v => setForm({ ...form, connection_type: v })} options={['PPPOE', 'STATIC_IP', 'DHCP', 'HOTSPOT']} />
                 <Input label="PPPoE Username" value={form.username || ''} onChange={v => setForm({ ...form, username: v })} />
                 <Input label="PPPoE/Access Password" value={form.password || ''} onChange={v => setForm({ ...form, password: v })} type="password" placeholder={initial ? 'Leave blank to keep' : ''} />
-                <Select label="Package" value={form.package_name || ''} onChange={v => setForm({ ...form, package_name: v })} options={[{ v: '', l: 'Select package...' }, ...packages.map((p: any) => ({ v: p.name, l: `${p.name} (${p.download_mbps}↓/${p.upload_mbps}↑ Mbps • ৳${p.price})` }))]} />
+                <Select label="Package" value={form.package_name || ''} onChange={v => {
+                  const pkg = packages.find((p: any) => p.name === v);
+                  setForm((f: any) => ({
+                    ...f,
+                    package_name: v,
+                    monthly_bill: pkg ? String(pkg.price ?? f.monthly_bill ?? '') : f.monthly_bill,
+                    bandwidth_mbps: pkg ? String(pkg.download_mbps ?? f.bandwidth_mbps ?? '') : f.bandwidth_mbps,
+                  }));
+                }} options={[{ v: '', l: 'Select package...' }, ...packages.map((p: any) => ({ v: p.name, l: `${p.name} (${p.download_mbps}↓/${p.upload_mbps}↑ Mbps • ৳${p.price})` }))]} />
                 <Input label="Bandwidth (Mbps)" value={form.bandwidth_mbps ?? ''} onChange={v => setForm({ ...form, bandwidth_mbps: v })} />
                 <Input label="Monthly Bill" value={form.monthly_bill ?? ''} onChange={v => setForm({ ...form, monthly_bill: v })} />
                 <Input label="IP Address" value={form.ip_address || ''} onChange={v => setForm({ ...form, ip_address: v })} />

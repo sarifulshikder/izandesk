@@ -524,6 +524,21 @@ router.post('/', asyncHandler(async (req, res) => {
     if (!scope.uuid) throw new ValidationError('No reseller account linked to this login');
     p.reseller_id = scope.uuid;
   }
+  // Auto-fill from package when assigned but fields were not explicitly set.
+  if (p.package_name) {
+    const pkg = (await pool.query('SELECT price, download_mbps, upload_mbps FROM bandwidth_packages WHERE name=$1 LIMIT 1', [p.package_name])).rows[0];
+    if (pkg) {
+      const reqBill = b.monthly_bill ?? b.monthlyBill;
+      if ((p.monthly_bill === 0 || p.monthly_bill == null) && Number(pkg.price || 0) > 0 && (reqBill === '' || reqBill == null || Number(reqBill) === 0)) p.monthly_bill = Number(pkg.price);
+      const reqBw = b.bandwidth_mbps ?? b.bandwidthMbps;
+      if ((p.bandwidth_mbps == null || p.bandwidth_mbps === 0) && Number(pkg.download_mbps || 0) > 0 && (reqBw === '' || reqBw == null || Number(reqBw) === 0)) p.bandwidth_mbps = Number(pkg.download_mbps);
+    }
+  }
+  if (!p.expiry_date && p.package_name) {
+    const base = p.installation_date ? new Date(String(p.installation_date)) : new Date();
+    const exp = new Date(base); exp.setMonth(exp.getMonth() + 1);
+    p.expiry_date = exp.toISOString().slice(0, 10);
+  }
 
   let clientCode = nullableStr(b.client_code);
   if (clientCode) {
@@ -615,6 +630,22 @@ router.put('/:id', asyncHandler(async (req, res) => {
   // (or fail validation) at all.
   const body = scope.restricted ? { ...b, reseller_id: scope.uuid } : b;
   const p = await buildPayload(body, existing);
+  if (p.package_name) {
+    const pkg = (await pool.query('SELECT price, download_mbps FROM bandwidth_packages WHERE name=$1 LIMIT 1', [p.package_name])).rows[0];
+    if (pkg) {
+      const reqBill = b.monthly_bill ?? b.monthlyBill;
+      const reqExplicitBill = !(reqBill === '' || reqBill == null);
+      if ((p.monthly_bill === 0 || p.monthly_bill == null) && Number(pkg.price || 0) > 0 && !reqExplicitBill) p.monthly_bill = Number(pkg.price);
+      const reqBw = b.bandwidth_mbps ?? b.bandwidthMbps;
+      const reqExplicitBw = !(reqBw === '' || reqBw == null);
+      if ((p.bandwidth_mbps == null || p.bandwidth_mbps === 0) && Number(pkg.download_mbps || 0) > 0 && !reqExplicitBw) p.bandwidth_mbps = Number(pkg.download_mbps);
+    }
+  }
+  if (!p.expiry_date && p.package_name) {
+    const base = p.installation_date ? new Date(String(p.installation_date)) : new Date();
+    const exp = new Date(base); exp.setMonth(exp.getMonth() + 1);
+    p.expiry_date = exp.toISOString().slice(0, 10);
+  }
   const statusChanged = p.status !== existing.status;
   const usernameChanged = (p.username || '') !== (existing.username || '');
   const provisioningChanged = ['provisioning_mode', 'router_id', 'package_name', 'ip_address', 'password']
