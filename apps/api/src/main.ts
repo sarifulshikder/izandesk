@@ -9,6 +9,7 @@ import { WebSocketServer } from 'ws';
 import { PluginKernel } from './kernel/plugin-manager';
 import { setKernel } from './kernel/kernel-instance';
 import { initDb, pool } from './db';
+import { runMigrations } from './db/migrator';
 import { getCached, getSetting, initSettingsCacheSync, validatePasswordPolicy, invalidateCache } from './integrations/settings';
 import { auditLog } from './integrations/audit';
 import { logger, requestLogger } from './infra/logger';
@@ -98,6 +99,14 @@ async function probeDbReady(): Promise<boolean> {
       try { held.release(); } catch { /* already released */ }
     }
   }
+}
+
+/**
+ * Versioned SQL migrations are opt-in at boot so operators can run them as a
+ * separate deploy step. The compose/Docker images set MIGRATE_ON_START=true.
+ */
+function migrateOnStartEnabled(): boolean {
+  return ['1', 'true', 'yes', 'on'].includes(String(process.env.MIGRATE_ON_START || '').trim().toLowerCase());
 }
 
 /**
@@ -269,8 +278,15 @@ async function bootstrap() {
   let dbReady = false;
   try {
     await initDb();
+    if (migrateOnStartEnabled()) {
+      const migrations = await runMigrations();
+      logger.info(
+        { applied: migrations.applied, alreadyApplied: migrations.alreadyApplied, total: migrations.total },
+        '[DB] MIGRATE_ON_START applied SQL migrations',
+      );
+    }
     dbReady = true;
-    logger.info('[DB] PostgreSQL/PostGIS schema and migrations ready');
+    logger.info('[DB] PostgreSQL/PostGIS schema ready');
   } catch (e: any) {
     logger.error({ err: e?.message || String(e) }, '[DB] Initialization failed');
   }
@@ -697,6 +713,7 @@ async function bootstrap() {
     const retry = setInterval(async () => {
       try {
         await initDb();
+        if (migrateOnStartEnabled()) await runMigrations();
         dbReady = true;
         logger.info('[DB] Schema ready after delayed recovery');
         await syncBootstrapStaffUsers();

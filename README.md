@@ -150,7 +150,9 @@ pnpm --filter @izandesk/shared-types build
 
 # 5) Start API locally (hot-reload plugin kernel, auth, BSS/OSS, network/RADIUS/WireGuard integrations)
 pnpm --filter api build
-pnpm --filter api start   # http://localhost:4000
+pnpm --filter api migrate  # apply apps/api/migrations/*.sql (idempotent)
+pnpm --filter api start    # http://localhost:4000
+# ...or let the API apply migrations at boot: MIGRATE_ON_START=true pnpm --filter api start
 
 # 6) Start Web locally
 pnpm --filter web dev     # http://localhost:3000
@@ -199,6 +201,8 @@ Notes:
   - GIS map: the workbench is a single **MapLibre GL** map driven by one local style, `apps/web/public/gis-basemap.json`, that carries both basemaps — Esri World Imagery (the default) and the full **OpenFreeMap** OSM vector style. Because both basemaps share the same vector label layers, satellite labels use the exact same road/area/river/place names, density and typography as the Streets view (free, no API key); the "Labels" button toggles them and the choice is remembered per browser. `NEXT_PUBLIC_GIS_BASEMAP_STYLE_URL` overrides the style file; `NEXT_PUBLIC_GIS_SATELLITE_TILE_URL` and `NEXT_PUBLIC_GIS_VECTOR_TILE_URL` override the imagery and vector tile sources inside it for internal/offline deployments. The Streets/Satellite choice is also remembered per browser. `NEXT_PUBLIC_GIS_CENTER="lat,lng"` overrides the initial map centre (default `23.8103,90.4125`). See `apps/web/.env.example`. The map loads pins for the current viewport (pan/zoom to load another area) with a configurable per-request cap of 5,000 (up to 50,000); a warning appears when the cap truncates results. `GIS_GEOCODE_URL` (API) overrides the Nominatim address-to-coordinates provider; see `apps/api/.env.example`.
 - **API:** see `apps/api/.env.example`
   - `API_PORT`, `JWT_SECRET`, `WEB_ORIGIN`, `ALLOW_LAN_ORIGINS`
+  - `MIGRATE_ON_START=true` applies the versioned SQL migrations at boot (the compose and Docker images set it by default). Run `pnpm --filter api migrate` instead when migrations are a separate deploy step.
+  - `POST /api/system/rotate-secrets` re-encrypts stored secrets under the active `SECRETS_ENCRYPTION_ACTIVE_KEY_ID` (SUPER_ADMIN + MFA step-up; supports `{ "dry_run": true }`). Keep old keys in `SECRETS_ENCRYPTION_KEYS` until it reports no errors.
   - Production bootstrap: `DISABLE_DEMO_ACCOUNTS=true`, a 32+ char non-default `JWT_SECRET`, a non-default `DB_PASSWORD`, an explicit `WEB_ORIGIN`, and `ALLOW_LAN_ORIGINS=false`. The API refuses to start otherwise; `SECURITY_STRICT_MODE=true` applies the same checks in staging. See `docs/security-hardening.md`.
 - **Caddy/HTTPS (optional):** see `docker/.env.example` and `docker/Caddyfile`
   - `CADDY_SITE_ADDRESS` — domain for automatic HTTPS (e.g. `izandesk.example.com`) or `:80` for HTTP

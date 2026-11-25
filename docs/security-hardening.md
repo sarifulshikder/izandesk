@@ -21,6 +21,14 @@ Set these in `apps/api/.env` (and the matching compose variables):
 
 With demos disabled, also set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD_HASH` (or `BOOTSTRAP_ADMIN_PASSWORD` for a local demo). Without them no staff user can sign in. When using `docker/docker-compose.yml`, put these values in `docker/.env` — the compose file forwards them to the API container.
 
+### Rotating `SECRETS_ENCRYPTION_KEYS`
+
+1. Add the new key id to `SECRETS_ENCRYPTION_KEYS` while keeping the old one, e.g. `v1:<old>,v2:<new>`.
+2. Set `SECRETS_ENCRYPTION_ACTIVE_KEY_ID=v2` and restart the API.
+3. Optionally call `POST /api/system/rotate-secrets` with `{ "dry_run": true }` to check that every old key is still available.
+4. Call `POST /api/system/rotate-secrets` (SUPER_ADMIN + MFA step-up) to re-encrypt router/OLT credentials, gateway and messaging secrets, secret settings, and TOTP seeds. KYC files are re-keyed by the same call unless `{ "include_kyc": false }` is sent.
+5. Remove the old key from `SECRETS_ENCRYPTION_KEYS` only after the response reports no `errors`. The call is audit-logged as `SECRETS_ROTATE`.
+
 When `NODE_ENV=production` or `SECURITY_STRICT_MODE=true`, a failed check throws during bootstrap and the process exits with the list of problems. For a local demo that intentionally runs the insecure profile in production mode, set `SECURITY_ALLOW_INSECURE_DEMO=true` (never on a real deployment).
 
 ## 2. Revocable staff sessions

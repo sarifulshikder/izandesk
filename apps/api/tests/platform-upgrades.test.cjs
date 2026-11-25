@@ -20,6 +20,7 @@ const { parseWithSchema, validateBody } = require('../dist/http/validate.js');
 const { createRateLimiter } = require('../dist/security/rate-limit.js');
 const { sendViaProvider } = require('../dist/integrations/messaging.js');
 const telemetryHistory = require('../dist/integrations/telemetry-history.js');
+const { rotateStoredSecrets } = require('../dist/integrations/secret-migration.js');
 const { recordHttpMetric, recordPollMetric, adjustStreamClients } = require('../dist/infra/metrics.js');
 const { registerProbeRoutes } = require('../dist/routes/probes.js');
 const staffRouter = require('../dist/routes/staff.js').default;
@@ -88,6 +89,45 @@ async function testSecretStoreAndRotation() {
     check('secret-store: credentials object values encrypted', secretStore.isEncryptedSecret(encObj.apiKey));
     const decObj = secretStore.decryptCredentialsObject(encObj);
     check('secret-store: credentials object decrypted cleanly', decObj.apiKey === 'secret-123' && decObj.mode === 'live');
+  } finally {
+    if (prevKeys === undefined) delete process.env.SECRETS_ENCRYPTION_KEYS; else process.env.SECRETS_ENCRYPTION_KEYS = prevKeys;
+    if (prevActive === undefined) delete process.env.SECRETS_ENCRYPTION_ACTIVE_KEY_ID; else process.env.SECRETS_ENCRYPTION_ACTIVE_KEY_ID = prevActive;
+  }
+}
+
+async function testStoredSecretRotation() {
+  const k1 = crypto.randomBytes(32).toString('base64');
+  const k2 = crypto.randomBytes(32).toString('base64');
+  const prevKeys = process.env.SECRETS_ENCRYPTION_KEYS;
+  const prevActive = process.env.SECRETS_ENCRYPTION_ACTIVE_KEY_ID;
+  try {
+    process.env.SECRETS_ENCRYPTION_KEYS = `v1:${k1},v2:${k2}`;
+    process.env.SECRETS_ENCRYPTION_ACTIVE_KEY_ID = 'v1';
+    const oldRouterSecret = secretStore.encryptSecret('router-pass');
+    const oldGatewaySecret = secretStore.encryptSecret('gateway-secret');
+    process.env.SECRETS_ENCRYPTION_ACTIVE_KEY_ID = 'v2';
+
+    const fake = makeDb([
+      { when: (c) => has(c, 'FROM network_routers'), return: { rows: [{ id: 'r1', password: oldRouterSecret, radius_secret: null }] } },
+      { when: (c) => has(c, 'FROM olts'), return: { rows: [] } },
+      { when: (c) => has(c, 'FROM payment_gateway_configs'), return: { rows: [{ gateway: 'bkash', credentials: { api_key: oldGatewaySecret }, webhook_secret: oldGatewaySecret }] } },
+      { when: (c) => has(c, 'FROM messaging_channels'), return: { rows: [] } },
+      { when: (c) => has(c, 'FROM settings'), return: { rows: [] } },
+      { when: (c) => has(c, 'FROM user_mfa'), return: { rows: [] } },
+    ]);
+    try {
+      const report = await rotateStoredSecrets();
+      check('secret rotation: reports rotated rows and no errors', report.rotated.network_routers === 1 && report.rotated.payment_gateway_configs === 1 && report.errors.length === 0);
+
+      const routerUpdate = fake.calls.find((c) => has(c, 'UPDATE network_routers'));
+      check('secret rotation: re-encrypts router secret under active key', !!routerUpdate && String(routerUpdate.params[1]).startsWith('enc:v2:') && secretStore.decryptSecret(routerUpdate.params[1]) === 'router-pass');
+
+      const gatewayUpdate = fake.calls.find((c) => has(c, 'UPDATE payment_gateway_configs'));
+      const creds = JSON.parse(gatewayUpdate.params[1]);
+      check('secret rotation: re-encrypts gateway credentials and webhook secret', creds.api_key.startsWith('enc:v2:') && secretStore.decryptSecret(creds.api_key) === 'gateway-secret' && String(gatewayUpdate.params[2]).startsWith('enc:v2:'));
+    } finally {
+      fake.restore();
+    }
   } finally {
     if (prevKeys === undefined) delete process.env.SECRETS_ENCRYPTION_KEYS; else process.env.SECRETS_ENCRYPTION_KEYS = prevKeys;
     if (prevActive === undefined) delete process.env.SECRETS_ENCRYPTION_ACTIVE_KEY_ID; else process.env.SECRETS_ENCRYPTION_ACTIVE_KEY_ID = prevActive;
@@ -312,6 +352,7 @@ async function testEmailTelemetryAndMetrics() {
 
 (async () => {
   await testSecretStoreAndRotation();
+  await testStoredSecretRotation();
   await testZodValidation();
   await testMigrator();
   await testStaffRbac();

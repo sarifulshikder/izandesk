@@ -12,6 +12,11 @@ import { getMigrationStatus } from '../db/migrator';
 import { getQueuesOverview, isQueuesActive, registerQueueHandler, retryFailedJobs, scheduleRecurringJob, type QueueName } from '../infra/queues';
 import { getSecurityStatus } from '../security/guards';
 import { isRedisReady } from '../infra/redis';
+import { getActiveSecretKeyId, isActiveSecretKeyAvailable, isSecretsEncryptionConfigured } from '../security/secret-store';
+import { stepUpSatisfied } from '../security/step-up';
+import { rotateStoredSecrets } from '../integrations/secret-migration';
+import { migrateKycFileEncryption } from '../integrations/kyc';
+import { auditLog, reqActor } from '../integrations/audit';
 
 const router: Router = Router();
 function requireAdmin(req:any,res:any){ if (!['SUPER_ADMIN','NOC_ENGINEER'].includes(String((req as any).user?.role))) { res.status(403).json({ message: 'Forbidden' }); return false; } return true; }
@@ -272,6 +277,67 @@ router.get('/security-status', asyncHandler(async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const s = getSecurityStatus();
   res.json({ ok: true, status: s });
+}));
+
+/**
+ * Re-encrypt stored secrets under the active SECRETS_ENCRYPTION key.
+ *
+ * Rotation procedure: add the new key to SECRETS_ENCRYPTION_KEYS, set
+ * SECRETS_ENCRYPTION_ACTIVE_KEY_ID to the new id, restart the API, then call
+ * this endpoint (optionally with `{ "dry_run": true }` first). Keep the old
+ * key in the ring until the response reports no errors.
+ */
+router.post('/rotate-secrets', asyncHandler(async (req, res) => {
+  const user = (req as any).user;
+  if (!user || String(user.role) !== 'SUPER_ADMIN') {
+    return res.status(403).json({ ok: false, message: 'Secret rotation requires SUPER_ADMIN' });
+  }
+  if (!await stepUpSatisfied(req, user)) {
+    return res.status(403).json({ ok: false, message: 'MFA step-up required to rotate secrets', step_up_required: true });
+  }
+  if (!isSecretsEncryptionConfigured()) {
+    return res.status(400).json({ ok: false, message: 'SECRETS_ENCRYPTION_KEYS is not configured; refusing to rotate with the demo key' });
+  }
+  if (!isActiveSecretKeyAvailable()) {
+    return res.status(400).json({ ok: false, message: 'SECRETS_ENCRYPTION_ACTIVE_KEY_ID is not present in SECRETS_ENCRYPTION_KEYS' });
+  }
+
+  const dryRun = req.body?.dry_run === true || String(req.body?.dry_run) === 'true';
+  const includeKyc = req.body?.include_kyc !== false && String(req.body?.include_kyc) !== 'false';
+
+  const report = await rotateStoredSecrets({ dryRun });
+  let kyc: { encrypted: number; reencrypted: number } | null = null;
+
+  if (includeKyc && !dryRun) {
+    try {
+      kyc = await migrateKycFileEncryption();
+    } catch (e: any) {
+      report.errors.push({ table: 'kyc_documents', message: String(e?.message || e).slice(0, 300) });
+    }
+  }
+
+  await auditLog({
+    ...reqActor(req),
+    action: dryRun ? 'SECRETS_ROTATE_DRY_RUN' : 'SECRETS_ROTATE',
+    entity_type: 'security',
+    details: {
+      active_key_id: getActiveSecretKeyId(),
+      dry_run: dryRun,
+      include_kyc: includeKyc,
+      rotated: report.rotated,
+      errors: report.errors,
+      kyc,
+    },
+  });
+
+  res.json({
+    ok: report.errors.length === 0,
+    active_key_id: report.active_key_id,
+    dry_run: dryRun,
+    rotated: report.rotated,
+    errors: report.errors,
+    kyc,
+  });
 }));
 
 export default router;

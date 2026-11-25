@@ -11,6 +11,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
+    # Dedicated service containers for the migration + unit-test stages. They
+    # use non-default host ports so the docker-compose stack below can still
+    # publish 5432/6379 without a conflict.
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: izandesk_ci
+          POSTGRES_USER: izandesk_user
+          POSTGRES_PASSWORD: izandesk_secret_password
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U izandesk_user -d izandesk_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +69,25 @@ jobs:
           pnpm --filter api build
           node scripts/smoke-security.mjs
 
+      - name: Verify Redis client dependency (ioredis)
+        run: |
+          pnpm --filter api exec node -e "const Redis = require('ioredis'); console.log('ioredis loaded:', typeof Redis)"
+          pnpm --filter api exec node -e "const Redis = require('ioredis'); const r = new Redis({ host: '127.0.0.1', port: 56379 }); r.ping().then((pong) => { console.log('redis:', pong); return r.quit(); }).catch((err) => { console.error(err); process.exit(1); })"
+
+      - name: Apply database migrations
+        run: pnpm --filter api migrate
+        env:
+          NODE_ENV: test
+          MIGRATE_ON_START: 'true'
+          DB_HOST: 127.0.0.1
+          DB_PORT: '55432'
+          DB_NAME: izandesk_ci
+          DB_USER: izandesk_user
+          DB_PASSWORD: izandesk_secret_password
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: '56379'
+          JWT_SECRET: ci-only-jwt-secret-for-migrations
+
       - name: Run API unit tests
         run: pnpm --filter api test
 
@@ -50,6 +96,7 @@ jobs:
           docker compose -f docker/docker-compose.yml up -d postgres redis api web
         env:
           # CI exercises the public demo profile, not a production deployment.
+          MIGRATE_ON_START: 'true'
           DISABLE_DEMO_ACCOUNTS: 'false'
           SECURITY_ALLOW_INSECURE_DEMO: 'true'
 

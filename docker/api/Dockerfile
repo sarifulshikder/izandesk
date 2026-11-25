@@ -29,7 +29,8 @@ COPY apps/api/migrations/ ./migrations/
 # Bundled payment/OLT/SMS plugins live at the repo root, outside the api
 # package, so `pnpm deploy` does not include them. Copy them explicitly.
 COPY plugins/ /plugins/
-ENV PLUGINS_DIR=/plugins
+ENV PLUGINS_DIR=/plugins \
+    MIGRATE_ON_START=true
 EXPOSE 4000
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/main.js"]

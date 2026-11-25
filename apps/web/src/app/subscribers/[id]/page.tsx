@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { ArrowLeft, RefreshCw, User, Activity, Package, MessageSquare, History, FileText, MapPin, Wifi, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, RefreshCw, User, Activity, Package, MessageSquare, History, Wifi, ShieldCheck } from 'lucide-react';
 import { TelemetryChart } from '@/components/charts/telemetry-chart';
 
 function badge(status: string) {

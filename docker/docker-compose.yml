@@ -62,6 +62,8 @@ services:
       # Default keeps the historical shared path for existing deployments.
       # Disposable stacks must override this so hub/init cannot clobber prod.
       WG_CONFIG_DIR: ${WG_CONFIG_DIR:-/app/docker/wg-hub/config}
+      # Apply versioned SQL migrations from apps/api/migrations at boot.
+      MIGRATE_ON_START: ${MIGRATE_ON_START:-true}
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: ${POSTGRES_DB:-izandesk}

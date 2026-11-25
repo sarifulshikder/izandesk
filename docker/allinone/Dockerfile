@@ -58,6 +58,7 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
     NEXT_TELEMETRY_DISABLED=1 \
+    MIGRATE_ON_START=true \
     DB_HOST=127.0.0.1 \
     DB_PORT=5432 \
     DB_NAME=izandesk \

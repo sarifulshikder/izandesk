@@ -67,6 +67,17 @@ export function isSecretsEncryptionConfigured(): boolean {
   return resolveKeyRing().configured;
 }
 
+/** Key id that new envelopes are encrypted under. Useful for rotation status. */
+export function getActiveSecretKeyId(): string {
+  return resolveKeyRing().activeId;
+}
+
+/** True when the configured active key id is actually present in the key ring. */
+export function isActiveSecretKeyAvailable(): boolean {
+  const { keys, activeId } = resolveKeyRing();
+  return keys.has(activeId);
+}
+
 export function isDedicatedSecretsKeyConfigured(): boolean {
   const ring = parseKeyRing(String(process.env.SECRETS_ENCRYPTION_KEYS || '').trim());
   if (ring.size > 0) return true;
