@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { dispatchMessage, getChannel, logMessage, sendViaProvider } from '../integrations/messaging';
+import { encryptCredentialsObject, encryptSecretValue } from '../security/secret-store';
 
 const router: Router = Router();
 function user(req:any){ return req.user || {}; }
@@ -21,19 +22,23 @@ router.post('/channels', asyncHandler(async (req, res) => {
   if (!requireMessagingRole(req,res)) return;
   const b = req.body || {};
   if (!b.channel_type || !b.provider || !b.name) return res.status(400).json({ message: 'name, channel_type, provider required' });
+  const encCreds = b.credentials ? encryptCredentialsObject(b.credentials) : null;
+  const encHook = encryptSecretValue(b.webhook_secret);
   const r = await pool.query(`INSERT INTO messaging_channels(name,channel_type,provider,enabled,is_default,config,credentials,webhook_secret,sender_id,notes,updated_at)
     VALUES($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10,now())
     ON CONFLICT (channel_type, provider, name) DO UPDATE SET enabled=EXCLUDED.enabled,is_default=EXCLUDED.is_default,config=EXCLUDED.config,credentials=COALESCE(EXCLUDED.credentials,messaging_channels.credentials),webhook_secret=COALESCE(EXCLUDED.webhook_secret,messaging_channels.webhook_secret),sender_id=EXCLUDED.sender_id,notes=EXCLUDED.notes,updated_at=now()
     RETURNING id,name,channel_type,provider,enabled,is_default,config,sender_id,notes,updated_at`,
-    [b.name,String(b.channel_type).toUpperCase(),String(b.provider).toUpperCase(),!!b.enabled,!!b.is_default,JSON.stringify(b.config||{}),b.credentials?JSON.stringify(b.credentials):null,b.webhook_secret||null,b.sender_id||null,b.notes||null]);
+    [b.name,String(b.channel_type).toUpperCase(),String(b.provider).toUpperCase(),!!b.enabled,!!b.is_default,JSON.stringify(b.config||{}),encCreds?JSON.stringify(encCreds):null,encHook,b.sender_id||null,b.notes||null]);
   res.json({ data: r.rows[0] });
 }));
 
 router.put('/channels/:id', asyncHandler(async (req, res) => {
   if (!requireMessagingRole(req,res)) return;
   const b = req.body || {};
+  const encCreds = b.credentials ? encryptCredentialsObject(b.credentials) : null;
+  const encHook = encryptSecretValue(b.webhook_secret);
   const r = await pool.query(`UPDATE messaging_channels SET name=COALESCE($1,name), enabled=COALESCE($2,enabled), is_default=COALESCE($3,is_default), config=COALESCE($4::jsonb,config), credentials=COALESCE($5::jsonb,credentials), webhook_secret=COALESCE($6,webhook_secret), sender_id=COALESCE($7,sender_id), notes=$8, updated_at=now() WHERE id=$9 RETURNING id,name,channel_type,provider,enabled,is_default,config,sender_id,notes,updated_at`,
-    [b.name,b.enabled,b.is_default,b.config?JSON.stringify(b.config):null,b.credentials?JSON.stringify(b.credentials):null,b.webhook_secret||null,b.sender_id,b.notes||null,req.params.id]);
+    [b.name,b.enabled,b.is_default,b.config?JSON.stringify(b.config):null,encCreds?JSON.stringify(encCreds):null,encHook,b.sender_id,b.notes||null,req.params.id]);
   if (!r.rows[0]) return res.status(404).json({ message: 'Channel not found' });
   res.json({ data: r.rows[0] });
 }));

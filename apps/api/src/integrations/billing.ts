@@ -6,6 +6,7 @@ import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
 import { auditLog } from './audit';
 import { getCached, getBusinessTimezone, getBusinessDateYmd, ymdInTimezone } from './settings';
+import { isQueuesActive, registerQueueHandler, scheduleRecurringJob } from '../infra/queues';
 
 type AnyObj = Record<string, any>;
 
@@ -816,7 +817,7 @@ async function runFup() {
 }
 
 export function startBillingScheduler() {
-  // in-process scheduler with DB-backed lock to avoid overlapping runs across instances
+  // BullMQ-backed recurring jobs when Redis is available, with DB-locked setInterval fallback.
   const run = async () => {
     try {
       await withSchedulerRun('billing-due-policy-sweep', async () => {
@@ -838,6 +839,23 @@ export function startBillingScheduler() {
       });
     } catch (e:any) { console.error('[MessagingScheduler] error', e.message); }
   };
+
+  registerQueueHandler('billing', 'due-policy-sweep', run);
+  registerQueueHandler('billing', 'fup-enforcement-sweep', runFup);
+  registerQueueHandler('billing', 'reactivate-subscriber', async (job) => {
+    const subId = String(job.data?.subscriberId || '');
+    if (subId) return await reactivateSubscriber(subId, job.data?.reason || 'queued reactivation');
+    return { skipped: true };
+  });
+  registerQueueHandler('messaging', 'messaging-sweep', runMsg);
+
+  if (isQueuesActive()) {
+    void scheduleRecurringJob('billing', 'sched:due-policy-sweep', 'due-policy-sweep', 60 * 1000);
+    void scheduleRecurringJob('billing', 'sched:fup-sweep', 'fup-enforcement-sweep', 30 * 60 * 1000);
+    void scheduleRecurringJob('messaging', 'sched:messaging-sweep', 'messaging-sweep', 10 * 60 * 1000);
+    return;
+  }
+
   setTimeout(run, 5000);
   setInterval(run, 60 * 1000); // every minute for timely grace/suspension evaluation
   setTimeout(runMsg, 15000);

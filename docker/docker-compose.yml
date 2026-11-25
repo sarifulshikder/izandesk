@@ -47,8 +47,18 @@ services:
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       KYC_ENCRYPTION_KEYS: ${KYC_ENCRYPTION_KEYS:-}
       KYC_ENCRYPTION_ACTIVE_KEY_ID: ${KYC_ENCRYPTION_ACTIVE_KEY_ID:-}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      SECRETS_ENCRYPTION_KEYS: ${SECRETS_ENCRYPTION_KEYS:-}
+      SECRETS_ENCRYPTION_ACTIVE_KEY_ID: ${SECRETS_ENCRYPTION_ACTIVE_KEY_ID:-}
       MFS_SMS_INGEST_TOKEN: ${MFS_SMS_INGEST_TOKEN:-}
       INVOICE_SHARE_SECRET: ${INVOICE_SHARE_SECRET:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
       # Default keeps the historical shared path for existing deployments.
       # Disposable stacks must override this so hub/init cannot clobber prod.
       WG_CONFIG_DIR: ${WG_CONFIG_DIR:-/app/docker/wg-hub/config}
@@ -65,8 +75,7 @@ services:
       - ..:/app
       - api_node_modules:/app/node_modules
       - ../backups:/app/backups
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: ["sh", "-lc", "apk update >/dev/null 2>&1 || true; apk add --no-cache net-snmp-tools docker-cli $(apk search -q 'postgresql[0-9]*-client' | sort -V | tail -1) >/dev/null 2>&1 || true; corepack enable >/dev/null 2>&1 || true; corepack prepare pnpm@12.18.0 --activate >/dev/null 2>&1 || true; pnpm install --frozen-lockfile=false; pnpm --filter @izandesk/shared-types build; pnpm --filter api build; node apps/api/dist/main.js"]
+    command: ["sh", "-lc", "apk update >/dev/null 2>&1 || true; apk add --no-cache $(apk search -q 'postgresql[0-9]*-client' | sort -V | tail -1) >/dev/null 2>&1 || true; corepack enable >/dev/null 2>&1 || true; corepack prepare pnpm@12.18.0 --activate >/dev/null 2>&1 || true; pnpm install --frozen-lockfile=false; pnpm --filter @izandesk/shared-types build; pnpm --filter api build; node apps/api/dist/main.js"]
     ports:
       - "${API_PORT:-4000}:4000"
 

@@ -1,6 +1,7 @@
 import { RouterOSAPI } from 'node-routeros';
 import type { RouterRow } from './mikrotik';
 import { normalizeMikrotikError } from './mikrotik-errors';
+import { decryptSecretValue } from '../security/secret-store';
 
 type Managed = {
   key: string;
@@ -18,10 +19,11 @@ const IDLE_CLOSE_MS = Math.max(30_000, Number(process.env.MIKROTIK_API_IDLE_MS |
 function sig(r: RouterRow, mode: 'API' | 'REST'): string {
   const host = String(r.host || '').trim();
   const user = String(r.username || 'admin');
-  const password = String(r.password || '');
+  const password = decryptSecretValue(r.password);
   const tls = !!r.use_ssl;
+  const tlsVerify = !!r.tls_verify;
   const port = mode === 'REST' ? Number(r.rest_port || (tls ? 443 : 80)) : Number(r.api_port || (tls ? 8729 : 8728));
-  return [r.id || host, host, port, user, password, tls ? '1' : '0', mode].join('|');
+  return [r.id || host, host, port, user, password, tls ? '1' : '0', tlsVerify ? '1' : '0', mode].join('|');
 }
 
 function keyOf(r: RouterRow, mode: 'API' | 'REST') {
@@ -31,13 +33,17 @@ function keyOf(r: RouterRow, mode: 'API' | 'REST') {
 function makeApi(r: RouterRow, mode: 'API' | 'REST') {
   const host = String(r.host || '').trim();
   const user = String(r.username || 'admin');
-  const password = String(r.password || '');
+  const password = decryptSecretValue(r.password);
   const tls = !!r.use_ssl;
+  const ca = String(r.tls_ca_cert || process.env.MIKROTIK_TLS_CA_CERT || '').trim();
+  const tlsOpt: any = tls
+    ? (r.tls_verify ? { rejectUnauthorized: true, ...(ca ? { ca } : {}) } : { rejectUnauthorized: false })
+    : false;
   const port = mode === 'REST' ? Number(r.rest_port || (tls ? 443 : 80)) : Number(r.api_port || (tls ? 8729 : 8728));
   // keepalive sends a harmless '#' command every timeout/2. Without it the
   // pooled connection goes idle, node-routeros' socket timeout fires after
   // `timeout` seconds and RouterOS logs a logout on every reconnect cycle.
-  return new RouterOSAPI({ host, user, password, port, tls: tls as any, timeout: 8, keepalive: true });
+  return new RouterOSAPI({ host, user, password, port, tls: tlsOpt, timeout: 8, keepalive: true });
 }
 
 async function connectFresh(r: RouterRow, mode: 'API' | 'REST'): Promise<Managed> {

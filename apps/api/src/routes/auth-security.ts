@@ -18,7 +18,7 @@ const mfaLimiter = createRateLimiter('mfa', 10, 60_000);
 const sessionLimiter = createRateLimiter('sessions', 20, 60_000);
 
 export type AuthSecurityDeps = {
-  findUser: (id: string) => any | undefined;
+  findUser: (id: string) => any | Promise<any | undefined>;
   checkPassword: (user: any, password: string) => Promise<boolean>;
   issueToken: (user: any, minutes: number, jti?: string) => string;
 };
@@ -58,7 +58,7 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
 
   router.post('/sessions/revoke', asyncHandler(async (req: any, res) => {
     const user = actor(req);
-    const limit = sessionLimiter.check(`${user.id}:${req.ip || ''}`, 20);
+    const limit = await sessionLimiter.checkDistributed(`${user.id}:${req.ip || ''}`, 20);
     if (!limit.allowed) return res.status(429).json({ message: 'Too many session requests. Try again shortly.', retry_after_sec: limit.retryAfterSec });
     const { session_id, all } = req.body || {};
     let revoked = 0;
@@ -91,11 +91,11 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
 
   router.post('/mfa/enroll', asyncHandler(async (req: any, res) => {
     const user = actor(req);
-    const limit = mfaLimiter.check(`enroll:${user.id}:${req.ip || ''}`, 5);
+    const limit = await mfaLimiter.checkDistributed(`enroll:${user.id}:${req.ip || ''}`, 5);
     if (!limit.allowed) return res.status(429).json({ message: 'Too many MFA attempts. Try again shortly.', retry_after_sec: limit.retryAfterSec });
     const existing = await getMfaRecord(user.id);
     if (existing?.enabled && !existing.disabled_at) return res.status(409).json({ message: 'MFA is already enabled. Disable it before re-enrolling.' });
-    const found = deps.findUser(user.id);
+    const found = await deps.findUser(user.id);
     if (!found || !await deps.checkPassword(found, String(req.body?.password || ''))) {
       return res.status(400).json({ message: 'Current password is incorrect' });
     }
@@ -111,7 +111,7 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
 
   router.post('/mfa/confirm', asyncHandler(async (req: any, res) => {
     const user = actor(req);
-    const limit = mfaLimiter.check(`confirm:${user.id}:${req.ip || ''}`, 5);
+    const limit = await mfaLimiter.checkDistributed(`confirm:${user.id}:${req.ip || ''}`, 5);
     if (!limit.allowed) return res.status(429).json({ message: 'Too many MFA attempts. Try again shortly.', retry_after_sec: limit.retryAfterSec });
     const record = await getMfaRecord(user.id);
     if (!record || record.enabled) return res.status(400).json({ message: 'Start MFA enrollment first.' });
@@ -124,7 +124,7 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
     await auditLog({ ...reqActor(req), action: 'auth.mfa_enabled', entity_type: 'auth', entity_id: user.id });
     const extra = { ok: true, recovery_codes: recoveryCodes, note: 'Save these recovery codes now. Each one works once.' };
     if ((req as any).authPurpose === 'mfa_enrollment') {
-      const foundUser = deps.findUser(user.id);
+      const foundUser = await deps.findUser(user.id);
       if (foundUser) return await startSession(req, res, foundUser, extra);
     }
     res.json(extra);
@@ -132,9 +132,9 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
 
   router.post('/mfa/disable', asyncHandler(async (req: any, res) => {
     const user = actor(req);
-    const limit = mfaLimiter.check(`disable:${user.id}:${req.ip || ''}`, 5);
+    const limit = await mfaLimiter.checkDistributed(`disable:${user.id}:${req.ip || ''}`, 5);
     if (!limit.allowed) return res.status(429).json({ message: 'Too many MFA attempts. Try again shortly.', retry_after_sec: limit.retryAfterSec });
-    const found = deps.findUser(user.id);
+    const found = await deps.findUser(user.id);
     if (!found || !await deps.checkPassword(found, String(req.body?.password || ''))) {
       return res.status(400).json({ message: 'Current password is incorrect' });
     }
@@ -147,7 +147,7 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
 
   // Second half of login when require_2fa / an enrolled account demands TOTP.
   router.post('/mfa/verify', asyncHandler(async (req: any, res) => {
-    const limit = mfaLimiter.check(`verify:${req.ip || ''}`, 10);
+    const limit = await mfaLimiter.checkDistributed(`verify:${req.ip || ''}`, 10);
     if (!limit.allowed) return res.status(429).json({ message: 'Too many verification attempts. Try again shortly.', retry_after_sec: limit.retryAfterSec });
     let sub = '';
     try {
@@ -155,7 +155,7 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
       if (payload.purpose !== 'mfa' || !payload.sub) throw new Error('invalid');
       sub = payload.sub;
     } catch { return res.status(400).json({ message: 'MFA challenge expired. Sign in again.' }); }
-    const user = deps.findUser(sub);
+    const user = await deps.findUser(sub);
     if (!user) return res.status(401).json({ message: 'Invalid session' });
     if (!await mfaEnabled(user.id)) return res.status(400).json({ message: 'MFA is not enabled for this account.' });
     const consumed = await consumeMfaCode(user.id, String(req.body?.code || ''));
@@ -166,7 +166,7 @@ export function createAuthSecurityRouter(deps: AuthSecurityDeps): Router {
 
   router.post('/mfa/step-up', asyncHandler(async (req: any, res) => {
     const user = actor(req);
-    const limit = mfaLimiter.check(`stepup:${user.id}:${req.ip || ''}`, 10);
+    const limit = await mfaLimiter.checkDistributed(`stepup:${user.id}:${req.ip || ''}`, 10);
     if (!limit.allowed) return res.status(429).json({ message: 'Too many verification attempts. Try again shortly.', retry_after_sec: limit.retryAfterSec });
     if (!await mfaEnabled(user.id)) return res.status(400).json({ message: 'Enroll MFA before using step-up verification.' });
     const consumed = await consumeMfaCode(user.id, String(req.body?.code || ''));

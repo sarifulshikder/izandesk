@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import { ArrowLeft, RefreshCw, Play, Server, Activity, Wifi, ShieldCheck, Link2, Globe, Cpu, HardDrive, ArrowDown, ArrowUp, Network, Users, Signal } from 'lucide-react';
+import { TelemetryChart } from '@/components/charts/telemetry-chart';
 
 function modeBadge(m: string) {
   const v = String(m || '').toUpperCase();
@@ -55,6 +56,8 @@ export default function RouterDetailPage() {
   const [router, setRouter] = useState<any>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [, setSummary] = useState<any>(null);
+  const [history, setHistory] = useState<any[]>([]);
+  const [histHours, setHistHours] = useState(24);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -63,21 +66,23 @@ export default function RouterDetailPage() {
     if (!token || !id) return;
     setLoading(true);
     try {
-      const [r, s] = await Promise.all([
+      const [r, s, h] = await Promise.all([
         apiFetch<any>(`/api/network/routers/${id}`, {}, token),
         apiFetch<{ data: any[]; summary?: any }>('/api/network/sessions?nopoll=1', {}, token).catch(() => ({ data: [], summary: null })),
+        apiFetch<{ data: any[] }>(`/api/network/routers/${id}/history?hours=${histHours}`, {}, token).catch(() => ({ data: [] })),
       ]);
       setRouter(r);
       const all = s.data || [];
       setSessions(all.filter((x: any) => x.router_id === id || String(x.router_name || '') === String(r.name || '')));
       setSummary(s.summary || null);
+      setHistory(h.data || []);
       setError(null);
     } catch (e: any) {
       setError(e.message || 'Failed to load router');
     } finally {
       setLoading(false);
     }
-  }, [token, id]);
+  }, [token, id, histHours]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (msg) { const t = setTimeout(() => setMsg(null), 4500); return () => clearTimeout(t); } }, [msg]);
@@ -174,6 +179,7 @@ export default function RouterDetailPage() {
               <KV k="REST Port" v={router.rest_port ?? '-'} />
               <KV k="Username" v={router.username || '-'} />
               <KV k="Use SSL" v={router.use_ssl ? 'Yes' : 'No'} />
+              <KV k="TLS Verify" v={router.tls_verify ? 'Strict CA' : 'Self-signed allowed'} />
             </> : <>
               <KV k="NAS Identifier" v={router.nas_identifier || '-'} />
               <KV k="CoA / PoD Port" v={router.coa_port ?? 3799} />
@@ -210,6 +216,38 @@ export default function RouterDetailPage() {
             <div className="dash-stat compact dash-stat-purple"><span className="dash-stat-icon"><HardDrive className="w-3.5 h-3.5"/></span><span className="dash-stat-body"><span className="dash-stat-label">Memory</span><span className="dash-stat-value text-sm tabular-nums">{router.memory_total_mb ? `${Number(router.memory_used_mb||0).toFixed(0)}/${Number(router.memory_total_mb||0).toFixed(0)} MB` : '—'}</span></span></div>
             <div className="dash-stat compact dash-stat-teal"><span className="dash-stat-icon"><ArrowDown className="w-3.5 h-3.5"/></span><span className="dash-stat-body"><span className="dash-stat-label">RX (agg)</span><span className="dash-stat-value text-sm tabular-nums">{fmtBps(Number(router.rx_bps || derived.totalRx || 0))}</span></span></div>
             <div className="dash-stat compact dash-stat-indigo"><span className="dash-stat-icon"><ArrowUp className="w-3.5 h-3.5"/></span><span className="dash-stat-body"><span className="dash-stat-label">TX (agg)</span><span className="dash-stat-value text-sm tabular-nums">{fmtBps(Number(router.tx_bps || derived.totalTx || 0))}</span></span></div>
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-muted-foreground">Historical Telemetry</span>
+            <div className="flex items-center gap-1">
+              {[6, 24, 168].map((h) => (
+                <button key={h} onClick={() => setHistHours(h)} className={`btn btn-sm ${histHours === h ? 'btn-primary' : 'btn-outline'}`}>
+                  {h === 168 ? '7d' : `${h}h`}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <TelemetryChart
+              title="Throughput History"
+              subtitle={`Last ${histHours === 168 ? '7 days' : `${histHours} hours`}`}
+              labels={history.map((p: any) => new Date(p.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}
+              series={[
+                { label: 'RX', color: '#14b8a6', values: history.map((p: any) => +(Number(p.rx_bps || 0) / 1e6).toFixed(2)) },
+                { label: 'TX', color: '#6366f1', values: history.map((p: any) => +(Number(p.tx_bps || 0) / 1e6).toFixed(2)) },
+              ]}
+              unit=" Mbps"
+            />
+            <TelemetryChart
+              title="CPU & Active Sessions"
+              subtitle={`Last ${histHours === 168 ? '7 days' : `${histHours} hours`}`}
+              labels={history.map((p: any) => new Date(p.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}
+              series={[
+                { label: 'CPU %', color: '#f59e0b', values: history.map((p: any) => p.cpu_load != null ? Number(p.cpu_load) : null) },
+                { label: 'Sessions', color: '#22c55e', values: history.map((p: any) => p.active_sessions != null ? Number(p.active_sessions) : null) },
+              ]}
+            />
           </div>
 
           <div className="card overflow-hidden">

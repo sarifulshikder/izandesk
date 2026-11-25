@@ -13,6 +13,8 @@ export default function SystemHealthPage() {
   const [fupLogs, setFupLogs] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [schedulers, setSchedulers] = useState<any>(null);
+  const [queues, setQueues] = useState<any>(null);
+  const [migrations, setMigrations] = useState<any[]>([]);
   const [msg, setMsg] = useState<string|null>(null);
   const [err, setErr] = useState<string|null>(null);
   const [busy, setBusy] = useState(false);
@@ -24,14 +26,16 @@ export default function SystemHealthPage() {
     try {
       const h = await fetch(`${getApiBaseUrl()}/api/system/health`).then(r=>r.json());
       setHealth(h);
-      const [d,b,f,a,s] = await Promise.all([
+      const [d,b,f,a,s,q,m] = await Promise.all([
         apiFetch<any>('/api/system/diagnostics', {}, token).catch(()=>null),
         apiFetch<any>('/api/system/backups', {}, token).catch(()=>null),
         apiFetch<any>('/api/billing/fup/logs', {}, token).catch(()=>({data:[]})),
         apiFetch<any>('/api/system/alerts?limit=20', {}, token).catch(()=>({data:[]})),
         apiFetch<any>('/api/system/schedulers', {}, token).catch(()=>null),
+        apiFetch<any>('/api/system/queues', {}, token).catch(()=>null),
+        apiFetch<any>('/api/system/migrations', {}, token).catch(()=>({data:[]})),
       ]);
-      setDiag(d); setBackups(b); setFupLogs(f?.data || []); setAlerts(a?.data || []); setSchedulers(s);
+      setDiag(d); setBackups(b); setFupLogs(f?.data || []); setAlerts(a?.data || []); setSchedulers(s); setQueues(q); setMigrations(m?.data || []);
     } catch(e:any){ setErr(e.message); }
   }, [token]);
   useEffect(()=>{ void load(); }, [load]);
@@ -61,6 +65,16 @@ export default function SystemHealthPage() {
     if (!token) return;
     try { await apiFetch(`/api/system/alerts/${id}/ack`, { method:'POST' }, token); await load(); }
     catch (e:any) { setErr(e.message || 'Failed to acknowledge alert'); }
+  };
+
+  const retryQueue = async (name: string) => {
+    if (!token) return;
+    setErr(null); setMsg(null);
+    try {
+      const r = await apiFetch<any>(`/api/system/queues/${name}/retry`, { method: 'POST' }, token);
+      setMsg(`Retried ${r.retried ?? 0} failed job(s) in ${name}.`);
+      await load();
+    } catch (e: any) { setErr(e.message || 'Queue retry failed'); }
   };
 
   const ok = (v:any) => v?.ok === true;
@@ -160,6 +174,59 @@ export default function SystemHealthPage() {
             ))}</tbody>
           </table>
           {!((schedulers?.metrics||[]).length) && <div className="text-xs text-muted-foreground mt-2">No scheduler runs recorded yet.</div>}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-bold flex items-center gap-2"><Server className="w-4 h-4 text-primary"/>BullMQ Job Queues</h2>
+            <span className={`badge ${queues?.active ? 'badge-success' : 'badge-secondary'}`}>{queues?.active ? 'Active (Redis)' : 'Fallback / Lite'}</span>
+          </div>
+          {!queues?.active ? (
+            <div className="text-xs text-muted-foreground">BullMQ queues are inactive (Redis disabled or LITE_MODE). Jobs run via DB-locked in-process schedulers.</div>
+          ) : (
+            <div className="overflow-auto">
+              <table className="w-full text-xs">
+                <thead><tr className="text-left text-muted-foreground border-b border-border"><th className="py-1.5 pr-2">Queue</th><th className="py-1.5 pr-2">Wait</th><th className="py-1.5 pr-2">Active</th><th className="py-1.5 pr-2">Done</th><th className="py-1.5 pr-2">Failed</th><th className="py-1.5"></th></tr></thead>
+                <tbody>
+                  {(queues.queues || []).map((q: any) => (
+                    <tr key={q.name} className="border-b border-border/40">
+                      <td className="py-1.5 pr-2 font-mono">{q.name}</td>
+                      <td className="py-1.5 pr-2 tabular-nums">{q.counts?.waiting ?? 0}</td>
+                      <td className="py-1.5 pr-2 tabular-nums">{q.counts?.active ?? 0}</td>
+                      <td className="py-1.5 pr-2 tabular-nums">{q.counts?.completed ?? 0}</td>
+                      <td className="py-1.5 pr-2 tabular-nums"><span className={Number(q.counts?.failed || 0) > 0 ? 'text-danger font-bold' : ''}>{q.counts?.failed ?? 0}</span></td>
+                      <td className="py-1.5 text-right">{Number(q.counts?.failed || 0) > 0 && <button onClick={() => retryQueue(q.name)} className="btn btn-outline btn-sm">Retry</button>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-bold flex items-center gap-2"><Database className="w-4 h-4 text-primary"/>Database Migrations</h2>
+            <span className="text-xs text-muted-foreground">{migrations.filter((m) => m.applied).length}/{migrations.length} applied</span>
+          </div>
+          <div className="overflow-auto max-h-[220px]">
+            <table className="w-full text-xs">
+              <thead><tr className="text-left text-muted-foreground border-b border-border"><th className="py-1.5 pr-2">Version</th><th className="py-1.5 pr-2">File</th><th className="py-1.5 pr-2">Status</th><th className="py-1.5">Applied</th></tr></thead>
+              <tbody>
+                {migrations.map((m: any) => (
+                  <tr key={m.version} className="border-b border-border/40">
+                    <td className="py-1.5 pr-2 font-mono">{m.version}</td>
+                    <td className="py-1.5 pr-2 font-mono truncate max-w-[200px]">{m.file}</td>
+                    <td className="py-1.5 pr-2"><span className={`badge ${m.applied ? 'badge-success' : 'badge-warning'}`}>{m.applied ? 'Applied' : 'Pending'}</span></td>
+                    <td className="py-1.5 text-muted-foreground">{m.applied_at ? new Date(m.applied_at).toLocaleString() : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!migrations.length && <div className="text-xs text-muted-foreground">No migration files found.</div>}
+          </div>
         </div>
       </div>
 

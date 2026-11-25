@@ -9,8 +9,22 @@ import { WebSocketServer } from 'ws';
 import { PluginKernel } from './kernel/plugin-manager';
 import { setKernel } from './kernel/kernel-instance';
 import { initDb, pool } from './db';
-import { getCached, getSetting, validatePasswordPolicy, invalidateCache } from './integrations/settings';
+import { getCached, getSetting, initSettingsCacheSync, validatePasswordPolicy, invalidateCache } from './integrations/settings';
 import { auditLog } from './integrations/audit';
+import { logger, requestLogger } from './infra/logger';
+import { adjustStreamClients } from './infra/metrics';
+import { closeRedis, initRedis, isRedisReady, redisDel, redisGetCounter, redisIncrWindow, redisSetNxEx } from './infra/redis';
+import { closeQueues, initQueues, isQueuesActive, registerQueueHandler, scheduleRecurringJob } from './infra/queues';
+import { encryptCredentialsObject, encryptSecretValue } from './security/secret-store';
+import { migratePlaintextSecretsToEncrypted } from './integrations/secret-migration';
+import { getLiveSessionsSnapshot, subscribeLiveSessions } from './integrations/live-sessions';
+import { pruneTelemetryHistory } from './integrations/telemetry-history';
+import {
+  findStaffById, findStaffByIdentifier, findStaffByRole,
+  isDemoAccountsDisabled, syncBootstrapStaffUsers, toUserSession,
+  touchStaffLastLogin, updateStaffPasswordHash, verifyStaffPassword,
+} from './integrations/staff-users';
+import staffRouter from './routes/staff';
 import { LoginRequest, LoginResponse, UserSession } from '@izandesk/shared-types';
 import subscribersRouter from './routes/subscribers';
 import topologyRouter from './routes/topology';
@@ -115,80 +129,67 @@ const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
 const WEB_ORIGIN = process.env.WEB_ORIGIN || '';
 const ALLOW_LAN_ORIGINS = (process.env.ALLOW_LAN_ORIGINS || 'true').toLowerCase() !== 'false';
 
-interface AuthUser extends UserSession { password: string; password_hash?: string; }
-
-// Demo accounts have well-known passwords. Disable them explicitly in any
-// non-demo deployment; they are only kept for the public demo environment.
-const DEMO_ACCOUNTS_DISABLED = envFlag(process.env.DISABLE_DEMO_ACCOUNTS);
-
-const users: AuthUser[] = DEMO_ACCOUNTS_DISABLED ? [] : [
-  { id: 'usr-admin-01', name: 'Izan Rahman (CEO)', email: 'admin@izandesk.com', password: 'admin123', role: 'SUPER_ADMIN', tenantId: 'tnt-primary-01', permissions: ['ALL'], avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80' },
-  { id: 'usr-noc-02', name: 'Tariqul Islam (NOC Lead)', email: 'noc@izandesk.com', password: 'noc123', role: 'NOC_ENGINEER', tenantId: 'tnt-primary-01', permissions: ['ROUTERS_READ','ROUTERS_WRITE','OLT_READ','SUBSCRIBERS_KICK'], avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80' },
-  { id: 'usr-bill-03', name: 'Sadia Akhter (Accounts)', email: 'billing@izandesk.com', password: 'billing123', role: 'BILLING_OPERATOR', tenantId: 'tnt-primary-01', permissions: ['INVOICES_READ','PAYMENTS_CREATE','BILLS_ADJUST'], avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&auto=format&fit=crop&q=80' },
-  { id: 'usr-tech-04', name: 'Kamrul Hasan (Field Lead)', email: 'tech@izandesk.com', password: 'tech123', role: 'TECHNICIAN', tenantId: 'tnt-primary-01', permissions: ['TICKETS_ASSIGNED','OPTICAL_READ','CLIENTS_READ'], avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80' },
-  { id: 'usr-reseller-05', name: 'Shahriar Kabir (CyberNet Reseller)', email: 'reseller@cybernet.bd', password: 'reseller123', role: 'RESELLER', tenantId: 'tnt-primary-01', resellerId: 'RES-CYBERNET', permissions: ['RESELLER_CLIENTS_ALL','WALLET_RECHARGE'], avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&auto=format&fit=crop&q=80' },
-];
+const DEMO_ACCOUNTS_DISABLED = isDemoAccountsDisabled();
 if (!DEMO_ACCOUNTS_DISABLED && process.env.NODE_ENV === 'production') {
   console.warn('[Auth] WARNING: demo accounts with well-known passwords are ENABLED in production. Set DISABLE_DEMO_ACCOUNTS=true for real deployments.');
 }
 
-/**
- * With demo accounts disabled there are no built-in users, so an operator must
- * supply one bootstrap SUPER_ADMIN. Prefer BOOTSTRAP_ADMIN_PASSWORD_HASH (a
- * bcrypt hash) so no plaintext password sits in the container env / router
- * config. BOOTSTRAP_ADMIN_PASSWORD is accepted for convenience and is hashed
- * in memory at boot. A password changed later via Settings → Security is
- * persisted in `security.password_overrides` and takes precedence on restart.
- */
-async function addBootstrapAdmin(): Promise<void> {
-  if (!DEMO_ACCOUNTS_DISABLED) return;
-  const email = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
-  const hash = String(process.env.BOOTSTRAP_ADMIN_PASSWORD_HASH || '').trim();
-  const plaintext = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
-  if (!hash && !plaintext) {
-    console.warn('[Auth] demo accounts disabled and no BOOTSTRAP_ADMIN_* account configured: no user can sign in.');
-    return;
-  }
-  if (!email) {
-    throw new Error('BOOTSTRAP_ADMIN_EMAIL is required when a bootstrap admin password/hash is provided');
-  }
-  if (users.some((u) => u.email.toLowerCase() === email)) return;
-  let passwordHash = hash;
-  if (!passwordHash) passwordHash = await bcrypt.hash(plaintext, 12);
-  if (!/^\$2[aby]\$\d{2}\$/.test(passwordHash)) {
-    throw new Error('BOOTSTRAP_ADMIN_PASSWORD_HASH must be a bcrypt hash ($2a$/$2b$/$2y$)');
-  }
-  users.push({
-    id: 'usr-bootstrap-admin',
-    name: String(process.env.BOOTSTRAP_ADMIN_NAME || 'Administrator').trim() || 'Administrator',
-    email,
-    password: '',
-    password_hash: passwordHash,
-    role: 'SUPER_ADMIN',
-    tenantId: 'tnt-primary-01',
-    permissions: ['ALL'],
-  });
-  console.log(`[Auth] bootstrap SUPER_ADMIN configured: ${email}`);
-}
-
-function toSession(u: AuthUser): UserSession { const { password, password_hash, ...rest } = u as any; return rest; }
 function issueToken(user: UserSession, minutes = 720, jti?: string) {
   return jwt.sign({ sub: user.id, role: user.role, email: user.email, ...(jti ? { jti } : {}) }, JWT_SECRET, { expiresIn: `${Math.max(5, minutes)}m` });
 }
 
-async function checkPassword(user: AuthUser, pw: string): Promise<boolean> {
-  if (user.password_hash) { try { return await bcrypt.compare(pw, user.password_hash); } catch { return false; } }
-  return pw === user.password;
-}
-
-// in-memory login lockout (per identifier + source IP), limits come from settings
 interface LoginAttempt { fails: number; lockedUntil: number }
 const loginAttempts = new Map<string, LoginAttempt>();
-// The E2E suite reuses one source IP for many UI logins. The insecure demo
-// profile already opts into known credentials, so give its limiter headroom;
-// real deployments keep the strict 30/minute default.
 const loginRateLimit = envFlag(process.env.SECURITY_ALLOW_INSECURE_DEMO) ? 300 : 30;
 const loginLimiter = createRateLimiter('login', loginRateLimit, 60_000);
+
+function lockHash(lockKey: string) {
+  return crypto.createHash('sha256').update(lockKey).digest('hex').slice(0, 32);
+}
+
+async function getLoginLockRemainingSec(lockKey: string): Promise<number> {
+  if (isRedisReady()) {
+    const c = await redisGetCounter(`iz:auth:lock:${lockHash(lockKey)}`);
+    if (c && c.ttlMs > 0) return Math.max(1, Math.ceil(c.ttlMs / 1000));
+    return 0;
+  }
+  const att = loginAttempts.get(lockKey);
+  if (att && att.lockedUntil > Date.now()) {
+    return Math.max(1, Math.ceil((att.lockedUntil - Date.now()) / 1000));
+  }
+  return 0;
+}
+
+async function recordLoginFailure(lockKey: string, maxAttempts: number, lockMinutes: number): Promise<boolean> {
+  if (isRedisReady()) {
+    const h = lockHash(lockKey);
+    const res = await redisIncrWindow(`iz:auth:fail:${h}`, lockMinutes * 60_000);
+    if (res && res.count >= maxAttempts) {
+      await redisSetNxEx(`iz:auth:lock:${h}`, '1', lockMinutes * 60);
+      await redisDel(`iz:auth:fail:${h}`);
+      return true;
+    }
+    return false;
+  }
+  const a = loginAttempts.get(lockKey) || { fails: 0, lockedUntil: 0 };
+  a.fails += 1;
+  if (a.fails >= maxAttempts) {
+    a.lockedUntil = Date.now() + lockMinutes * 60_000;
+    a.fails = 0;
+    loginAttempts.set(lockKey, a);
+    return true;
+  }
+  loginAttempts.set(lockKey, a);
+  return false;
+}
+
+async function clearLoginFailures(lockKey: string): Promise<void> {
+  loginAttempts.delete(lockKey);
+  if (isRedisReady()) {
+    const h = lockHash(lockKey);
+    await redisDel(`iz:auth:fail:${h}`, `iz:auth:lock:${h}`);
+  }
+}
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
   (async () => {
@@ -200,7 +201,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
     } catch {
       res.status(401).json({ message: 'Invalid or expired token' }); return;
     }
-    const user = users.find((u) => u.id === payload.sub);
+    const user = await findStaffById(payload.sub);
     if (!user || user.role !== payload.role) { res.status(401).json({ message: 'Invalid session' }); return; }
     // Revocable sessions: a jti is present on interactive logins. Tokens without
     // one (service/MCP executor tokens) keep the legacy JWT-only behaviour.
@@ -223,14 +224,14 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
         }
       }
     } catch {}
-    (req as any).user = toSession(user);
+    (req as any).user = toUserSession(user);
     next();
   })().catch(() => { try { res.status(500).json({ message: 'Auth error' }); } catch {} });
 }
 
 async function bootstrap() {
-  await addBootstrapAdmin();
   const app = express();
+  app.use(requestLogger());
   const allowedOrigins = WEB_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean);
   const lanOriginAllowed = (origin: string): boolean => {
     if (!ALLOW_LAN_ORIGINS) return false;
@@ -262,22 +263,25 @@ async function bootstrap() {
     verify: (req, _res, buf) => { (req as any).rawBody = Buffer.from(buf); },
   }));
 
+  await initRedis();
+  await initSettingsCacheSync();
+
   let dbReady = false;
   try {
     await initDb();
     dbReady = true;
-    console.log('[DB] PostgreSQL/PostGIS schema ready');
-  } catch (e) {
-    console.error('[DB] Initialization failed:', e);
+    logger.info('[DB] PostgreSQL/PostGIS schema and migrations ready');
+  } catch (e: any) {
+    logger.error({ err: e?.message || String(e) }, '[DB] Initialization failed');
   }
 
-  // Apply persisted password overrides (from Settings & Security) onto the in-memory users
-  try {
-    const overrides = (await getSetting('security.password_overrides', {})) || {};
-    for (const u of users) if (overrides[u.id]) u.password_hash = String(overrides[u.id]);
-    console.log(`[Auth] users: ${users.length}, password overrides applied: ${Object.keys(overrides).length}`);
-  } catch (e) {
-    console.error('[Auth] failed to load password overrides:', e);
+  if (dbReady) {
+    try {
+      await syncBootstrapStaffUsers();
+      await migratePlaintextSecretsToEncrypted();
+    } catch (e: any) {
+      logger.error({ err: e?.message || String(e) }, '[Auth/Secrets] bootstrap sync failed');
+    }
   }
 
   const kernel = new PluginKernel();
@@ -302,42 +306,33 @@ async function bootstrap() {
       const identifier = String(body.identifier || body.email || body.username || '').trim().toLowerCase();
       const pw = String(body.password || '');
       const sourceIp = String(req.ip || req.headers['x-forwarded-for'] || '');
-      const throttle = loginLimiter.check(sourceIp || identifier || 'unknown', loginRateLimit);
+      const throttle = await loginLimiter.checkDistributed(sourceIp || identifier || 'unknown', loginRateLimit);
       if (!throttle.allowed) {
         res.setHeader('Retry-After', String(throttle.retryAfterSec));
         return res.status(429).json({ message: 'Too many login attempts. Try again shortly.' });
       }
-      const now = Date.now();
       const maxAttempts = Number(await getCached('security.login_max_attempts', 5)) || 5;
       const lockMinutes = Number(await getCached('security.login_lockout_minutes', 15)) || 15;
       const lockKey = `${identifier}|${sourceIp}`;
-      const att = loginAttempts.get(lockKey);
-      if (att && att.lockedUntil > now) {
-        res.setHeader('Retry-After', String(Math.ceil((att.lockedUntil - now) / 1000)));
-        return res.status(429).json({ message: `Too many failed attempts. Locked — try again in ${Math.ceil((att.lockedUntil - now) / 60000)} min.` });
+      const lockedSec = await getLoginLockRemainingSec(lockKey);
+      if (lockedSec > 0) {
+        res.setHeader('Retry-After', String(lockedSec));
+        return res.status(429).json({ message: `Too many failed attempts. Locked — try again in ${Math.ceil(lockedSec / 60)} min.` });
       }
       // Support login by email or local-part username (e.g. "admin" for admin@izandesk.com)
-      const user = users.find((u) => {
-        const em = u.email.toLowerCase();
-        const local = em.split('@')[0];
-        return em === identifier || local === identifier;
-      });
-      const ok = user ? await checkPassword(user, pw) : false;
+      const user = await findStaffByIdentifier(identifier);
+      const ok = user ? await verifyStaffPassword(user, pw) : false;
       if (!user || !ok) {
-        const a = loginAttempts.get(lockKey) || { fails: 0, lockedUntil: 0 };
-        a.fails += 1;
-        if (a.fails >= maxAttempts) {
-          a.lockedUntil = now + lockMinutes * 60000; a.fails = 0;
-          loginAttempts.set(lockKey, a);
+        const justLocked = await recordLoginFailure(lockKey, maxAttempts, lockMinutes);
+        if (justLocked) {
           await auditLog({ action: 'auth.lockout', entity_type: 'auth', entity_id: identifier, details: { lockout_minutes: lockMinutes, max_attempts: maxAttempts }, ip_address: req.ip });
           res.setHeader('Retry-After', String(lockMinutes * 60));
           return res.status(429).json({ message: `Too many failed attempts. Account locked for ${lockMinutes} min.` });
         }
-        loginAttempts.set(lockKey, a);
         return res.status(401).json({ message: 'Invalid email/username or password' });
       }
-      loginAttempts.delete(lockKey);
-      const session = toSession(user);
+      await clearLoginFailures(lockKey);
+      const session = toUserSession(user);
       const enrolled = await mfaEnabled(user.id);
       const required = await mfaRequiredFor(user.role);
       if (enrolled) {
@@ -360,10 +355,11 @@ async function bootstrap() {
       const sessionMinutes = Number(await getCached('security.session_timeout_minutes', 720)) || 720;
       const jti = newSessionId();
       await createSession({ id: jti, userId: user.id, minutes: sessionMinutes, ip: req.ip, userAgent: String(req.headers['user-agent'] || '').slice(0, 300) });
+      await touchStaffLastLogin(user.id);
       await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.login', entity_type: 'auth', ip_address: req.ip });
       res.json({ token: issueToken(session, sessionMinutes, jti), user: session } as LoginResponse);
     } catch (e: any) {
-      console.error('[Auth] login failed:', e);
+      logger.error({ err: e?.message || String(e) }, '[Auth] login failed');
       res.status(500).json({ message: 'Login failed' });
     }
   });
@@ -372,14 +368,14 @@ async function bootstrap() {
   app.post('/api/auth/change-password', authMiddleware, async (req, res) => {
     try {
       const session = (req as any).user as UserSession;
-      const user = users.find((u) => u.id === session?.id);
+      const user = await findStaffById(session?.id);
       if (!user) return res.status(401).json({ message: 'Invalid session' });
       const { old_password, new_password } = (req.body || {}) as any;
-      if (!(await checkPassword(user, String(old_password || '')))) return res.status(400).json({ message: 'Current password is incorrect' });
+      if (!(await verifyStaffPassword(user, String(old_password || '')))) return res.status(400).json({ message: 'Current password is incorrect' });
       const pwErr = await validatePasswordPolicy(String(new_password || ''));
       if (pwErr) return res.status(400).json({ message: pwErr });
-      const hash = await bcrypt.hash(String(new_password), 10);
-      user.password_hash = hash;
+      const hash = await bcrypt.hash(String(new_password), 12);
+      await updateStaffPasswordHash(user.id, hash);
       const overrides = (await getSetting('security.password_overrides', {})) || {};
       overrides[user.id] = hash;
       await pool.query(
@@ -393,14 +389,14 @@ async function bootstrap() {
       await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'auth.change_password', entity_type: 'auth', entity_id: user.id, details: { via: 'settings-security', other_sessions_revoked: revoked }, ip_address: req.ip });
       res.json({ ok: true, message: revoked ? `Password updated. ${revoked} other session(s) were signed out.` : 'Password updated and stored hashed (survives restarts).' });
     } catch (e: any) {
-      console.error('[Auth] change-password failed:', e);
+      logger.error({ err: e?.message || String(e) }, '[Auth] change-password failed');
       res.status(500).json({ message: 'Failed to change password' });
     }
   });
 
   app.get('/api/auth/me', authMiddleware, (req, res) => res.json({ user: (req as any).user as UserSession }));
   // Revocable sessions + TOTP enrollment (mounted after the legacy auth routes).
-  app.use('/api/auth', (req, res, next) => {
+  app.use('/api/auth', async (req, res, next) => {
     // MFA verification uses the short-lived challenge token, not a staff JWT.
     if (req.path === '/mfa/verify') return next();
     // Enrollment challenge tokens are accepted only for the three enrollment
@@ -409,9 +405,9 @@ async function bootstrap() {
       const header = req.headers.authorization;
       if (header?.startsWith('Bearer ')) {
         const sub = verifyPurposeToken(header.slice(7), JWT_SECRET, 'mfa_enrollment');
-        const user = sub ? users.find((u) => u.id === sub) : undefined;
+        const user = sub ? await findStaffById(sub) : null;
         if (user) {
-          (req as any).user = toSession(user);
+          (req as any).user = toUserSession(user);
           (req as any).authPurpose = 'mfa_enrollment';
           return next();
         }
@@ -419,10 +415,15 @@ async function bootstrap() {
     }
     return authMiddleware(req, res, next);
   }, createAuthSecurityRouter({
-    findUser: (id) => users.find((u) => u.id === id),
-    checkPassword,
+    findUser: async (id) => {
+      const u = await findStaffById(id);
+      return u ? { ...toUserSession(u), password_hash: u.password_hash } : undefined;
+    },
+    checkPassword: verifyStaffPassword,
     issueToken,
   }));
+
+  app.use('/api/staff', authMiddleware, staffRouter);
 
   app.get('/api/auth/roles', (_req, res) => res.json({ roles: [
     { role: 'SUPER_ADMIN', label: 'Super Admin', desc: 'Full ISP ownership & ledger' },
@@ -485,11 +486,13 @@ async function bootstrap() {
     const b = req.body || {};
     const gateway = String(req.params.gateway || '').toLowerCase().replace(/^payment-/, '');
     if (!gateway) return res.status(400).json({ message: 'gateway is required' });
+    const encCreds = b.credentials ? encryptCredentialsObject(b.credentials) : null;
+    const encHook = encryptSecretValue(b.webhook_secret);
     const r = await pool.query(`INSERT INTO payment_gateway_configs(gateway, enabled, mode, config, credentials, webhook_secret, updated_at)
       VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,now())
       ON CONFLICT (gateway) DO UPDATE SET enabled=COALESCE($2,payment_gateway_configs.enabled), mode=COALESCE($3,payment_gateway_configs.mode), config=COALESCE($4::jsonb,payment_gateway_configs.config), credentials=COALESCE($5::jsonb,payment_gateway_configs.credentials), webhook_secret=COALESCE($6,payment_gateway_configs.webhook_secret), updated_at=now()
       RETURNING gateway,enabled,mode,config,updated_at,(credentials IS NOT NULL AND credentials <> '{}'::jsonb) as has_credentials,(webhook_secret IS NOT NULL AND webhook_secret <> '') as has_webhook_secret`,
-      [gateway, b.enabled, b.mode, b.config ? JSON.stringify(b.config) : null, b.credentials ? JSON.stringify(b.credentials) : null, b.webhook_secret || null]);
+      [gateway, b.enabled, b.mode, b.config ? JSON.stringify(b.config) : null, encCreds ? JSON.stringify(encCreds) : null, encHook]);
     await auditLog({ actor_id: user.id, actor_name: user.name, actor_role: user.role, action: 'PAYMENT_GATEWAY_CONFIG', entity_type: 'payment_gateway', entity_id: gateway, details: { enabled: r.rows[0]?.enabled, mode: r.rows[0]?.mode, credentials_changed: !!b.credentials, webhook_secret_changed: !!b.webhook_secret } });
     res.json({ ok: true, gateway: r.rows[0] });
   });
@@ -513,8 +516,14 @@ async function bootstrap() {
   // are hash-verified and may be read-only or restricted to specific tools.
   const mcpAuth = createMcpAuth({
     jwtSecret: JWT_SECRET,
-    findUser: (id) => users.find((u) => u.id === id),
-    findUserByRole: (role) => users.find((u) => u.role === role),
+    findUser: async (id) => {
+      const u = await findStaffById(id);
+      return u ? toUserSession(u) : undefined;
+    },
+    findUserByRole: async (role) => {
+      const u = await findStaffByRole(role);
+      return u ? toUserSession(u) : undefined;
+    },
     jwtMiddleware: authMiddleware,
   });
   app.use('/api/mcp', mcpAuth, createMcpRouter(pool));
@@ -585,14 +594,14 @@ async function bootstrap() {
     try {
       payload = verifyStaffToken(token, JWT_SECRET);
     } catch { return null; }
-    const user = users.find((u) => u.id === payload.sub);
+    const user = await findStaffById(payload.sub);
     if (!user || user.role !== payload.role) return null;
     if (payload.jti && !await sessionActive(payload.jti)) return null;
     const ip = request.socket.remoteAddress || String(request.headers['x-forwarded-for'] || '');
     const adminAllowlist = await getCached('security.admin_ip_allowlist', []);
     if (user.role === 'SUPER_ADMIN' && !ipAllowed(ip, adminAllowlist)) return null;
     if (await getCached('security.maintenance_mode', false) && user.role !== 'SUPER_ADMIN') return null;
-    const session = toSession(user);
+    const session = toUserSession(user);
     if (!hasNetworkRead({ user: session })) return null;
     return session;
   }
@@ -616,51 +625,72 @@ async function bootstrap() {
     })();
   });
 
-  async function wsSessionPayload() {
-    const rows = (await pool.query(`SELECT ss.username, ss.rx_bps, ss.tx_bps, ss.status, ss.ip_address, r.name as router_name, r.integration_mode, s.full_name, s.provisioning_mode
-      FROM subscriber_sessions ss LEFT JOIN network_routers r ON r.id=ss.router_id LEFT JOIN subscribers s ON s.id=ss.subscriber_id
-      ORDER BY ss.updated_at DESC LIMIT 50`)).rows;
-    return { t: Date.now(), sessions: rows, summary: { online: rows.filter((r:any)=>r.status==='ONLINE').length, aggRxBps: rows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: rows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } };
-  }
-
   wss.on('connection', async (ws: any, _request: any, _user: UserSession) => {
-    try { ws.send(JSON.stringify(await wsSessionPayload())); } catch {}
-    const iv = setInterval(async () => {
-      if (ws.readyState !== 1) return;
-      try { ws.send(JSON.stringify(await wsSessionPayload())); } catch {}
-    }, 3000);
-    ws.on('close', () => clearInterval(iv));
-    ws.on('error', () => clearInterval(iv));
+    adjustStreamClients('ws', 1);
+    let closed = false;
+    let iv: NodeJS.Timeout | undefined;
+    let unsub: (() => void) | null = null;
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      adjustStreamClients('ws', -1);
+      if (iv) clearInterval(iv);
+      if (unsub) { try { unsub(); } catch {} unsub = null; }
+    };
+    try { ws.send(JSON.stringify(await getLiveSessionsSnapshot())); } catch {}
+    if (isRedisReady()) {
+      unsub = await subscribeLiveSessions((payload) => {
+        if (!closed && ws.readyState === 1) {
+          try { ws.send(JSON.stringify(payload)); } catch {}
+        }
+      });
+    } else {
+      iv = setInterval(async () => {
+        if (closed || ws.readyState !== 1) return;
+        try { ws.send(JSON.stringify(await getLiveSessionsSnapshot())); } catch {}
+      }, 3000);
+    }
+    ws.on('close', cleanup);
+    ws.on('error', cleanup);
   });
 
   server.listen(PORT, () => {
+    logger.info({ port: PORT, dbReady, plugins: kernel.listPlugins().length, redisReady: isRedisReady() }, 'IzanDesk ERP API listening');
     console.log('====================================================');
-    console.log(`    IzanDesk ERP API — listening on :${PORT} (Phase 5)`);
+    console.log(`    IzanDesk ERP API — listening on :${PORT} (Phase 7+)`);
     console.log('====================================================');
-    console.log(`[Bootstrap] DB ready: ${dbReady}, Plugins loaded: ${kernel.listPlugins().length}`);
+    console.log(`[Bootstrap] DB ready: ${dbReady}, Redis ready: ${isRedisReady()}, Plugins loaded: ${kernel.listPlugins().length}`);
   });
 
   let schedulersStarted = false;
-  const startSchedulers = () => {
+  const startSchedulers = async () => {
     if (schedulersStarted || !dbReady) return;
     schedulersStarted = true;
+    const runMaintenance = async () => {
+      await runAuditRetention();
+      await runKycMaintenance();
+      await pruneTelemetryHistory();
+    };
+    registerQueueHandler('ops', 'compliance-maintenance', runMaintenance);
+
+    await initQueues();
     startBillingScheduler();
     startBackupScheduler();
     startReportScheduler();
     startNetworkCollector();
-    // Compliance retention sweep once per day (settings: audit_retention_days,
-    // kyc.expiry_warning_days, kyc.document_retention_days). Legal holds win.
-    void runAuditRetention();
-    void runKycMaintenance();
-    setInterval(() => {
-      void runAuditRetention();
-      void runKycMaintenance();
-    }, 24 * 60 * 60 * 1000).unref();
+
+    if (isQueuesActive()) {
+      void scheduleRecurringJob('ops', 'sched:compliance-maintenance', 'compliance-maintenance', 24 * 60 * 60 * 1000);
+      void runMaintenance();
+    } else {
+      void runMaintenance();
+      setInterval(() => { void runMaintenance(); }, 24 * 60 * 60 * 1000).unref();
+    }
   };
 
   if (dbReady) {
     await reconcileWireGuardHub();
-    startSchedulers();
+    await startSchedulers();
   } else {
     // A DB outage at boot must not permanently strand readiness and disable
     // every scheduler. Retry schema initialization until the DB returns.
@@ -668,14 +698,28 @@ async function bootstrap() {
       try {
         await initDb();
         dbReady = true;
-        console.log('[DB] Schema ready after delayed recovery');
+        logger.info('[DB] Schema ready after delayed recovery');
+        await syncBootstrapStaffUsers();
+        await migratePlaintextSecretsToEncrypted();
         await reconcileWireGuardHub();
-        startSchedulers();
+        await startSchedulers();
         clearInterval(retry);
       } catch { /* keep retrying until the database is reachable */ }
     }, 15000);
     retry.unref();
   }
+
+  const shutdown = async (signal: string) => {
+    logger.info({ signal }, 'Shutting down IzanDesk API gracefully');
+    try { await closeQueues(); } catch {}
+    try { await closeRedis(); } catch {}
+    server.close(() => {
+      void pool.end().finally(() => process.exit(0));
+    });
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
+  process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+  process.once('SIGINT', () => { void shutdown('SIGINT'); });
 }
 
 bootstrap().catch((err) => { console.error('Failed to bootstrap API', err); process.exit(1); });

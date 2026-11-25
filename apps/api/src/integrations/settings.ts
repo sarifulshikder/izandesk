@@ -9,6 +9,8 @@
  */
 import { pool } from '../db';
 import { auditLog } from './audit';
+import { decryptSecretValue, encryptSecretValue, isEncryptedSecret } from '../security/secret-store';
+import { redisDel, redisGetJson, redisPublish, redisSetJson, redisSubscribe } from '../infra/redis';
 
 export type SettingType = 'string' | 'text' | 'number' | 'boolean' | 'select' | 'array' | 'password';
 
@@ -105,6 +107,7 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { key: 'network.snmp_default_community', category: 'network', label: 'Default SNMP Community', type: 'password', default: 'public', secret: true },
   { key: 'network.default_ssh_port', category: 'network', label: 'Default SSH Port', type: 'number', min: 1, max: 65535, default: 22 },
   { key: 'network.olt_poll_interval_sec', category: 'network', label: 'OLT Poll Interval (seconds)', type: 'number', min: 10, max: 3600, default: 60 },
+  { key: 'network.telemetry_retention_days', category: 'network', label: 'Telemetry History Retention (days)', type: 'number', min: 1, max: 365, default: 30 },
 
   // ---- acs / tr-069 ----
   { key: 'acs.genieacs_url', category: 'acs', label: 'GenieACS NBI URL', type: 'string', default: '', description: 'GenieACS Northbound Interface base URL (e.g. http://genieacs:7557 or http://<server>:7557). Env GENIEACS_URL is used as fallback if not set here.' },
@@ -174,11 +177,27 @@ export function maskSecret(v: any): string {
 
 let cache: { at: number; data: Record<string, any> } = { at: 0, data: {} };
 const CACHE_TTL_MS = 5000;
+const REDIS_SETTINGS_KEY = 'iz:settings:all';
+const REDIS_SETTINGS_CHAN = 'iz:settings:invalidate';
+
+export async function initSettingsCacheSync(): Promise<void> {
+  await redisSubscribe(REDIS_SETTINGS_CHAN, () => {
+    cache = { at: 0, data: {} };
+  }).catch(() => {});
+}
 
 async function loadAll(): Promise<Record<string, any>> {
   const r = await pool.query('SELECT key, value FROM settings');
   const data: Record<string, any> = {};
-  for (const row of r.rows) data[row.key] = row.value;
+  for (const row of r.rows) {
+    const def = defFor(row.key);
+    const val = row.value;
+    if (def?.secret && !def.hidden && typeof val === 'string' && isEncryptedSecret(val)) {
+      data[row.key] = decryptSecretValue(val);
+    } else {
+      data[row.key] = val;
+    }
+  }
   return data;
 }
 
@@ -210,7 +229,14 @@ export async function getCached(key: string, fallback?: any): Promise<any> {
   const fb = fallback !== undefined ? fallback : def?.default;
   try {
     if (Date.now() - cache.at > CACHE_TTL_MS) {
-      cache = { at: Date.now(), data: await getAllSettings() };
+      const fromRedis = await redisGetJson<Record<string, any>>(REDIS_SETTINGS_KEY);
+      if (fromRedis && typeof fromRedis === 'object') {
+        cache = { at: Date.now(), data: fromRedis };
+      } else {
+        const fresh = await getAllSettings();
+        cache = { at: Date.now(), data: fresh };
+        await redisSetJson(REDIS_SETTINGS_KEY, fresh, 30);
+      }
     }
     return key in cache.data ? cache.data[key] : fb;
   } catch {
@@ -235,7 +261,11 @@ export async function getSetting(key: string, fallback?: any): Promise<any> {
   return key in all ? all[key] : (fallback !== undefined ? fallback : defFor(key)?.default);
 }
 
-export function invalidateCache() { cache = { at: 0, data: {} }; }
+export function invalidateCache() {
+  cache = { at: 0, data: {} };
+  void redisDel(REDIS_SETTINGS_KEY);
+  void redisPublish(REDIS_SETTINGS_CHAN, String(Date.now()));
+}
 
 /* ----------------------------- writes ----------------------------- */
 
@@ -288,10 +318,13 @@ export async function setCategory(
     }
     v = coerce(def, v);
     if (JSON.stringify(current[def.key]) === JSON.stringify(v)) { out[field] = v; continue; }
+    const persisted = (def.secret && !def.hidden && typeof v === 'string' && v.length > 0)
+      ? (encryptSecretValue(v) || '')
+      : v;
     await pool.query(
       `INSERT INTO settings(key, category, value, updated_by) VALUES($1,$2,$3::jsonb,$4)
        ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_by=EXCLUDED.updated_by, updated_at=now()`,
-      [def.key, category, JSON.stringify(v), actor?.actor_name || null]
+      [def.key, category, JSON.stringify(persisted), actor?.actor_name || null]
     );
     await auditLog({
       ...actor,

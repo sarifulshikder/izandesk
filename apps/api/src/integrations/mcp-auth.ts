@@ -40,10 +40,10 @@ export type McpAuthInfo = {
 
 export type McpAuthOptions = {
   jwtSecret: string;
-  /** Resolve an in-memory session-like user by id. */
-  findUser: (id: string) => any | undefined;
+  /** Resolve a session-like user by id. */
+  findUser: (id: string) => any | Promise<any | undefined>;
   /** Fallback user for keys that omit user_id (role-derived). */
-  findUserByRole: (role: string) => any | undefined;
+  findUserByRole: (role: string) => any | Promise<any | undefined>;
   /** Called after a JWT has been verified; reuses the app's auth middleware. */
   jwtMiddleware: (req: Request, res: Response, next: NextFunction) => void;
 };
@@ -112,7 +112,7 @@ export function createMcpAuth(opts: McpAuthOptions) {
       if (!record || record.revoked) throw new Error('Unknown or revoked MCP key');
       if (!record.secret_hash || !safeEqual(record.secret_hash, hashMcpSecret(secret))) throw new Error('Invalid MCP key secret');
 
-      const user = (record.user_id && opts.findUser(record.user_id)) || opts.findUserByRole(String(record.role || 'SUPER_ADMIN'));
+      const user = (record.user_id && await opts.findUser(record.user_id)) || await opts.findUserByRole(String(record.role || 'SUPER_ADMIN'));
       if (!user) throw new Error('MCP key is bound to an unknown user');
       const adminAllowlist = await getCached('security.admin_ip_allowlist', []);
       if (user.role === 'SUPER_ADMIN' && !ipAllowed(req.ip || String(req.headers['x-forwarded-for'] || ''), adminAllowlist)) {

@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import { ArrowLeft, RefreshCw, Play, Search, Radio, Wifi, CheckCircle2, X, Server, Activity, Signal, Network, Gauge, AlertTriangle, Layers } from 'lucide-react';
+import { TelemetryChart } from '@/components/charts/telemetry-chart';
 
 function opticalTone(status: string) {
   if (status === 'CRITICAL') return 'badge badge-danger';
@@ -48,6 +49,24 @@ export default function OltDetailPage() {
   const [authModal, setAuthModal] = useState<any>(null);
   const [authSub, setAuthSub] = useState('');
   const [q, setQ] = useState('');
+  const [histOnu, setHistOnu] = useState<any>(null);
+  const [histRows, setHistRows] = useState<any[]>([]);
+  const [histLoading, setHistLoading] = useState(false);
+
+  const openOnuHistory = async (onu: any) => {
+    if (!token) return;
+    setHistOnu(onu);
+    setHistRows([]);
+    setHistLoading(true);
+    try {
+      const r = await apiFetch<{ data: any[] }>(`/api/olt/onus/${onu.id}/history?hours=168`, {}, token);
+      setHistRows(r.data || []);
+    } catch {
+      setHistRows([]);
+    } finally {
+      setHistLoading(false);
+    }
+  };
 
   const load = useCallback(async () => {
     if (!token || !id) return;
@@ -292,6 +311,7 @@ export default function OltDetailPage() {
                         <span className={`badge ${o.status==='AUTHORIZED'?'badge-success':o.status==='OFFLINE'?'badge-danger':o.status==='ONLINE'?'badge-success':'badge-secondary'}`}>{o.status}</span>
                         <div className={`text-[10px] mt-1 ${opticalTone(o.optical_status)}`}>{o.optical_status}</div>
                         {o.last_seen_at && <div className="text-[10px] text-muted-foreground mt-0.5">{new Date(o.last_seen_at).toLocaleString()}</div>}
+                        <button type="button" onClick={() => void openOnuHistory(o)} className="text-[10px] text-primary hover:underline mt-1 inline-flex items-center gap-1"><Activity className="w-3 h-3" />Trend</button>
                       </td>
                     </tr>
                   ))}
@@ -317,6 +337,47 @@ export default function OltDetailPage() {
           </div>
           <div className="px-5 py-4 border-t border-border flex justify-end gap-2"><button onClick={() => setAuthModal(null)} className="btn btn-outline">Cancel</button><button onClick={authorize} className="btn btn-primary"><CheckCircle2 className="w-4 h-4" />Authorize</button></div>
         </div></div>
+      )}
+
+      {histOnu && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center p-4 overflow-auto">
+          <div className="w-full max-w-2xl card my-8">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <div>
+                <h2 className="font-bold">ONU Optical Trend (7d)</h2>
+                <div className="text-xs text-muted-foreground font-mono">{histOnu.name || histOnu.serial_number} • PON {histOnu.pon_port}</div>
+              </div>
+              <button onClick={() => setHistOnu(null)} className="btn btn-ghost btn-icon"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              {histLoading ? (
+                <div className="text-xs text-muted-foreground py-6 text-center">Loading optical history...</div>
+              ) : (
+                <>
+                  <TelemetryChart
+                    title="Optical Power (dBm)"
+                    subtitle="Last 7 days"
+                    labels={histRows.map((p: any) => new Date(p.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit' }))}
+                    series={[
+                      { label: 'Rx Power', color: '#14b8a6', values: histRows.map((p: any) => p.rx_power_dbm != null ? Number(p.rx_power_dbm) : null) },
+                      { label: 'Tx Power', color: '#6366f1', values: histRows.map((p: any) => p.tx_power_dbm != null ? Number(p.tx_power_dbm) : null) },
+                    ]}
+                    unit=" dBm"
+                  />
+                  <TelemetryChart
+                    title="ONU Temperature (°C)"
+                    labels={histRows.map((p: any) => new Date(p.ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit' }))}
+                    series={[
+                      { label: 'Temp', color: '#f59e0b', values: histRows.map((p: any) => p.temperature_c != null ? Number(p.temperature_c) : null) },
+                    ]}
+                    unit=" °C"
+                    height={140}
+                  />
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

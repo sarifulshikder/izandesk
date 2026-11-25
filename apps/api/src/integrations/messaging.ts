@@ -1,4 +1,6 @@
 import { pool } from '../db';
+import { sendEmail } from './mailer';
+import { decryptCredentialsObject } from '../security/secret-store';
 
 function renderTemplate(body: string, vars: Record<string, any> = {}) {
   return String(body || '').replace(/\{\{\s*([a-zA-Z0-9_\.]+)\s*\}\}/g, (_m, k) => {
@@ -36,12 +38,38 @@ async function postForm(url: string, form: Record<string, any>, headers: Record<
 export async function sendViaProvider(channel: any, payload: { to?: string|null; subject?: string|null; body: string; meta?: any }) {
   const provider = String(channel?.provider || '').toUpperCase();
   const type = String(channel?.channel_type || '').toUpperCase();
-  const creds = channel?.credentials || {};
+  const creds = decryptCredentialsObject(channel?.credentials || {});
   const cfg = channel?.config || {};
   const nowId = `${provider}-${Date.now()}-${Math.floor(Math.random()*10000)}`;
   const to = payload.to || cfg.chat_id || creds.chat_id || null;
 
   try {
+    if (provider === 'SMTP' || type === 'EMAIL') {
+      if (!to) return { ok: false, status: 'FAILED', provider_message_id: nowId, mode: 'error', note: 'Recipient email address required', error: 'Recipient email address required' };
+      const res = await sendEmail({
+        to: String(to),
+        subject: payload.subject || 'IzanDesk Notification',
+        text: payload.body,
+        html: payload.meta?.html,
+        attachments: payload.meta?.attachments,
+        override: {
+          ...(cfg.host || creds.host ? { host: cfg.host || creds.host } : {}),
+          ...(cfg.port || creds.port ? { port: Number(cfg.port || creds.port) } : {}),
+          ...(cfg.secure !== undefined ? { secure: !!cfg.secure } : {}),
+          ...(creds.user || creds.username ? { user: creds.user || creds.username } : {}),
+          ...(creds.pass || creds.password ? { pass: creds.pass || creds.password } : {}),
+          ...(channel?.sender_id || cfg.from ? { from: channel?.sender_id || cfg.from } : {}),
+        },
+      });
+      return {
+        ok: res.ok,
+        status: res.status,
+        provider_message_id: res.messageId || nowId,
+        mode: res.mode,
+        note: res.note,
+        ...(res.error ? { error: res.error } : {}),
+      };
+    }
     if (provider === 'GREENWEB') {
       const token = creds.token || creds.api_key;
       if (token) {

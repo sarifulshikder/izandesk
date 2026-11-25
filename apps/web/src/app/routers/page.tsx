@@ -284,6 +284,10 @@ export default function RoutersPage() {
               <F label="Password"><input className="form-control" type="password" value={form.password||''} onChange={e=>setForm({...form,password:e.target.value})}/></F>
               <F label="RouterOS Version"><select className="form-select" value={form.ros_version||'v7'} onChange={e=>setForm({...form,ros_version:e.target.value})}><option value="v7">v7</option><option value="v6">v6</option></select></F>
               <F label="Use SSL"><select className="form-select" value={form.use_ssl?'yes':'no'} onChange={e=>setForm({...form,use_ssl:e.target.value==='yes'})}><option value="no">No</option><option value="yes">Yes</option></select></F>
+              {form.use_ssl && <>
+                <F label="Verify TLS Certificate"><select className="form-select" value={form.tls_verify?'yes':'no'} onChange={e=>setForm({...form,tls_verify:e.target.value==='yes'})}><option value="no">Allow self-signed</option><option value="yes">Strict CA verification</option></select></F>
+                {form.tls_verify && <div className="md:col-span-2"><F label="Custom CA Certificate (PEM, optional)"><textarea className="form-control font-mono text-xs" rows={3} placeholder="-----BEGIN CERTIFICATE-----&#10;..." value={form.tls_ca_cert||''} onChange={e=>setForm({...form,tls_ca_cert:e.target.value})}/></F></div>}
+              </>}
               <div className="md:col-span-2 text-xs text-muted-foreground p-3 rounded-xl bg-muted/30 border border-border flex items-start gap-2"><Link2 className="w-4 h-4 mt-0.5 text-primary"/>Direct provisioning for subscribers assigned to this router (API/REST).</div>
             </>}
             {mode === 'RADIUS' && <>

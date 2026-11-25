@@ -73,11 +73,12 @@ export function networkGuard(req: any, res: any, next: any) {
 /** Remove sensitive device credentials before returning a router/NAS to clients. */
 export function sanitizeRouter<T = any>(row: T): T {
   if (!row || typeof row !== 'object') return row;
-  const { password, radius_secret, ...safe } = row as any;
+  const { password, radius_secret, tls_ca_cert, ...safe } = row as any;
   return {
     ...safe,
     has_password: !!(row as any).password,
     has_radius_secret: !!(row as any).radius_secret,
+    has_tls_ca_cert: !!(row as any).tls_ca_cert,
   } as T;
 }
 

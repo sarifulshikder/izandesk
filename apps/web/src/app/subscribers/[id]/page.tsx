@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import { ArrowLeft, RefreshCw, User, Activity, Package, MessageSquare, History, FileText, MapPin, Wifi, ShieldCheck } from 'lucide-react';
+import { TelemetryChart } from '@/components/charts/telemetry-chart';
 
 function badge(status: string) {
   const s = String(status || '').toUpperCase();
@@ -30,6 +31,7 @@ export default function Subscriber360Page() {
   const [equipment, setEquipment] = useState<any[]>([]);
   const [comms, setComms] = useState<any[]>([]);
   const [kyc, setKyc] = useState<any>(null);
+  const [telemetryHist, setTelemetryHist] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
@@ -37,15 +39,16 @@ export default function Subscriber360Page() {
     if (!token || !id) return;
     setLoading(true); setErr(null);
     try {
-      const [sub, fl, hist, eq, cm, kp] = await Promise.all([
+      const [sub, fl, hist, eq, cm, kp, th] = await Promise.all([
         apiFetch<any>(`/api/subscribers/${id}`, {}, token),
         apiFetch<any>(`/api/billing/fup/logs?subscriber_id=${id}`, {}, token).catch(()=>({data:[]})),
         apiFetch<any>(`/api/subscribers/${id}/history`, {}, token).catch(()=>({data:{status_changes:[]}})),
         apiFetch<any>(`/api/subscriber-equipment/subscriber/${id}`, {}, token).catch(()=>({data:[]})),
         apiFetch<any>(`/api/subscriber-communications/subscriber/${id}?limit=50`, {}, token).catch(()=>({data:[]})),
         apiFetch<any>(`/api/kyc/profiles/${id}`, {}, token).catch(()=>({data:null})),
+        apiFetch<any>(`/api/subscribers/${id}/telemetry-history?hours=24`, {}, token).catch(()=>({data:[]})),
       ]);
-      setD(sub); setFupLogs(fl?.data||[]); setHistory(hist?.data?.status_changes||[]); setEquipment(eq?.data||[]); setComms(cm?.data||[]); setKyc(kp?.data||null);
+      setD(sub); setFupLogs(fl?.data||[]); setHistory(hist?.data?.status_changes||[]); setEquipment(eq?.data||[]); setComms(cm?.data||[]); setKyc(kp?.data||null); setTelemetryHist(th?.data||[]);
     } catch (e: any) { setErr(e.message || 'Failed to load subscriber'); }
     finally { setLoading(false); }
   }, [token, id]);
@@ -113,6 +116,17 @@ export default function Subscriber360Page() {
           <div className="space-y-2 max-h-[260px] overflow-auto">{history.map((h:any,i:number)=><div key={h.id||i} className="p-2 rounded-lg border border-border bg-muted/20 text-xs"><div className="flex justify-between gap-2"><span className="font-medium">{h.action || h.status || 'Event'}</span><span className="text-muted-foreground">{fmtDate(h.created_at)}</span></div><div className="text-muted-foreground truncate">{typeof h.details === 'string' ? h.details : JSON.stringify(h.details || h.note || '')}</div></div>)}{!history.length && <div className="text-xs text-muted-foreground">No history.</div>}</div>
         </div>
       </div>
+
+      <TelemetryChart
+        title="Bandwidth History (Last 24h)"
+        subtitle="Collected from active MikroTik / RADIUS sessions"
+        labels={telemetryHist.map((p: any) => new Date(p.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}
+        series={[
+          { label: 'Download', color: '#14b8a6', values: telemetryHist.map((p: any) => +(Number(p.rx_bps || 0) / 1e6).toFixed(2)) },
+          { label: 'Upload', color: '#6366f1', values: telemetryHist.map((p: any) => +(Number(p.tx_bps || 0) / 1e6).toFixed(2)) },
+        ]}
+        unit=" Mbps"
+      />
 
       {fupLogs.length > 0 && <div className="card p-4"><h2 className="font-bold mb-2">FUP Logs</h2><div className="space-y-2 max-h-[220px] overflow-auto">{fupLogs.map((f:any,i:number)=><div key={f.id||i} className="text-xs p-2 rounded border border-border bg-muted/20 flex justify-between gap-2"><span>{f.action || 'FUP'} {f.details?.reason ? `- ${f.details.reason}` : ''}</span><span className="text-muted-foreground">{fmtDate(f.created_at)}</span></div>)}</div></div>}
     </div>

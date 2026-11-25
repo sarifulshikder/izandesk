@@ -1,19 +1,107 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import snmp = require('net-snmp');
+import { decryptSecretValue } from '../security/secret-store';
+import { recordPollMetric } from '../infra/metrics';
 
 const execFileAsync = promisify(execFile);
 
 export type OltRow = any;
 
-function hasBin(cmd: string): Promise<boolean> {
-  return execFileAsync('sh', ['-lc', `command -v ${cmd}`]).then(() => true).catch(() => false);
+function formatSnmpVarbindValue(vb: any): string {
+  if (!vb) return '';
+  const val = vb.value;
+  if (val === null || val === undefined) return '';
+  if (Buffer.isBuffer(val)) {
+    const isPrintableAscii = val.every((b) => (b >= 0x20 && b <= 0x7e) || b === 0x09 || b === 0x0a || b === 0x0d || b === 0x00);
+    if (val.length === 6 && (!isPrintableAscii || !/^[0-9a-f:.-]+$/i.test(val.toString('ascii')))) {
+      return Array.from(val).map((b) => b.toString(16).padStart(2, '0')).join(':');
+    }
+    if (!isPrintableAscii) {
+      return `Hex-STRING: ${Array.from(val).map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' ')}`;
+    }
+    return val.toString('utf8').replace(/\0+$/, '').trim();
+  }
+  return String(val).trim();
+}
+
+function normalizeOidWithDot(oid: string): string {
+  const s = String(oid || '').trim();
+  return s.startsWith('.') ? s : `.${s}`;
+}
+
+function stripLeadingDot(oid: string): string {
+  return String(oid || '').trim().replace(/^\./, '');
+}
+
+async function nativeSnmpGet(host: string, community: string, oids: string[], timeoutSec = 4, port = 161): Promise<Record<string, string>> {
+  return await new Promise((resolve, reject) => {
+    const session = snmp.createSession(host, community || 'public', {
+      port: Number(port) || 161,
+      retries: 0,
+      timeout: Math.max(1000, timeoutSec * 1000),
+      version: snmp.Version2c,
+    });
+    let closed = false;
+    const closeOnce = () => {
+      if (!closed) {
+        closed = true;
+        try { session.close(); } catch { /* ignore */ }
+      }
+    };
+    session.get(oids.map(stripLeadingDot), (err: any, varbinds: any[]) => {
+      closeOnce();
+      if (err) return reject(err);
+      const out: Record<string, string> = {};
+      for (const vb of (varbinds || [])) {
+        if (snmp.isVarbindError(vb)) continue;
+        out[normalizeOidWithDot(vb.oid)] = formatSnmpVarbindValue(vb);
+      }
+      resolve(out);
+    });
+  });
+}
+
+async function nativeSnmpWalk(host: string, community: string, oid: string, timeoutSec = 5, port = 161): Promise<string[]> {
+  return await new Promise((resolve, reject) => {
+    const session = snmp.createSession(host, community || 'public', {
+      port: Number(port) || 161,
+      retries: 0,
+      timeout: Math.max(1500, timeoutSec * 1000),
+      version: snmp.Version2c,
+    });
+    const lines: string[] = [];
+    let closed = false;
+    const closeOnce = () => {
+      if (!closed) {
+        closed = true;
+        try { session.close(); } catch { /* ignore */ }
+      }
+    };
+    session.subtree(
+      stripLeadingDot(oid),
+      20,
+      (varbinds: any[]) => {
+        for (const vb of (varbinds || [])) {
+          if (snmp.isVarbindError(vb)) continue;
+          const line = `${normalizeOidWithDot(vb.oid)} ${formatSnmpVarbindValue(vb)}`;
+          if (!isSnmpErrorLine(line)) lines.push(line);
+        }
+      },
+      (err: any) => {
+        closeOnce();
+        if (err && lines.length === 0) return reject(err);
+        resolve(lines);
+      },
+    );
+  });
+}
+
+function dockerExecAllowed(): boolean {
+  return String(process.env.OLT_ALLOW_DOCKER_EXEC || 'false').toLowerCase() === 'true';
 }
 
 async function dockerExecSnmp(args: string[], timeoutSec = 6): Promise<string> {
-  // Tunnel-aware execution: run inside wg-hub (has WG routes/tools when installed)
-  // Only a strict, validated IPv4 literal may be interpolated into the route
-  // command — a loose "contains a dot" match allowed shell injection via SNMP
-  // arguments (e.g. a crafted host/community value).
   const hostArg = args.find(a => /^(?:\d{1,3}\.){3}\d{1,3}$/.test(a) && String(a).split('.').every((n) => Number(n) <= 255));
   const wgIface = String(process.env.WG_INTERFACE || 'wg0').replace(/[^A-Za-z0-9_-]/g, '');
   const routeCmd = hostArg ? `ip route replace ${hostArg}/32 dev ${wgIface || 'wg0'} 2>/dev/null || true; ` : '';
@@ -23,48 +111,31 @@ async function dockerExecSnmp(args: string[], timeoutSec = 6): Promise<string> {
   return String(stdout || '');
 }
 
-async function runSnmp(bin: 'snmpget'|'snmpwalk'|'snmpbulkwalk', args: string[], timeoutSec = 5): Promise<string> {
-  // local first
-  if (await hasBin(bin)) {
-    try {
-      const { stdout } = await execFileAsync(bin, args, { timeout: (timeoutSec + 2) * 1000, maxBuffer: 4 * 1024 * 1024 });
-      return String(stdout || '');
-    } catch (e) {
-      // fall through to tunnel exec
-    }
-  }
-  // tunnel-aware fallback via wg-hub (requires docker CLI + socket access to host)
+async function snmpWalk(host: string, community: string, oid: string, timeoutSec = 5, port = 161): Promise<string[]> {
   try {
-    return await dockerExecSnmp([bin, ...args], timeoutSec);
-  } catch (e) {
-    throw new Error(`SNMP unavailable locally and tunnel exec failed (${bin}): ${(e as any).message || e}`);
+    return await nativeSnmpWalk(host, community, oid, timeoutSec, port);
+  } catch (nativeErr: any) {
+    if (!dockerExecAllowed()) throw nativeErr;
+    const args = ['-v2c', '-c', community || 'public', '-t', String(timeoutSec), '-r', '0', '-Oqn', `${host}:${port}`, oid];
+    const out = await dockerExecSnmp(['snmpbulkwalk', ...args], timeoutSec).catch(() => dockerExecSnmp(['snmpwalk', ...args], timeoutSec));
+    return out.split(/\r?\n/).map(s => s.trim()).filter(Boolean).filter(l => !isSnmpErrorLine(l));
   }
 }
 
-async function snmpWalk(host: string, community: string, oid: string, timeoutSec = 5): Promise<string[]> {
-  const bins: ('snmpbulkwalk'|'snmpwalk')[] = ['snmpbulkwalk', 'snmpwalk'];
-  let lastErr: any;
-  for (const bin of bins) {
-    try {
-      const args = ['-v2c', '-c', community || 'public', '-t', String(timeoutSec), '-r', '0', '-Oqn', host, oid];
-      const out = await runSnmp(bin, args, timeoutSec);
-      const lines = out.split(/\r?\n/).map(s => s.trim()).filter(Boolean).filter(l => !isSnmpErrorLine(l));
-      if (lines.length) return lines;
-    } catch (e) { lastErr = e; }
+async function snmpGet(host: string, community: string, oids: string[], timeoutSec = 4, port = 161): Promise<Record<string, string>> {
+  try {
+    return await nativeSnmpGet(host, community, oids, timeoutSec, port);
+  } catch (nativeErr: any) {
+    if (!dockerExecAllowed()) throw nativeErr;
+    const args = ['-v2c', '-c', community || 'public', '-t', String(timeoutSec), '-r', '0', '-Oqn', `${host}:${port}`, ...oids];
+    const out = await dockerExecSnmp(['snmpget', ...args], timeoutSec);
+    const res: Record<string, string> = {};
+    for (const line of out.split(/\r?\n/)) {
+      const m = line.match(/^(\S+)\s+(.*)$/);
+      if (m) res[m[1]] = m[2].replace(/^"|"$/g, '').trim();
+    }
+    return res;
   }
-  if (lastErr) throw lastErr;
-  return [];
-}
-
-async function snmpGet(host: string, community: string, oids: string[], timeoutSec = 4): Promise<Record<string,string>> {
-  const args = ['-v2c', '-c', community || 'public', '-t', String(timeoutSec), '-r', '0', '-Oqn', host, ...oids];
-  const out = await runSnmp('snmpget', args, timeoutSec);
-  const res: Record<string,string> = {};
-  for (const line of out.split(/\r?\n/)) {
-    const m = line.match(/^(\S+)\s+(.*)$/);
-    if (m) res[m[1]] = m[2].replace(/^"|"$/g, '').trim();
-  }
-  return res;
 }
 
 function parseIfNameLine(line: string): { oid: string; ifIndex: number; name: string } | null {
@@ -317,7 +388,7 @@ async function findOnuByFdbMac(host: string, community: string, clientMac: strin
 
 export async function oltFindOnuByClientMac(olt: OltRow, clientMac: string) {
   const host = String(olt.host || '').trim();
-  const community = String(olt.snmp_community || 'public');
+  const community = decryptSecretValue(olt.snmp_community) || 'public';
   const hit = await findOnuByFdbMac(host, community, clientMac);
   if (!hit) return { ok: false, mode: 'snmp', error: 'MAC not found in FDB' };
   const ifName = String(hit.ifName || '');
@@ -464,27 +535,33 @@ async function bdcomLastDownMap(host: string, community: string): Promise<Map<st
 
 export async function oltTest(olt: OltRow) {
   const host = String(olt.host || '').trim();
-  const community = String(olt.snmp_community || 'public');
+  const community = decryptSecretValue(olt.snmp_community) || 'public';
+  const port = Number(olt.snmp_port || 161) || 161;
+  const started = Date.now();
   try {
-    const vals = await snmpGet(host, community, ['.1.3.6.1.2.1.1.1.0', '.1.3.6.1.2.1.1.5.0', '.1.3.6.1.2.1.1.3.0'], 4);
+    const vals = await snmpGet(host, community, ['.1.3.6.1.2.1.1.1.0', '.1.3.6.1.2.1.1.5.0', '.1.3.6.1.2.1.1.3.0'], 4, port);
+    recordPollMetric('olt', true, Date.now() - started);
     const sysDescr = vals['.1.3.6.1.2.1.1.1.0'] || null;
     const sysName = vals['.1.3.6.1.2.1.1.5.0'] || null;
     const uptime = vals['.1.3.6.1.2.1.1.3.0'] || null;
     return { ok: true, mode: 'snmp', sysDescr, sysName, uptime };
   } catch (e: any) {
+    recordPollMetric('olt', false, Date.now() - started);
     return { ok: false, mode: 'simulated', error: e.message || String(e) };
   }
 }
 
 export async function oltDiscoverOnus(olt: OltRow) {
   const host = String(olt.host || '').trim();
-  const community = String(olt.snmp_community || 'public');
+  const community = decryptSecretValue(olt.snmp_community) || 'public';
+  const port = Number(olt.snmp_port || 161) || 161;
   const vendor = String(olt.vendor || '').toUpperCase();
+  const started = Date.now();
   try {
     // VSOL/EPON and generic IF-MIB based discovery (works for V1600D and similar that expose EPONxxONUyy in ifName)
-    const ifNames = await snmpWalk(host, community, '.1.3.6.1.2.1.31.1.1.1.1', 6);
+    const ifNames = await snmpWalk(host, community, '.1.3.6.1.2.1.31.1.1.1.1', 6, port);
     let oper: string[] = [];
-    try { oper = await snmpWalk(host, community, '.1.3.6.1.2.1.2.2.1.8', 5); } catch {}
+    try { oper = await snmpWalk(host, community, '.1.3.6.1.2.1.2.2.1.8', 5, port); } catch {}
     const operMap = new Map<number, number>();
     for (const l of oper) { const p = parseOperLine(l); if (p) operMap.set(p.ifIndex, p.status); }
 
@@ -550,6 +627,7 @@ export async function oltDiscoverOnus(olt: OltRow) {
         : isBdcom
           ? 'Discovered via IF-MIB (EPON ONU interfaces) with BDCOM MAC/RX/TX/distance/diag/name enrichment (best-effort, vendor MIB).'
           : 'Discovered via IF-MIB (EPON ONU interfaces)';
+      recordPollMetric('olt', true, Date.now() - started);
       return { ok: true, mode: 'snmp', onus, note };
     }
 
@@ -575,6 +653,7 @@ export async function oltDiscoverOnus(olt: OltRow) {
     }
     return { ok: false, mode: 'snmp', error: 'SNMP reachable but no ONU table matched (no EPON ONU interfaces found)' };
   } catch (e: any) {
+    recordPollMetric('olt', false, Date.now() - started);
     // Simulated fallback
     const discovered = [];
     for (let i=0; i<3; i++) {
@@ -590,12 +669,15 @@ export async function oltDiscoverOnus(olt: OltRow) {
 
 export async function oltRefreshTelemetry(olt: OltRow, onus: any[]) {
   const host = String(olt.host || '').trim();
-  const community = String(olt.snmp_community || 'public');
+  const community = decryptSecretValue(olt.snmp_community) || 'public';
+  const port = Number(olt.snmp_port || 161) || 161;
   const vendor = String(olt.vendor || '').toUpperCase();
+  const started = Date.now();
   // Best-effort: for IF-MIB discovered ONUs, refresh online/offline and vendor optical/MAC where mapped
   try {
-    const ifNames = await snmpWalk(host, community, '.1.3.6.1.2.1.31.1.1.1.1', 6);
-    const oper = await snmpWalk(host, community, '.1.3.6.1.2.1.2.2.1.8', 5).catch(()=>[]);
+    const ifNames = await snmpWalk(host, community, '.1.3.6.1.2.1.31.1.1.1.1', 6, port);
+    const oper = await snmpWalk(host, community, '.1.3.6.1.2.1.2.2.1.8', 5, port).catch(()=>[]);
+    recordPollMetric('olt', true, Date.now() - started);
     const operMap = new Map<number, number>();
     for (const l of oper) { const p = parseOperLine(l); if (p) operMap.set(p.ifIndex, p.status); }
     const nameToStatus = new Map<string, string>();
@@ -637,6 +719,7 @@ export async function oltRefreshTelemetry(olt: OltRow, onus: any[]) {
       return { id: o.id, status: status || o.status, rx_power_dbm: rx, tx_power_dbm: tx, temperature_c, voltage_v, tx_bias_ma, mac_address: mac, distance_m: dist, last_down_cause: lastDown };
     }) };
   } catch (e: any) {
+    recordPollMetric('olt', false, Date.now() - started);
     return { ok: true, mode: 'simulated', reason: e.message, onus: onus.map(o => ({ id: o.id, status: o.status, rx_power_dbm: o.rx_power_dbm ?? -(17 + Math.random()*12), tx_power_dbm: o.tx_power_dbm ?? +(0.5 + Math.random()*3.5) })) };
   }
 }

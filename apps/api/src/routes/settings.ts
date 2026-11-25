@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import net from 'net';
 import { pool } from '../db';
 import { asyncHandler, ValidationError } from './helpers';
-import { reqActor } from '../integrations/audit';
+import { auditLog, reqActor } from '../integrations/audit';
+import { verifySmtpConnection } from '../integrations/mailer';
 import {
   SETTINGS_SCHEMA, SETTINGS_CATEGORIES, defFor,
   getAllSettings, setCategory, resetCategory, maskedView,
@@ -88,37 +88,23 @@ router.post('/reset/:category', asyncHandler(async (req, res) => {
   res.json({ ok: true, ...result });
 }));
 
-// Minimal SMTP connectivity test (connect + banner + EHLO), no nodemailer needed
+// Real SMTP verification (auth + TLS/STARTTLS) via Nodemailer, with optional test email
 router.post('/test-smtp', asyncHandler(async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const b = req.body || {};
-  const host = String(b.host || '');
+  const host = String(b.host || '').trim();
   const port = Number(b.port || 587);
   if (!host) throw new ValidationError('host is required');
-  const result = await new Promise<{ ok: boolean; detail: string }>((resolve) => {
-    const sock = new net.Socket();
-    let stage = 'connect';
-    let buf = '';
-    const done = (ok: boolean, detail: string) => { try { sock.destroy(); } catch {} resolve({ ok, detail }); };
-    sock.setTimeout(8000);
-    sock.on('timeout', () => done(false, 'timeout during ' + stage));
-    sock.on('error', (e) => done(false, `${stage}: ${e.message}`));
-    sock.connect(port, host, () => {
-      stage = 'banner';
-      sock.write('EHLO izandesk-test\r\n');
-    });
-    sock.on('data', (d) => {
-      buf += d.toString();
-      if (stage === 'banner') {
-        if (buf.includes('220')) { stage = 'ehlo'; buf = ''; }
-        else if (/^\d{3}/.test(buf) && !buf.startsWith('220')) done(false, 'unexpected banner: ' + buf.trim().split('\r\n')[0]);
-      } else if (stage === 'ehlo') {
-        if (buf.includes('250')) done(true, `SMTP ${host}:${port} reachable (EHLO 250 OK)`);
-        else if (/^[45]\d{2}/m.test(buf)) done(false, 'EHLO rejected: ' + buf.trim().split('\r\n')[0]);
-      }
-    });
+  const result = await verifySmtpConnection({
+    host,
+    port,
+    ...(b.secure !== undefined ? { secure: b.secure === true || b.secure === 'true' } : {}),
+    ...(b.user !== undefined ? { user: String(b.user) } : {}),
+    ...(b.pass ? { pass: String(b.pass) } : {}),
+    ...(b.from ? { from: String(b.from) } : {}),
+    ...(b.test_to ? { test_to: String(b.test_to).trim() } : {}),
   });
-  await (await import('../integrations/audit')).auditLog({ ...reqActor(req), action: 'settings.test_smtp', entity_type: 'settings', entity_id: 'notifications.smtp', details: { host, port, ok: result.ok } });
+  await auditLog({ ...reqActor(req), action: 'settings.test_smtp', entity_type: 'settings', entity_id: 'notifications.smtp', details: { host, port, ok: result.ok } });
   res.json({ ok: result.ok, ...result });
 }));
 

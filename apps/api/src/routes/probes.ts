@@ -1,5 +1,8 @@
 import type { Express, Request, Response } from 'express';
 import { getSchedulerMetrics } from '../integrations/scheduler-observability';
+import { isRedisEnabled, isRedisReady } from '../infra/redis';
+import { getQueuesOverview } from '../infra/queues';
+import { renderAppPrometheusLines } from '../infra/metrics';
 
 type ProbeDeps = {
   getDbReady: () => boolean;
@@ -75,6 +78,12 @@ export function registerProbeRoutes(app: Express, deps: ProbeDeps) {
         }
       } catch {}
     }
+    const queueOverview = await getQueuesOverview().catch(() => ({ active: false, queues: [] }));
+    const extraLines = renderAppPrometheusLines({
+      redisReady: isRedisEnabled() ? isRedisReady() : null,
+      queues: queueOverview.active ? queueOverview.queues : [],
+    });
+    lines.push(...extraLines);
     res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
     res.status(200).send(lines.join('\n') + '\n');
   });

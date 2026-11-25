@@ -8,6 +8,10 @@ import { asyncHandler } from './helpers';
 import { LITE_MODE } from '../config/runtime';
 import { emitNocAlert } from '../integrations/noc-alerts';
 import { withSchedulerRun, getSchedulerStatus, getSchedulerMetrics } from '../integrations/scheduler-observability';
+import { getMigrationStatus } from '../db/migrator';
+import { getQueuesOverview, isQueuesActive, registerQueueHandler, retryFailedJobs, scheduleRecurringJob, type QueueName } from '../infra/queues';
+import { getSecurityStatus } from '../security/guards';
+import { isRedisReady } from '../infra/redis';
 
 const router: Router = Router();
 function requireAdmin(req:any,res:any){ if (!['SUPER_ADMIN','NOC_ENGINEER'].includes(String((req as any).user?.role))) { res.status(403).json({ message: 'Forbidden' }); return false; } return true; }
@@ -117,6 +121,11 @@ export function startBackupScheduler() {
       });
     } catch (e:any) { console.error('[BackupScheduler] error', e.message); }
   };
+  registerQueueHandler('ops', 'db-backup', runOnce);
+  if (isQueuesActive()) {
+    void scheduleRecurringJob('ops', 'sched:db-backup', 'db-backup', intervalMs);
+    return;
+  }
   setTimeout(runOnce, 60 * 1000);
   setInterval(runOnce, intervalMs);
 }
@@ -229,8 +238,40 @@ router.post('/alerts/:id/ack', asyncHandler(async (req, res) => {
 
 router.get('/schedulers', asyncHandler(async (req, res) => {
   if (!requireAdmin(req,res)) return;
-  const [status, metrics] = await Promise.all([getSchedulerStatus(), getSchedulerMetrics()]);
-  res.json({ ok: true, ...status, metrics });
+  const [status, metrics, queues] = await Promise.all([
+    getSchedulerStatus(),
+    getSchedulerMetrics(),
+    getQueuesOverview().catch(() => ({ active: false, queues: [] })),
+  ]);
+  res.json({ ok: true, ...status, metrics, queues });
+}));
+
+router.get('/queues', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const overview = await getQueuesOverview();
+  res.json({ ok: true, redis_ready: isRedisReady(), ...overview });
+}));
+
+router.post('/queues/:name/retry', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const name = String(req.params.name || '').toLowerCase() as QueueName;
+  if (!['billing', 'network', 'messaging', 'ops'].includes(name)) {
+    return res.status(400).json({ ok: false, message: 'Unknown queue name' });
+  }
+  const out = await retryFailedJobs(name);
+  res.json(out);
+}));
+
+router.get('/migrations', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const rows = await getMigrationStatus();
+  res.json({ ok: true, data: rows });
+}));
+
+router.get('/security-status', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  const s = getSecurityStatus();
+  res.json({ ok: true, status: s });
 }));
 
 export default router;

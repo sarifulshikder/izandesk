@@ -9,6 +9,8 @@ import { dispatchMessage, trySendTemplateToSubscriber } from '../integrations/me
 import { renderInvoiceHtml, renderSimpleInvoicePdf } from '../integrations/pdf';
 import { auditLog, reqActor } from '../integrations/audit';
 import { getBusinessDateYmd } from '../integrations/settings';
+import { decryptCredentialsObject, decryptSecretValue, encryptCredentialsObject, encryptSecretValue } from '../security/secret-store';
+import { sendEmail } from '../integrations/mailer';
 
 const router: Router = Router();
 
@@ -258,17 +260,25 @@ router.get('/gateways', asyncHandler(async (_req, res) => {
 router.post('/gateways/:gateway', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
   const b = req.body || {};
+  const encCreds = b.credentials ? encryptCredentialsObject(b.credentials) : null;
+  const encSecret = encryptSecretValue(b.webhook_secret);
   const r = await pool.query(`INSERT INTO payment_gateway_configs(gateway, enabled, mode, config, credentials, webhook_secret, updated_at)
     VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,now())
     ON CONFLICT (gateway) DO UPDATE SET enabled=COALESCE($2,payment_gateway_configs.enabled), mode=COALESCE($3,payment_gateway_configs.mode), config=COALESCE($4::jsonb,payment_gateway_configs.config), credentials=COALESCE($5::jsonb,payment_gateway_configs.credentials), webhook_secret=COALESCE($6,payment_gateway_configs.webhook_secret), updated_at=now() RETURNING gateway,enabled,mode,config,updated_at`,
-    [req.params.gateway, b.enabled, b.mode, b.config ? JSON.stringify(b.config) : null, b.credentials ? JSON.stringify(b.credentials) : null, b.webhook_secret || null]);
+    [req.params.gateway, b.enabled, b.mode, b.config ? JSON.stringify(b.config) : null, encCreds ? JSON.stringify(encCreds) : null, encSecret]);
   await auditLog({ ...reqActor(req), action: 'PAYMENT_GATEWAY_CONFIG', entity_type: 'payment_gateway', entity_id: String(req.params.gateway), details: { enabled: r.rows[0]?.enabled, mode: r.rows[0]?.mode, credentials_changed: !!b.credentials, webhook_secret_changed: !!b.webhook_secret } });
   res.json({ ok: true, gateway: r.rows[0] });
 }));
 
 async function getGatewayConfig(gateway: string) {
   const r = await pool.query('SELECT * FROM payment_gateway_configs WHERE gateway=$1', [gateway]);
-  return r.rows[0] || null;
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    ...row,
+    credentials: decryptCredentialsObject(row.credentials || {}),
+    webhook_secret: decryptSecretValue(row.webhook_secret),
+  };
 }
 
 function pickVal(obj: any, ...keys: string[]) {
@@ -671,6 +681,26 @@ router.get('/invoices/:id/share', asyncHandler(async (req, res) => {
   const htmlUrl = `${base}/api/billing/invoices/${inv.id}/html?token=${encodeURIComponent(signInvoiceToken(inv.id))}`;
   const payUrl = `${base}/billing?invoice=${encodeURIComponent(inv.id)}`;
   res.json({ ok: true, invoice_id: inv.id, invoice_number: inv.invoice_number, pdf_url: pdfUrl, html_url: htmlUrl, payment_url: payUrl });
+}));
+
+router.post('/invoices/:id/send-email', asyncHandler(async (req, res) => {
+  if (!requireBillingRole(req, res)) return;
+  const inv = await getInvoiceWithItems(req.params.id);
+  if (!inv) return res.status(404).json({ message: 'Invoice not found' });
+  const to = String((req.body as any)?.to || inv.subscriber_email || inv.email || '').trim();
+  if (!to) return res.status(400).json({ message: 'Recipient email address is required (subscriber has no email on file)' });
+  const base = `${req.protocol}://${req.get('host')}`;
+  const html = renderInvoiceHtml(inv, { baseUrl: base, paymentUrl: `${base}/billing?invoice=${encodeURIComponent(inv.id)}` });
+  const pdf = renderSimpleInvoicePdf(inv);
+  const result = await sendEmail({
+    to,
+    subject: `Invoice ${inv.invoice_number || inv.id}`,
+    text: `Invoice ${inv.invoice_number || inv.id} for ${inv.subscriber_name || 'Subscriber'}. Total: ${inv.total_amount ?? inv.amount}, Due: ${inv.due_amount}.`,
+    html,
+    attachments: [{ filename: `invoice-${inv.invoice_number || inv.id}.pdf`, content: pdf, contentType: 'application/pdf' }],
+  });
+  await auditLog({ ...reqActor(req), action: 'invoice.send_email', entity_type: 'invoice', entity_id: String(inv.id), details: { to, status: result.status, mode: result.mode } });
+  res.status(result.ok ? 200 : 502).json(result);
 }));
 
 export default router;

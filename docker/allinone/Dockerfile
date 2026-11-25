@@ -45,6 +45,7 @@ RUN apk add --no-cache \
 
 WORKDIR /app/api
 COPY --from=api-build /out/api ./
+COPY apps/api/migrations/ ./migrations/
 COPY --from=web-build /app/apps/web/.next/standalone/ /app/web/
 # Bundled plugins are outside the api package and are not part of `pnpm deploy`.
 COPY plugins/ /plugins/

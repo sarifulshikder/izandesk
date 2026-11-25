@@ -5,9 +5,10 @@ import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
 import McpAdmin from '@/components/settings/mcp-admin';
 import { SecurityAdmin } from '@/components/settings/security-admin';
+import { StaffAdmin } from '@/components/settings/staff-admin';
 import {
   Settings as SettingsIcon, Shield, Bell, Palette, Receipt, Network as NetworkIcon,
-  Save, RotateCcw, KeyRound, Send, AlertTriangle, CheckCircle2, Building2, Bot, ClipboardCheck,
+  Save, RotateCcw, KeyRound, Send, AlertTriangle, CheckCircle2, Building2, Bot, ClipboardCheck, Users,
 } from 'lucide-react';
 
 type Field = {
@@ -35,6 +36,7 @@ export default function SettingsPage() {
   const [pwMsg, setPwMsg] = useState<string | null>(null);
   const [pwErr, setPwErr] = useState<string | null>(null);
   const [smtpMsg, setSmtpMsg] = useState<string | null>(null);
+  const [smtpTestTo, setSmtpTestTo] = useState('');
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -107,6 +109,11 @@ export default function SettingsPage() {
         body: JSON.stringify({
           host: form.smtp_host || saved.smtp_host || '',
           port: Number(form.smtp_port ?? saved.smtp_port ?? 587),
+          secure: form.smtp_secure ?? saved.smtp_secure,
+          user: form.smtp_user ?? saved.smtp_user,
+          ...(form.smtp_pass ? { pass: form.smtp_pass } : {}),
+          ...(form.smtp_from ? { from: form.smtp_from } : {}),
+          ...(smtpTestTo.trim() ? { test_to: smtpTestTo.trim() } : {}),
         }),
       }, token);
       setSmtpMsg(r.ok ? `✅ ${r.detail}` : `❌ ${r.detail}`);
@@ -188,9 +195,14 @@ export default function SettingsPage() {
             </button>
           );
         })}
+        {isAdmin && (
+          <button onClick={() => setTab('staff')} className={`page-tab ${tab === 'staff' ? 'active' : ''}`}>
+            <Users className="w-3.5 h-3.5"/>Staff &amp; Access
+          </button>
+        )}
       </div>
 
-      {schema && (
+      {schema && tab !== 'staff' && (
         <div className="card overflow-hidden">
           <div className="flex items-start justify-between gap-3 px-4 py-3.5 border-b border-border bg-card-cap/60">
             <div>
@@ -220,12 +232,23 @@ export default function SettingsPage() {
               <span className="text-[11px] text-muted-foreground">Viewing in read-only mode.</span>
             )}
             {tab === 'notifications' && isAdmin && (
-              <button onClick={testSmtp} className="btn btn-outline"><Send className="w-4 h-4"/>Test SMTP</button>
+              <>
+                <input
+                  type="email"
+                  className="form-control max-w-[220px]"
+                  placeholder="Optional test recipient email"
+                  value={smtpTestTo}
+                  onChange={(e) => setSmtpTestTo(e.target.value)}
+                />
+                <button onClick={testSmtp} className="btn btn-outline"><Send className="w-4 h-4"/>Test SMTP</button>
+              </>
             )}
             {smtpMsg && <span className="text-xs text-muted-foreground">{smtpMsg}</span>}
           </div>
         </div>
       )}
+
+      {tab === 'staff' && isAdmin && <StaffAdmin token={token} currentUserId={user?.id} />}
 
       {tab === 'mcp' && <McpAdmin token={token} isAdmin={isAdmin} />}
 

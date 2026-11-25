@@ -16,6 +16,8 @@ Set these in `apps/api/.env` (and the matching compose variables):
 | `SECURITY_STRICT_MODE` | `true` (optional) | Applies the same fatal checks in staging/CI |
 | `KYC_ENCRYPTION_KEYS` | `v1:<base64 32-byte key>[,v2:...]` | AES-256-GCM keys for KYC files at rest |
 | `KYC_ENCRYPTION_ACTIVE_KEY_ID` | Active key id, e.g. `v1` | Selects the key used for new uploads |
+| `SECRETS_ENCRYPTION_KEYS` | `v1:<base64 32-byte key>[,v2:...]` | Dedicated AES-256-GCM keys for TOTP seeds, router/OLT passwords, SNMP communities, gateway & messaging credentials (independent of `JWT_SECRET`) |
+| `SECRETS_ENCRYPTION_ACTIVE_KEY_ID` | Active key id, e.g. `v1` | Selects the key used for encrypting new/rotated secrets |
 
 With demos disabled, also set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD_HASH` (or `BOOTSTRAP_ADMIN_PASSWORD` for a local demo). Without them no staff user can sign in. When using `docker/docker-compose.yml`, put these values in `docker/.env` — the compose file forwards them to the API container.
 

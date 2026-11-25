@@ -7,6 +7,7 @@
  * SECURITY_ALLOW_INSECURE_DEMO=true (never use that in production).
  */
 import { isKycActiveKeyConfigured, isKycEncryptionKeyConfigured } from './file-encryption';
+import { isSecretsEncryptionConfigured } from './secret-store';
 
 const INSECURE_SECRETS = new Set([
   'change-me',
@@ -34,6 +35,7 @@ export type SecurityStatus = {
   jwtSecretConfigured: boolean;
   dbPasswordConfigured: boolean;
   kycEncryptionConfigured: boolean;
+  secretsEncryptionConfigured: boolean;
   lanOriginsAllowed: boolean;
   warnings: string[];
 };
@@ -48,6 +50,7 @@ export function getSecurityStatus(): SecurityStatus {
   const jwtSecretConfigured = jwt.length >= 32 && !INSECURE_SECRETS.has(jwt.toLowerCase());
   const dbPasswordConfigured = !!dbPassword && !INSECURE_DB_PASSWORDS.has(dbPassword.toLowerCase());
   const kycEncryptionConfigured = isKycEncryptionKeyConfigured() && isKycActiveKeyConfigured();
+  const secretsEncryptionConfigured = isSecretsEncryptionConfigured();
   const demoAccountsDisabled = enabled(process.env.DISABLE_DEMO_ACCOUNTS);
   const webOriginConfigured = String(process.env.WEB_ORIGIN || '').trim().length > 0;
   const lanOriginsAllowed = String(process.env.ALLOW_LAN_ORIGINS || 'true').toLowerCase() !== 'false';
@@ -55,6 +58,7 @@ export function getSecurityStatus(): SecurityStatus {
   if (!jwtSecretConfigured) warnings.push('JWT_SECRET is missing, too short (<32 chars), or a known default value.');
   if (!dbPasswordConfigured) warnings.push('DB_PASSWORD is missing or a known default value.');
   if (!kycEncryptionConfigured) warnings.push('KYC_ENCRYPTION_KEYS / KYC_ENCRYPTION_ACTIVE_KEY_ID is missing or inconsistent; KYC files fall back to a JWT_SECRET-derived demo key.');
+  if (!secretsEncryptionConfigured) warnings.push('SECRETS_ENCRYPTION_KEY / SECRETS_ENCRYPTION_KEYS is missing; stored secrets fall back to a JWT_SECRET-derived key.');
   if (!demoAccountsDisabled) warnings.push('Demo accounts are enabled (DISABLE_DEMO_ACCOUNTS is not true).');
   if (!webOriginConfigured) warnings.push('WEB_ORIGIN is empty; browser origin policy is unrestricted.');
   if (lanOriginsAllowed) warnings.push('ALLOW_LAN_ORIGINS is enabled; private-network origins are accepted.');
@@ -67,6 +71,7 @@ export function getSecurityStatus(): SecurityStatus {
     jwtSecretConfigured,
     dbPasswordConfigured,
     kycEncryptionConfigured,
+    secretsEncryptionConfigured,
     lanOriginsAllowed,
     warnings,
   };

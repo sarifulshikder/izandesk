@@ -2,36 +2,58 @@ import { RouterOSAPI } from 'node-routeros';
 import { acquireMikrotikApi, releaseMikrotikApi, invalidateMikrotikApi } from './mikrotik-manager';
 import { isTransientMikrotikError, normalizeMikrotikError } from './mikrotik-errors';
 import * as https from 'https';
+import { decryptSecretValue } from '../security/secret-store';
+import { recordPollMetric } from '../infra/metrics';
 
 export type RouterRow = any;
 
 const insecureAgent = new https.Agent({ rejectUnauthorized: false });
+const strictAgentCache = new Map<string, https.Agent>();
+
+function httpsAgentFor(o: any): https.Agent {
+  if (!o.tlsVerify) return insecureAgent;
+  const ca = String(o.ca || '').trim();
+  if (!ca) return new https.Agent({ rejectUnauthorized: true });
+  let cached = strictAgentCache.get(ca);
+  if (!cached) {
+    cached = new https.Agent({ rejectUnauthorized: true, ca });
+    if (strictAgentCache.size > 50) strictAgentCache.clear();
+    strictAgentCache.set(ca, cached);
+  }
+  return cached;
+}
 
 function rosOpts(r: RouterRow, mode: 'API'|'REST') {
   const host = String(r.host || '').trim();
   const user = String(r.username || 'admin');
-  const password = String(r.password || '');
+  const password = decryptSecretValue(r.password);
+  const tlsVerify = !!r.tls_verify;
+  const ca = String(r.tls_ca_cert || process.env.MIKROTIK_TLS_CA_CERT || '').trim();
   const timeout = 8;
   if (mode === 'REST') {
     const port = Number(r.rest_port || (r.use_ssl ? 443 : 80));
     const scheme = r.use_ssl ? 'https' : 'http';
-    return { host, user, password, port, scheme, timeout, insecure: !!r.use_ssl };
+    return { host, user, password, port, scheme, timeout, insecure: !!r.use_ssl && !tlsVerify, tlsVerify, ca };
   }
   const port = Number(r.api_port || (r.use_ssl ? 8729 : 8728));
-  return { host, user, password, port, tls: !!r.use_ssl, timeout };
+  return { host, user, password, port, tls: !!r.use_ssl, tlsVerify, ca, timeout };
 }
 
 async function restFetch(o: any, path: string) {
   const url = `${o.scheme}://${o.host}:${o.port}/rest${path}`;
   const auth = Buffer.from(`${o.user}:${o.password}`).toString('base64');
   const init: any = { headers: { Authorization: `Basic ${auth}` }, signal: (AbortSignal as any).timeout(o.timeout * 1000) };
-  // Node fetch: for self-signed https, use dispatcher if available, else fallback to https module
   if (o.scheme === 'https') {
     try {
       const undici = require('undici');
-      if (undici?.Agent) init.dispatcher = new undici.Agent({ connect: { rejectUnauthorized: false } });
+      if (undici?.Agent) {
+        init.dispatcher = new undici.Agent({
+          connect: o.tlsVerify
+            ? { rejectUnauthorized: true, ...(o.ca ? { ca: o.ca } : {}) }
+            : { rejectUnauthorized: false },
+        });
+      }
     } catch {
-      // fallback handled below by using https.get/post via manual fetch? easier: set env not ideal; use node https
       return await restFetchHttps(o, path);
     }
   }
@@ -43,7 +65,7 @@ async function restFetch(o: any, path: string) {
 function restFetchHttps(o: any, path: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const auth = Buffer.from(`${o.user}:${o.password}`).toString('base64');
-    const req = https.request({ hostname: o.host, port: o.port, path: `/rest${path}`, method: 'GET', headers: { Authorization: `Basic ${auth}` }, agent: insecureAgent, timeout: o.timeout * 1000 }, (res) => {
+    const req = https.request({ hostname: o.host, port: o.port, path: `/rest${path}`, method: 'GET', headers: { Authorization: `Basic ${auth}` }, agent: httpsAgentFor(o), timeout: o.timeout * 1000 }, (res) => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
@@ -91,48 +113,56 @@ export async function mikrotikTest(r: RouterRow) {
 }
 
 export async function mikrotikTelemetry(r: RouterRow) {
+  const started = Date.now();
   const mode = String(r.integration_mode || 'API').toUpperCase();
-  if (mode === 'REST') {
-    const o = rosOpts(r, 'REST') as any;
-    const [resource, ident] = await Promise.all([
-      restFetch(o, '/system/resource').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/system/resource'); throw e; }),
-      restFetch(o, '/system/identity').catch(async () => { try { if (o.scheme === 'https') return await restFetchHttps(o, '/system/identity'); } catch {} return {}; })
-    ]);
-    const reso: any = resource || {};
-    const totalMem = Number(reso['total-memory'] || reso.total_memory || 0);
-    const freeMem = Number(reso['free-memory'] || reso.free_memory || 0);
-    const uptime = parseUptime(String(reso.uptime || '0s'));
-    return {
-      status: 'ONLINE',
-      cpu_load: Number(reso['cpu-load'] || reso.cpu_load || 0),
-      memory_total_mb: totalMem ? +(totalMem / 1024 / 1024).toFixed(2) : null,
-      memory_used_mb: totalMem && freeMem ? +((totalMem - freeMem) / 1024 / 1024).toFixed(2) : null,
-      uptime_seconds: uptime,
-      identity: (ident as any).name || (ident as any).identity || r.identity,
-      board_name: reso['board-name'] || reso.board_name || r.board_name,
-      rx_bps: 0, tx_bps: 0,
-    };
-  }
-  const api = await acquireMikrotikApi(r, 'API');
-  let ok = false;
   try {
-    const [resource, ident] = await Promise.all([api.write('/system/resource/print'), api.write('/system/identity/print').catch(()=>[])]);
-    const reso: any = (resource && resource[0]) || {};
-    const totalMem = Number(reso['total-memory'] || 0);
-    const freeMem = Number(reso['free-memory'] || 0);
-    const uptime = parseUptime(String(reso.uptime || '0s'));
-    ok = true;
-    return {
-      status: 'ONLINE',
-      cpu_load: Number(reso['cpu-load'] || 0),
-      memory_total_mb: totalMem ? +(totalMem / 1024 / 1024).toFixed(2) : null,
-      memory_used_mb: totalMem && freeMem ? +((totalMem - freeMem) / 1024 / 1024).toFixed(2) : null,
-      uptime_seconds: uptime,
-      identity: (ident && ident[0] && ident[0].name) || r.identity,
-      board_name: reso['board-name'] || r.board_name,
-      rx_bps: 0, tx_bps: 0,
-    };
-  } finally { await releaseMikrotikApi(r, api, ok, 'API'); }
+    if (mode === 'REST') {
+      const o = rosOpts(r, 'REST') as any;
+      const [resource, ident] = await Promise.all([
+        restFetch(o, '/system/resource').catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, '/system/resource'); throw e; }),
+        restFetch(o, '/system/identity').catch(async () => { try { if (o.scheme === 'https') return await restFetchHttps(o, '/system/identity'); } catch {} return {}; })
+      ]);
+      const reso: any = resource || {};
+      const totalMem = Number(reso['total-memory'] || reso.total_memory || 0);
+      const freeMem = Number(reso['free-memory'] || reso.free_memory || 0);
+      const uptime = parseUptime(String(reso.uptime || '0s'));
+      recordPollMetric('mikrotik', true, Date.now() - started);
+      return {
+        status: 'ONLINE',
+        cpu_load: Number(reso['cpu-load'] || reso.cpu_load || 0),
+        memory_total_mb: totalMem ? +(totalMem / 1024 / 1024).toFixed(2) : null,
+        memory_used_mb: totalMem && freeMem ? +((totalMem - freeMem) / 1024 / 1024).toFixed(2) : null,
+        uptime_seconds: uptime,
+        identity: (ident as any).name || (ident as any).identity || r.identity,
+        board_name: reso['board-name'] || reso.board_name || r.board_name,
+        rx_bps: 0, tx_bps: 0,
+      };
+    }
+    const api = await acquireMikrotikApi(r, 'API');
+    let ok = false;
+    try {
+      const [resource, ident] = await Promise.all([api.write('/system/resource/print'), api.write('/system/identity/print').catch(()=>[])]);
+      const reso: any = (resource && resource[0]) || {};
+      const totalMem = Number(reso['total-memory'] || 0);
+      const freeMem = Number(reso['free-memory'] || 0);
+      const uptime = parseUptime(String(reso.uptime || '0s'));
+      ok = true;
+      recordPollMetric('mikrotik', true, Date.now() - started);
+      return {
+        status: 'ONLINE',
+        cpu_load: Number(reso['cpu-load'] || 0),
+        memory_total_mb: totalMem ? +(totalMem / 1024 / 1024).toFixed(2) : null,
+        memory_used_mb: totalMem && freeMem ? +((totalMem - freeMem) / 1024 / 1024).toFixed(2) : null,
+        uptime_seconds: uptime,
+        identity: (ident && ident[0] && ident[0].name) || r.identity,
+        board_name: reso['board-name'] || r.board_name,
+        rx_bps: 0, tx_bps: 0,
+      };
+    } finally { await releaseMikrotikApi(r, api, ok, 'API'); }
+  } catch (e) {
+    recordPollMetric('mikrotik', false, Date.now() - started);
+    throw e;
+  }
 }
 
 async function restSend(o: any, method: string, path: string, body?: any) {
@@ -141,7 +171,16 @@ async function restSend(o: any, method: string, path: string, body?: any) {
   const init: any = { method, headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' }, signal: (AbortSignal as any).timeout(o.timeout * 1000) };
   if (body !== undefined) init.body = JSON.stringify(body);
   if (o.scheme === 'https') {
-    try { const undici = require('undici'); if (undici?.Agent) init.dispatcher = new undici.Agent({ connect: { rejectUnauthorized: false } }); } catch { return await restSendHttps(o, method, path, body); }
+    try {
+      const undici = require('undici');
+      if (undici?.Agent) {
+        init.dispatcher = new undici.Agent({
+          connect: o.tlsVerify
+            ? { rejectUnauthorized: true, ...(o.ca ? { ca: o.ca } : {}) }
+            : { rejectUnauthorized: false },
+        });
+      }
+    } catch { return await restSendHttps(o, method, path, body); }
   }
   const res = await fetch(url, init);
   const text = await res.text().catch(()=> '');
@@ -152,7 +191,7 @@ function restSendHttps(o: any, method: string, path: string, body?: any): Promis
   return new Promise((resolve, reject) => {
     const auth = Buffer.from(`${o.user}:${o.password}`).toString('base64');
     const payload = body !== undefined ? JSON.stringify(body) : '';
-    const req = https.request({ hostname: o.host, port: o.port, path: `/rest${path}`, method, headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }, agent: insecureAgent, timeout: o.timeout * 1000 }, (res) => {
+    const req = https.request({ hostname: o.host, port: o.port, path: `/rest${path}`, method, headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }, agent: httpsAgentFor(o), timeout: o.timeout * 1000 }, (res) => {
       let data = ''; res.on('data', c => data += c); res.on('end', () => {
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) { try { resolve(data ? JSON.parse(data) : {}); } catch { resolve(data); } }
         else reject(new Error(`REST ${res.statusCode}: ${data}`));

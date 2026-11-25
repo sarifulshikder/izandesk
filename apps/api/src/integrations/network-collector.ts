@@ -6,6 +6,10 @@ import { probeRadiusNas } from './radius';
 import { LITE_MODE, SESSIONS_COLLECTOR_MS, TELEMETRY_COLLECTOR_MS } from '../config/runtime';
 import { tryAcquireSchedulerLock } from './billing';
 import { withSchedulerRun } from './scheduler-observability';
+import { recordOnuOpticalSamples, recordRouterTelemetrySample, recordSubscriberSessionSamples } from './telemetry-history';
+import { publishLiveSessionsSnapshot } from './live-sessions';
+import { oltRefreshTelemetry } from './olt';
+import { isQueuesActive, registerQueueHandler, scheduleRecurringJob } from '../infra/queues';
 
 function parseUptimeSimple(s: string): number {
   let sec = 0; const re = /(\d+)(w|d|h|m|s)/g; let m: RegExpExecArray | null;
@@ -40,6 +44,7 @@ export async function collectSessionsOnce(): Promise<{ ok: boolean; routers: num
       }
     }
 
+    const sessionSamples: any[] = [];
     for (let i = 0; i < subs.rows.length; i++) {
       const s = subs.rows[i];
       const uname = String(s.username);
@@ -75,6 +80,9 @@ export async function collectSessionsOnce(): Promise<{ ok: boolean; routers: num
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now())
         ON CONFLICT (username, router_id) DO UPDATE SET subscriber_id=$1,ip_address=COALESCE($4,subscriber_sessions.ip_address),mac_address=COALESCE($5,subscriber_sessions.mac_address),rx_bps=$6,tx_bps=$7,rx_bytes=subscriber_sessions.rx_bytes+$6,tx_bytes=subscriber_sessions.tx_bytes+$7,status=$10,uptime_sec=$11,updated_at=now()`,
         [s.id, rt.id, uname, ip || null, mac || null, rx, tx, rx * 5, tx * 5, online ? 'ONLINE' : 'OFFLINE', uptimeSec]);
+      if (online) {
+        sessionSamples.push({ subscriber_id: s.id, router_id: rt.id, username: uname, status: 'ONLINE', rx_bps: rx, tx_bps: tx, rx_bytes: rx * 5, tx_bytes: tx * 5 });
+      }
     }
 
     // Overlay RADIUS accounting (radacct) for live sessions where available
@@ -93,8 +101,12 @@ export async function collectSessionsOnce(): Promise<{ ok: boolean; routers: num
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'ONLINE',$10,now())
           ON CONFLICT (username, router_id) DO UPDATE SET subscriber_id=COALESCE($1,subscriber_sessions.subscriber_id),ip_address=COALESCE($4,subscriber_sessions.ip_address),status='ONLINE',rx_bps=0,tx_bps=0,rx_bytes=$8,tx_bytes=$9,uptime_sec=$10,updated_at=now()`,
           [sub?.id || null, rt.id, uname, a.ip_address || sub?.ip_address || null, sub?.mac_address || null, 0, 0, Number(a.acctoutputoctets || 0), Number(a.acctinputoctets || 0), uptimeSec]);
+        sessionSamples.push({ subscriber_id: sub?.id || null, router_id: rt.id, username: uname, status: 'ONLINE', rx_bps: 0, tx_bps: 0, rx_bytes: Number(a.acctoutputoctets || 0), tx_bytes: Number(a.acctinputoctets || 0) });
       }
     } catch (_e) { /* radacct not available */ }
+
+    await recordSubscriberSessionSamples(sessionSamples);
+    await publishLiveSessionsSnapshot().catch(() => {});
 
     return { ok: true, routers: directRouters.length, active: realMap.size, failed: failedRouters.size };
   } catch (e: any) {
@@ -115,6 +127,17 @@ export async function collectTelemetryOnce(): Promise<{ ok: boolean; routers: nu
         const merged = { ...row, ...live, last_seen_at: new Date().toISOString() };
         await pool.query('UPDATE network_routers SET cpu_load=$1,memory_used_mb=$2,memory_total_mb=$3,rx_bps=$4,tx_bps=$5,uptime_seconds=$6,status=$7,last_seen_at=COALESCE($8,last_seen_at),identity=COALESCE($9,identity),board_name=COALESCE($10,board_name),updated_at=now() WHERE id=$11',
           [merged.cpu_load ?? row.cpu_load ?? null, merged.memory_used_mb ?? row.memory_used_mb ?? null, merged.memory_total_mb ?? row.memory_total_mb ?? null, merged.rx_bps ?? row.rx_bps ?? 0, merged.tx_bps ?? row.tx_bps ?? 0, merged.uptime_seconds ?? row.uptime_seconds ?? null, merged.status || row.status, merged.last_seen_at || null, merged.identity || null, merged.board_name || null, row.id]);
+        const sessCnt = await pool.query(`SELECT COUNT(*)::int AS c FROM subscriber_sessions WHERE router_id=$1 AND status='ONLINE'`, [row.id]).catch(() => ({ rows: [{ c: 0 }] }));
+        await recordRouterTelemetrySample({
+          router_id: row.id,
+          status: merged.status || 'ONLINE',
+          cpu_load: merged.cpu_load ?? null,
+          memory_used_mb: merged.memory_used_mb ?? null,
+          memory_total_mb: merged.memory_total_mb ?? null,
+          rx_bps: merged.rx_bps ?? 0,
+          tx_bps: merged.tx_bps ?? 0,
+          active_sessions: sessCnt.rows[0]?.c || 0,
+        });
       } catch (e: any) {
         const errMsg = mikrotikErrorMessage(e, row).slice(0, 500);
         await pool.query('UPDATE network_routers SET status=$1,last_error=$2,updated_at=now() WHERE id=$3', ['OFFLINE', errMsg, row.id]).catch(() => {});
@@ -145,41 +168,109 @@ export async function collectTelemetryOnce(): Promise<{ ok: boolean; routers: nu
   }
 }
 
+export async function collectOltOpticalOnce(): Promise<{ ok: boolean; olts: number; samples: number }> {
+  try {
+    const olts = (await pool.query('SELECT * FROM olts WHERE is_enabled=true ORDER BY created_at ASC')).rows;
+    if (!olts.length) return { ok: true, olts: 0, samples: 0 };
+    let totalSamples = 0;
+    for (const olt of olts) {
+      const onus = (await pool.query('SELECT * FROM onus WHERE olt_id=$1', [olt.id])).rows;
+      if (!onus.length) continue;
+      const resTel = await oltRefreshTelemetry(olt, onus).catch(() => null);
+      if (!resTel || resTel.mode !== 'snmp') continue;
+      const byId = new Map((resTel.onus || []).map((t: any) => [String(t.id), t]));
+      const samples: any[] = [];
+      for (const o of onus) {
+        const t: any = byId.get(String(o.id)) || o;
+        const rx = t.rx_power_dbm == null ? null : +Number(t.rx_power_dbm).toFixed(2);
+        const tx = t.tx_power_dbm == null ? null : +Number(t.tx_power_dbm).toFixed(2);
+        const temp = t.temperature_c == null ? null : +Number(t.temperature_c).toFixed(2);
+        const dist = t.distance_m == null ? null : Math.round(Number(t.distance_m));
+        const st = o.status === 'AUTHORIZED' ? 'AUTHORIZED' : (t.status || o.status || 'DISCOVERED');
+        await pool.query(
+          'UPDATE onus SET rx_power_dbm=COALESCE($1,rx_power_dbm), tx_power_dbm=COALESCE($2,tx_power_dbm), temperature_c=COALESCE($4,temperature_c), distance_m=COALESCE($5,distance_m), status=$6, last_seen_at=now(), updated_at=now() WHERE id=$3',
+          [rx, tx, o.id, temp, dist, st],
+        ).catch(() => {});
+        samples.push({
+          onu_id: o.id,
+          olt_id: olt.id,
+          subscriber_id: o.subscriber_id,
+          status: st,
+          rx_power_dbm: rx ?? o.rx_power_dbm,
+          tx_power_dbm: tx ?? o.tx_power_dbm,
+          temperature_c: temp ?? o.temperature_c,
+          distance_m: dist ?? o.distance_m,
+        });
+      }
+      if (samples.length) {
+        await recordOnuOpticalSamples(samples);
+        totalSamples += samples.length;
+      }
+    }
+    return { ok: true, olts: olts.length, samples: totalSamples };
+  } catch {
+    return { ok: false, olts: 0, samples: 0 };
+  }
+}
+
 export function startNetworkCollector() {
   if (LITE_MODE) {
     console.log('[NetworkCollector] lite mode: collectors disabled (set IZAN_LITE=false to enable)');
     return;
   }
+  const runSessions = async () => {
+    try {
+      await withSchedulerRun('collector:sessions', async () => {
+        const locked = await tryAcquireSchedulerLock('collector:sessions', Math.max(15_000, SESSIONS_COLLECTOR_MS - 5_000)).catch(() => false);
+        if (!locked) return { skipped: 'lock' };
+        const r = await collectSessionsOnce();
+        if (!r.ok) throw new Error(r.error || 'sessions collection failed');
+        return r;
+      });
+    } catch (e: any) { console.warn('[NetworkCollector] sessions error:', e.message); }
+  };
+  const runTelemetry = async () => {
+    try {
+      await withSchedulerRun('collector:telemetry', async () => {
+        const locked = await tryAcquireSchedulerLock('collector:telemetry', Math.max(15_000, TELEMETRY_COLLECTOR_MS - 5_000)).catch(() => false);
+        if (!locked) return { skipped: 'lock' };
+        const r = await collectTelemetryOnce();
+        if (!r.ok) throw new Error(r.error || 'telemetry collection failed');
+        return r;
+      });
+    } catch (e: any) { console.warn('[NetworkCollector] telemetry error:', e.message); }
+  };
+  const runOltOptical = async () => {
+    try {
+      await withSchedulerRun('collector:olt-optical', async () => {
+        const locked = await tryAcquireSchedulerLock('collector:olt-optical', 4 * 60 * 1000).catch(() => false);
+        if (!locked) return { skipped: 'lock' };
+        return await collectOltOpticalOnce();
+      });
+    } catch (e: any) { console.warn('[NetworkCollector] olt-optical error:', e.message); }
+  };
+
+  registerQueueHandler('network', 'sessions-collect', runSessions);
+  registerQueueHandler('network', 'telemetry-collect', runTelemetry);
+  registerQueueHandler('network', 'olt-telemetry-sweep', runOltOptical);
+
+  if (isQueuesActive()) {
+    if (SESSIONS_COLLECTOR_MS > 0) void scheduleRecurringJob('network', 'sched:sessions-collect', 'sessions-collect', SESSIONS_COLLECTOR_MS);
+    if (TELEMETRY_COLLECTOR_MS > 0) void scheduleRecurringJob('network', 'sched:telemetry-collect', 'telemetry-collect', TELEMETRY_COLLECTOR_MS);
+    void scheduleRecurringJob('network', 'sched:olt-optical', 'olt-telemetry-sweep', 5 * 60 * 1000);
+    console.log('[NetworkCollector] scheduled via BullMQ workers');
+    return;
+  }
+
   if (SESSIONS_COLLECTOR_MS > 0) {
-    const run = async () => {
-      try {
-        await withSchedulerRun('collector:sessions', async () => {
-          const locked = await tryAcquireSchedulerLock('collector:sessions', Math.max(15_000, SESSIONS_COLLECTOR_MS - 5_000)).catch(() => false);
-          if (!locked) return { skipped: 'lock' };
-          const r = await collectSessionsOnce();
-          if (!r.ok) throw new Error(r.error || 'sessions collection failed');
-          return r;
-        });
-      } catch (e: any) { console.warn('[NetworkCollector] sessions error:', e.message); }
-    };
-    run().catch(() => {});
-    setInterval(run, SESSIONS_COLLECTOR_MS).unref?.();
+    runSessions().catch(() => {});
+    setInterval(runSessions, SESSIONS_COLLECTOR_MS).unref?.();
     console.log(`[NetworkCollector] sessions every ${Math.round(SESSIONS_COLLECTOR_MS / 1000)}s`);
   }
   if (TELEMETRY_COLLECTOR_MS > 0) {
-    const run = async () => {
-      try {
-        await withSchedulerRun('collector:telemetry', async () => {
-          const locked = await tryAcquireSchedulerLock('collector:telemetry', Math.max(15_000, TELEMETRY_COLLECTOR_MS - 5_000)).catch(() => false);
-          if (!locked) return { skipped: 'lock' };
-          const r = await collectTelemetryOnce();
-          if (!r.ok) throw new Error(r.error || 'telemetry collection failed');
-          return r;
-        });
-      } catch (e: any) { console.warn('[NetworkCollector] telemetry error:', e.message); }
-    };
-    run().catch(() => {});
-    setInterval(run, TELEMETRY_COLLECTOR_MS).unref?.();
+    runTelemetry().catch(() => {});
+    setInterval(runTelemetry, TELEMETRY_COLLECTOR_MS).unref?.();
     console.log(`[NetworkCollector] telemetry every ${Math.round(TELEMETRY_COLLECTOR_MS / 1000)}s`);
   }
+  setInterval(runOltOptical, 5 * 60 * 1000).unref?.();
 }

@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import { runMigrations } from './migrator';
 
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
@@ -1871,6 +1872,8 @@ export async function initDb() {
       disabled_at TIMESTAMPTZ
     );
   `).catch(e => console.error('[DB] security schema error', e.message));
+
+  await runMigrations();
 }
 
 export { pool };

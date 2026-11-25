@@ -2,12 +2,14 @@ import dgram from 'dgram';
 import dns from 'dns';
 import crypto from 'crypto';
 import { pool } from '../db';
+import { decryptSecretValue } from '../security/secret-store';
+import { recordPollMetric } from '../infra/metrics';
 
 export async function syncNasForRouter(router: any, oldHost?: string | null) {
   if (!router) return;
   const mode = String(router.integration_mode || '').toUpperCase();
   const host = String(router.host || '').trim();
-  const secret = router.radius_secret ? String(router.radius_secret) : '';
+  const secret = decryptSecretValue(router.radius_secret);
   const shortname = String(router.nas_identifier || router.name || '').trim() || null;
   const desc = `IzanDesk router ${router.id || ''}`.trim();
 
@@ -113,6 +115,7 @@ function encodeMikrotikVsa(vendorType: number, value: string) {
 }
 
 export async function sendCoaPacket(opts: { host: string; port: number; secret: string; username: string; action: 'DISCONNECT'|'COA'; attributes?: Record<string,string> }) {
+  const plainSecret = decryptSecretValue(opts.secret);
   const code = opts.action === 'DISCONNECT' ? 40 : 43; // Disconnect-Request / CoA-Request
   const id = crypto.randomInt(1, 255);
   const attrs: Buffer[] = [];
@@ -131,7 +134,7 @@ export async function sendCoaPacket(opts: { host: string; port: number; secret: 
   const head = Buffer.alloc(4); head[0] = code; head[1] = id; head.writeUInt16BE(len, 2);
   const zeroAuth = Buffer.alloc(16, 0);
   // RFC 3576: Request Authenticator = MD5(Code+ID+Length+16 zero octets+Attributes+Secret)
-  const requestAuth = crypto.createHash('md5').update(Buffer.concat([head, zeroAuth, body, Buffer.from(opts.secret, 'utf8')])).digest();
+  const requestAuth = crypto.createHash('md5').update(Buffer.concat([head, zeroAuth, body, Buffer.from(plainSecret, 'utf8')])).digest();
   const packet = Buffer.concat([head, requestAuth, body]);
 
   // Resolve once so replies can be bound to the NAS address. Accepting any
@@ -159,7 +162,7 @@ export async function sendCoaPacket(opts: { host: string; port: number; secret: 
       const responseAuth = msg.subarray(4, 20);
       const attrs = msg.subarray(20, length);
       const expected = crypto.createHash('md5').update(Buffer.concat([
-        msg.subarray(0, 4), requestAuth, attrs, Buffer.from(opts.secret, 'utf8'),
+        msg.subarray(0, 4), requestAuth, attrs, Buffer.from(plainSecret, 'utf8'),
       ])).digest();
       if (responseAuth.length !== expected.length || !crypto.timingSafeEqual(responseAuth, expected)) return;
       const rcode = msg[0]; // 41 Disconnect-ACK, 42 Disconnect-NAK, 44 CoA-ACK, 45 CoA-NAK
@@ -180,9 +183,10 @@ export async function sendCoaPacket(opts: { host: string; port: number; secret: 
 
 export async function probeRadiusNas(router: any): Promise<{ ok: boolean; reachable: boolean; code?: number; error?: string }> {
   const host = String(router?.host || '').trim();
-  const secret = String(router?.radius_secret || '').trim();
+  const secret = decryptSecretValue(router?.radius_secret).trim();
   const port = Number(router?.coa_port || 3799);
   if (!host || !secret) return { ok: false, reachable: false, error: 'Missing NAS host or radius_secret' };
+  const started = Date.now();
   const res = await sendCoaPacket({
     host,
     port,
@@ -193,5 +197,6 @@ export async function probeRadiusNas(router: any): Promise<{ ok: boolean; reacha
   // Any valid RADIUS response (ACK/NAK) proves the NAS is reachable and
   // authenticated the shared secret. Timeout/network errors mean unreachable.
   const reachable = res.code === 41 || res.code === 42 || res.code === 44 || res.code === 45 || res.ok === true;
+  recordPollMetric('radius', reachable, Date.now() - started);
   return { ok: reachable, reachable, code: res.code, error: reachable ? undefined : res.error };
 }

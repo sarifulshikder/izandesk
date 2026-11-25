@@ -29,6 +29,7 @@ import {
 import { assertAllowedKycFileBuffer, sha256Buffer } from '../security/file-validation';
 import { encryptKycBuffer, secureUnlinkKycFile } from '../security/file-encryption';
 import { execFile } from 'child_process';
+import { getSubscriberTelemetryHistory } from '../integrations/telemetry-history';
 
 const router: Router = Router();
 
@@ -1633,6 +1634,13 @@ router.get('/:id/live', asyncHandler(async (req, res) => {
     onu: { linked: onus, equipment },
     fetched_at: new Date().toISOString(),
   });
+}));
+
+router.get('/:id/telemetry-history', asyncHandler(async (req, res) => {
+  if (!(await assertSubscriberOwnership(req, res, String(req.params.id)))) return;
+  const hours = Math.max(1, Math.min(24 * 90, Number(req.query.hours || 24) || 24));
+  const data = await getSubscriberTelemetryHistory(String(req.params.id), hours);
+  res.json({ ok: true, hours, data });
 }));
 
 export default router;

@@ -2,6 +2,7 @@ import { pool } from '../db';
 import { dispatchMessage } from './messaging';
 import { emitNocAlert } from './noc-alerts';
 import { withSchedulerRun } from './scheduler-observability';
+import { isQueuesActive, registerQueueHandler, scheduleRecurringJob } from '../infra/queues';
 
 async function generateReport(key: string) {
   switch (String(key)) {
@@ -108,6 +109,11 @@ export function startReportScheduler(){
       if (r && r.ran) console.log(`[ReportScheduler] ran ${r.ran} schedule(s)`);
     } catch(e:any){ console.error('[ReportScheduler] error', e.message); }
   };
+  registerQueueHandler('ops', 'report-schedules', tick);
+  if (isQueuesActive()) {
+    void scheduleRecurringJob('ops', 'sched:report-schedules', 'report-schedules', 10 * 60 * 1000);
+    return;
+  }
   setTimeout(tick, 30*1000);
   setInterval(tick, 10*60*1000);
 }

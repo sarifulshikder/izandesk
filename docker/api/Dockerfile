@@ -25,6 +25,7 @@ RUN apk add --no-cache \
       net-snmp-tools iputils bind-tools wireguard-tools postgresql-client
 ENV NODE_ENV=production
 COPY --from=build /out/api ./
+COPY apps/api/migrations/ ./migrations/
 # Bundled payment/OLT/SMS plugins live at the repo root, outside the api
 # package, so `pnpm deploy` does not include them. Copy them explicitly.
 COPY plugins/ /plugins/

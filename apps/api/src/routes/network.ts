@@ -7,6 +7,11 @@ import { mikrotikErrorMessage } from '../integrations/mikrotik-errors';
 import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas, probeRadiusNas } from '../integrations/radius';
 import { hashPassword } from '../utils/password';
 import { TELEMETRY_TTL_MS } from '../config/runtime';
+import { encryptSecretValue } from '../security/secret-store';
+import { isRedisReady, redisDel, redisGetJson, redisSetJson } from '../infra/redis';
+import { adjustStreamClients } from '../infra/metrics';
+import { getLiveSessionsSnapshot, subscribeLiveSessions } from '../integrations/live-sessions';
+import { getRouterTelemetryHistory } from '../integrations/telemetry-history';
 
 const router: Router = Router();
 router.use(networkGuard);
@@ -38,29 +43,43 @@ router.get('/routers', asyncHandler(async (req, res) => {
     if (nopoll) {
       t = { status: row.is_enabled ? (row.status || 'UNKNOWN') : 'DISABLED', last_seen_at: row.last_seen_at };
     } else if (row.is_enabled && (imode === 'API' || imode === 'REST')) {
+      const redisTelKey = `iz:router:telemetry:${row.id}`;
       const cached = telemetryCache.get(row.id);
       if (TELEMETRY_TTL_MS && cached && Date.now() - cached.at < TELEMETRY_TTL_MS) {
         t = cached.data;
         fromCache = true;
       } else {
-        const inFlight = telemetryInFlight.get(row.id);
-        if (inFlight) {
-          try { t = await inFlight; fromCache = true; } catch { t = { status: row.status || 'UNKNOWN', last_seen_at: row.last_seen_at }; fromCache = true; }
+        const redisCached = TELEMETRY_TTL_MS ? await redisGetJson<any>(redisTelKey) : null;
+        if (redisCached) {
+          t = redisCached;
+          telemetryCache.set(row.id, { at: Date.now(), data: redisCached });
+          fromCache = true;
         } else {
-          const p = (async () => {
-            try {
-              const live = await mikrotikTelemetry(row);
-              const data = { ...live, last_seen_at: new Date().toISOString() };
-              if (TELEMETRY_TTL_MS) telemetryCache.set(row.id, { at: Date.now(), data });
-              return data;
-            } catch (e: any) {
-              const data = { status: 'OFFLINE', last_seen_at: row.last_seen_at, last_error: mikrotikErrorMessage(e, row) };
-              if (TELEMETRY_TTL_MS) telemetryCache.set(row.id, { at: Date.now(), data });
-              return data;
-            }
-          })().finally(() => telemetryInFlight.delete(row.id));
-          telemetryInFlight.set(row.id, p);
-          t = await p;
+          const inFlight = telemetryInFlight.get(row.id);
+          if (inFlight) {
+            try { t = await inFlight; fromCache = true; } catch { t = { status: row.status || 'UNKNOWN', last_seen_at: row.last_seen_at }; fromCache = true; }
+          } else {
+            const p = (async () => {
+              try {
+                const live = await mikrotikTelemetry(row);
+                const data = { ...live, last_seen_at: new Date().toISOString() };
+                if (TELEMETRY_TTL_MS) {
+                  telemetryCache.set(row.id, { at: Date.now(), data });
+                  await redisSetJson(redisTelKey, data, Math.ceil(TELEMETRY_TTL_MS / 1000));
+                }
+                return data;
+              } catch (e: any) {
+                const data = { status: 'OFFLINE', last_seen_at: row.last_seen_at, last_error: mikrotikErrorMessage(e, row) };
+                if (TELEMETRY_TTL_MS) {
+                  telemetryCache.set(row.id, { at: Date.now(), data });
+                  await redisSetJson(redisTelKey, data, Math.ceil(TELEMETRY_TTL_MS / 1000));
+                }
+                return data;
+              }
+            })().finally(() => telemetryInFlight.delete(row.id));
+            telemetryInFlight.set(row.id, p);
+            t = await p;
+          }
         }
       }
     } else if (row.is_enabled && imode === 'RADIUS') {
@@ -96,28 +115,38 @@ router.get('/routers/:id', asyncHandler(async (req, res) => {
   res.json({ ...sanitizeRouter(row), stats: { ...(sess.rows[0] || {}), ...(subs.rows[0] || {}) } });
 }));
 
+router.get('/routers/:id/history', asyncHandler(async (req, res) => {
+  const hours = Math.max(1, Math.min(24 * 90, Number(req.query.hours || 24) || 24));
+  const data = await getRouterTelemetryHistory(String(req.params.id), hours);
+  res.json({ ok: true, hours, data });
+}));
+
 router.post('/routers', asyncHandler(async (req, res) => {
   const b = req.body || {};
   const mode = String(b.integration_mode || 'API').toUpperCase();
   if (!b.name || !b.host) return res.status(400).json({ message: 'name and host are required' });
   if (!['API','REST','RADIUS'].includes(mode)) return res.status(400).json({ message: 'integration_mode must be API, REST, or RADIUS' });
   if (mode === 'RADIUS' && !b.radius_secret) return res.status(400).json({ message: 'radius_secret is required for RADIUS routers' });
+  const encPass = encryptSecretValue(b.password);
+  const encRadius = mode === 'RADIUS' ? encryptSecretValue(b.radius_secret) : null;
   const r = await pool.query(`INSERT INTO network_routers(
-      name,host,api_port,rest_port,username,password,router_type,ros_version,use_ssl,site,is_enabled,status,integration_mode,radius_secret,coa_port,nas_identifier
-    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'UNKNOWN',$12,$13,$14,$15) RETURNING *`,
+      name,host,api_port,rest_port,username,password,router_type,ros_version,use_ssl,tls_verify,tls_ca_cert,site,is_enabled,status,integration_mode,radius_secret,coa_port,nas_identifier
+    ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'UNKNOWN',$14,$15,$16,$17) RETURNING *`,
     [
       b.name,b.host,
       mode === 'REST' ? (b.api_port ?? null) : (b.api_port ?? 8728),
       b.rest_port ?? (mode === 'REST' ? 443 : null),
       b.username || (mode === 'RADIUS' ? '' : 'admin'),
-      b.password || null,
+      encPass,
       b.router_type || 'MIKROTIK',
       b.ros_version || 'v7',
       !!b.use_ssl,
+      !!b.tls_verify,
+      b.tls_ca_cert ? String(b.tls_ca_cert).trim() : null,
       b.site || null,
       b.is_enabled !== false,
       mode,
-      mode === 'RADIUS' ? (b.radius_secret || null) : null,
+      encRadius,
       Number(b.coa_port || 3799),
       b.nas_identifier || null,
     ]);
@@ -133,18 +162,25 @@ router.put('/routers/:id', asyncHandler(async (req, res) => {
   const mode = String(b.integration_mode ?? c.integration_mode ?? 'API').toUpperCase();
   if (!['API','REST','RADIUS'].includes(mode)) return res.status(400).json({ message: 'integration_mode must be API, REST, or RADIUS' });
   if (mode === 'RADIUS' && !(b.radius_secret || c.radius_secret)) return res.status(400).json({ message: 'radius_secret is required for RADIUS routers' });
+  const encPass = b.password ? (encryptSecretValue(b.password) || '') : '';
+  const encRadius = b.radius_secret ? (encryptSecretValue(b.radius_secret) || '') : '';
   const r = await pool.query(`UPDATE network_routers SET
       name=$1,host=$2,api_port=$3,rest_port=$4,username=$5,password=COALESCE(NULLIF($6,''),password),
-      router_type=$7,ros_version=$8,use_ssl=$9,site=$10,is_enabled=$11,integration_mode=$12,
-      radius_secret=CASE WHEN $12='RADIUS' THEN COALESCE(NULLIF($13,''), radius_secret) ELSE NULL END,
-      coa_port=$14,nas_identifier=$15,updated_at=now()
-    WHERE id=$16 RETURNING *`,
+      router_type=$7,ros_version=$8,use_ssl=$9,tls_verify=$10,tls_ca_cert=COALESCE($11,tls_ca_cert),
+      site=$12,is_enabled=$13,integration_mode=$14,
+      radius_secret=CASE WHEN $14='RADIUS' THEN COALESCE(NULLIF($15,''), radius_secret) ELSE NULL END,
+      coa_port=$16,nas_identifier=$17,updated_at=now()
+    WHERE id=$18 RETURNING *`,
     [
-      b.name??c.name,b.host??c.host,b.api_port??c.api_port,b.rest_port??c.rest_port,b.username??c.username,b.password??'',
-      b.router_type??c.router_type,b.ros_version??c.ros_version,b.use_ssl??c.use_ssl,b.site??c.site,b.is_enabled??c.is_enabled,
-      mode, b.radius_secret ?? '', Number(b.coa_port ?? c.coa_port ?? 3799), b.nas_identifier ?? c.nas_identifier, req.params.id
+      b.name??c.name,b.host??c.host,b.api_port??c.api_port,b.rest_port??c.rest_port,b.username??c.username,encPass,
+      b.router_type??c.router_type,b.ros_version??c.ros_version,b.use_ssl??c.use_ssl,
+      b.tls_verify!==undefined?!!b.tls_verify:!!c.tls_verify,
+      b.tls_ca_cert!==undefined?(b.tls_ca_cert?String(b.tls_ca_cert).trim():''):null,
+      b.site??c.site,b.is_enabled??c.is_enabled,
+      mode, encRadius, Number(b.coa_port ?? c.coa_port ?? 3799), b.nas_identifier ?? c.nas_identifier, req.params.id
     ]);
   telemetryCache.delete(req.params.id);
+  await redisDel(`iz:router:telemetry:${req.params.id}`);
   await invalidateMikrotikApi(String(req.params.id)).catch(() => {});
   try { await syncNasForRouter(r.rows[0], c.host); } catch {}
   res.json(sanitizeRouter(r.rows[0]));
@@ -154,6 +190,7 @@ router.delete('/routers/:id', asyncHandler(async (req, res) => {
   const cur = await pool.query('SELECT * FROM network_routers WHERE id=$1',[req.params.id]);
   await pool.query('DELETE FROM network_routers WHERE id=$1',[req.params.id]);
   telemetryCache.delete(req.params.id);
+  await redisDel(`iz:router:telemetry:${req.params.id}`);
   await invalidateMikrotikApi(String(req.params.id)).catch(() => {});
   try { if (cur.rows[0]) await removeNasForRouter(cur.rows[0]); } catch {}
   res.json({ ok: true });
@@ -553,28 +590,38 @@ function formatUptimeSec(sec: number): string {
   return `${m}m`;
 }
 
-// SSE live throughput stream
+// SSE live throughput stream (Redis Pub/Sub + shared snapshot cache with local fallback)
 router.get('/sessions/stream', asyncHandler(async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
+  adjustStreamClients('sse', 1);
   let closed = false;
   let inFlight = false;
   let iv: NodeJS.Timeout | undefined;
-  const stop = () => { closed = true; if (iv) clearInterval(iv); };
+  let unsub: (() => void) | null = null;
+
+  const stop = () => {
+    if (closed) return;
+    closed = true;
+    adjustStreamClients('sse', -1);
+    if (iv) clearInterval(iv);
+    if (unsub) { try { unsub(); } catch {} unsub = null; }
+  };
   req.on('close', stop);
+
+  const writePayload = (payload: any) => {
+    if (closed || res.writableEnded || res.destroyed) return;
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
   const send = async () => {
     if (closed || inFlight) return;
     inFlight = true;
     try {
-      const rows = (await pool.query(`SELECT ss.username, ss.rx_bps, ss.tx_bps, ss.status, ss.ip_address, ss.uptime_sec, r.name as router_name, r.integration_mode, s.full_name, s.provisioning_mode
-        FROM subscriber_sessions ss LEFT JOIN network_routers r ON r.id=ss.router_id LEFT JOIN subscribers s ON s.id=ss.subscriber_id
-        ORDER BY ss.updated_at DESC LIMIT 50`)).rows;
-      if (closed || res.writableEnded || res.destroyed) return;
-      const safeRows = rows.map((x:any) => ({ ...x, uptime: formatUptimeSec(Number(x.uptime_sec || 0)) }));
-      const payload = { t: Date.now(), sessions: safeRows, summary: { online: safeRows.filter((r:any)=>r.status==='ONLINE').length, aggRxBps: safeRows.reduce((a:number,r:any)=>a+Number(r.rx_bps||0),0), aggTxBps: safeRows.reduce((a:number,r:any)=>a+Number(r.tx_bps||0),0) } };
-      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      const payload = await getLiveSessionsSnapshot();
+      writePayload(payload);
     } catch (e) {
       console.error('[network] SSE tick failed:', e);
       stop();
@@ -583,8 +630,19 @@ router.get('/sessions/stream', asyncHandler(async (req, res) => {
       inFlight = false;
     }
   };
+
   await send();
-  if (!closed) iv = setInterval(() => { void send().catch(() => stop()); }, 3000);
+  if (!closed) {
+    if (isRedisReady()) {
+      unsub = await subscribeLiveSessions((payload) => writePayload(payload));
+      iv = setInterval(() => {
+        if (closed || res.writableEnded || res.destroyed) return;
+        res.write(': keepalive\n\n');
+      }, 15_000);
+    } else {
+      iv = setInterval(() => { void send().catch(() => stop()); }, 3000);
+    }
+  }
 }));
 
 export default router;
