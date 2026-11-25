@@ -8,6 +8,9 @@ import { MetricsGrid } from '@/components/dashboard/metrics-grid';
 import { NetworkHealthCard } from '@/components/dashboard/network-health-card';
 import { SystemStatusCard } from '@/components/dashboard/system-status-card';
 import { AttentionBar } from '@/components/dashboard/attention-bar';
+import { AreaHealthCard } from '@/components/dashboard/area-health-card';
+import { RenewalQueueCard } from '@/components/dashboard/renewal-queue-card';
+import { RecentCollectionsCard } from '@/components/dashboard/recent-collections-card';
 import {
   UserPlus, Activity, CreditCard, AlertTriangle, BellRing, Radio,
   Network as NetworkIcon, ArrowUpRight, Receipt, HardDrive,
@@ -20,18 +23,21 @@ function money(v: any) {
 export default function DashboardPage() {
   const { user, activeRole, token } = useAuth();
   const [d, setD] = useState<any>(null);
+  const canBilling = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(activeRole || user?.role));
+  const canDiagnostics = canBilling;
+  const canNetwork = canBilling;
 
   const load = useCallback(async () => {
     if (!token) return;
-    const canDiagnostics = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(activeRole || user?.role));
-    const canBilling = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'NOC_ENGINEER'].includes(String(activeRole || user?.role));
-    const canNetwork = canBilling;
     try {
-      const [sum, subs, sessions, billing, routers, olts, onus, health, apiHealth, diag, general] = await Promise.all([
+      const [sum, sessions, billing, billingTrend, areaHealth, renewals, collections, routers, olts, onus, health, apiHealth, diag, general] = await Promise.all([
         apiFetch<any>('/api/subscribers/summary', {}, token).catch(() => null),
-        apiFetch<any>('/api/subscribers?limit=6', {}, token).catch(() => null),
         canNetwork ? apiFetch<any>('/api/network/sessions?nopoll=1', {}, token).catch(() => null) : Promise.resolve(null),
         canBilling ? apiFetch<any>('/api/billing/metrics', {}, token).catch(() => null) : Promise.resolve(null),
+        canBilling ? apiFetch<any>('/api/billing/trend', {}, token).catch(() => null) : Promise.resolve(null),
+        apiFetch<any>('/api/subscribers/area-health', {}, token).catch(() => null),
+        apiFetch<any>('/api/subscribers/renewals?days=7&limit=6', {}, token).catch(() => null),
+        canBilling ? apiFetch<any>('/api/billing/payments/recent?limit=6', {}, token).catch(() => null) : Promise.resolve(null),
         canNetwork ? apiFetch<any>('/api/network/routers?nopoll=1', {}, token).catch(() => null) : Promise.resolve(null),
         canNetwork ? apiFetch<any>('/api/olt/olts', {}, token).catch(() => null) : Promise.resolve(null),
         canNetwork ? apiFetch<any>('/api/olt/onus', {}, token).catch(() => null) : Promise.resolve(null),
@@ -42,18 +48,24 @@ export default function DashboardPage() {
       ]);
       setD({
         summary: sum?.summary || {},
-        recent: subs?.data || [],
-        total: subs?.total ?? sum?.summary?.total ?? 0,
         sessions: sessions?.summary || { online: 0, aggRxBps: 0, aggTxBps: 0 },
         billing: billing?.metrics || {},
+        billingTrend: billingTrend?.trend || [],
+        areaHealth: areaHealth?.data || [],
+        areaTotal: Number(areaHealth?.total || 0),
+        renewals: renewals?.data || [],
+        renewalTotal: Number(renewals?.total || 0),
+        renewalDays: Number(renewals?.days || 7),
+        collections: collections?.data || [],
         routers: routers?.data || [],
         olts: olts?.data || [],
         onus: onus?.data || [],
         health, apiHealth, diag,
         company: general?.data?.company_name || 'IzanDesk',
+        timezone: general?.data?.timezone || 'Asia/Dhaka',
       });
     } catch {}
-  }, [token, activeRole, user?.role]);
+  }, [token, canBilling, canDiagnostics, canNetwork]);
 
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
 
@@ -95,6 +107,8 @@ export default function DashboardPage() {
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   const dateLabel = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const onlinePct = Number(sum.total || 0) > 0 ? Math.round((Number(s.online || 0) / Number(sum.total || 0)) * 100) : 0;
+  const billingTrend = Array.isArray(d?.billingTrend) ? d.billingTrend : [];
+  const trendMax = Math.max(1, ...billingTrend.map((t: any) => Math.max(Number(t.generated || 0), Number(t.collected || 0))));
 
   return (
     <div className="space-y-4">
@@ -192,6 +206,35 @@ export default function DashboardPage() {
                 <div className="progress"><div className="progress-bar" style={{ width: `${Math.max(pct, 1)}%` }} /></div>
               </div>
 
+              {billingTrend.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1.5">
+                    <span>Revenue trend · 6 months</span>
+                    <span className="inline-flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--primary)]" /> Billed</span>
+                      <span className="inline-flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" /> Collected</span>
+                    </span>
+                  </div>
+                  <div className="flex items-end gap-1.5 h-[64px] border-b border-border/70" role="img" aria-label="Six-month billed and collected revenue chart">
+                    {billingTrend.map((t: any) => {
+                      const generated = Number(t.generated || 0);
+                      const collected = Number(t.collected || 0);
+                      const gh = generated > 0 ? Math.max(2, Math.round((generated / trendMax) * 100)) : 0;
+                      const ch = collected > 0 ? Math.max(2, Math.round((collected / trendMax) * 100)) : 0;
+                      return (
+                        <div key={t.month} className="flex-1 flex flex-col items-center gap-1 min-w-0" title={`${t.label}: billed ${money(generated)} · collected ${money(collected)}`}>
+                          <div className="w-full flex items-end justify-center gap-[3px] h-[52px]">
+                            <div className="w-[45%] rounded-t-[3px] bg-[var(--primary)]/70" style={{ height: `${gh}%` }} />
+                            <div className="w-[45%] rounded-t-[3px] bg-[var(--success)]/80" style={{ height: `${ch}%` }} />
+                          </div>
+                          <span className="text-[8.5px] text-muted-foreground font-medium">{t.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-2 text-[11px]">
                 <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
                   <div className="text-muted-foreground">Unpaid invoices</div>
@@ -212,6 +255,15 @@ export default function DashboardPage() {
 
           <NetworkHealthCard routers={routers} olts={olts} onus={d.onus} />
           <SystemStatusCard health={d.health} apiHealth={d.apiHealth} diag={d.diag} />
+        </div>
+      )}
+
+      {/* ── Actionable workload ────────────────────────────────────────── */}
+      {d && (
+        <div className={`grid grid-cols-1 ${canBilling ? 'xl:grid-cols-3' : 'xl:grid-cols-2'} gap-4`}>
+          <AreaHealthCard areas={d.areaHealth || []} total={d.areaTotal} />
+          <RenewalQueueCard renewals={d.renewals || []} total={d.renewalTotal} days={d.renewalDays} timezone={d.timezone} />
+          {canBilling && <RecentCollectionsCard payments={d.collections || []} timezone={d.timezone} />}
         </div>
       )}
 

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import {
   LogIn, User, Lock, Moon, Sun, ShieldCheck, Activity, RadioTower, Sparkles,
-  ArrowUpRight, CheckCircle2, Network,
+  ArrowUpRight, CheckCircle2, Network, Eye, EyeOff, ChevronDown, Users, UserCog,
 } from 'lucide-react';
 
 const demoAccounts = [
@@ -20,10 +20,12 @@ export function LoginScreen() {
   const { login, verifyMfa, mfaRequired, mfaEnrollmentRequired, mfaEnrollment, loading, error, theme, toggleTheme } = useAuth();
   const [email, setEmail] = useState('admin@izandesk.com');
   const [password, setPassword] = useState('admin123');
+  const [showPassword, setShowPassword] = useState(false);
   const [remember, setRemember] = useState(true);
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [showDemo, setShowDemo] = useState(false);
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -138,8 +140,22 @@ export function LoginScreen() {
           </div>
 
           <div className="auth-card">
+            {/* Role switcher */}
+            <div className="auth-role-switch mb-6" role="tablist" aria-label="Sign in as">
+              <span className="auth-role-btn active" role="tab" aria-selected="true">
+                <UserCog className="w-3.5 h-3.5" /> Admin / Staff
+              </span>
+              <Link href="/portal" className="auth-role-btn" role="tab" aria-selected="false">
+                <Users className="w-3.5 h-3.5" /> Customer Portal
+              </Link>
+            </div>
+
             <div className="mb-6">
-              <div className="page-eyebrow mb-2"><span className="w-1.5 h-1.5 rounded-full bg-primary" /> Secure access</div>
+              <div className="flex items-center gap-2.5 mb-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/izan-logo.svg" alt="Izan" className="w-8 h-8 rounded-lg" />
+                <div className="page-eyebrow !mb-0"><span className="w-1.5 h-1.5 rounded-full bg-primary" /> Secure access</div>
+              </div>
               <h2 className="text-[1.55rem] font-bold tracking-[-0.035em] leading-tight">Welcome back</h2>
               <p className="text-[12px] text-muted-foreground mt-1.5">Sign in to your IzanDesk operations workspace.</p>
             </div>
@@ -186,7 +202,10 @@ export function LoginScreen() {
                   </div>
                   <div className="input-icon">
                     <Lock />
-                    <input id="login-password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" autoComplete="current-password" className="form-control" placeholder="Your password" required />
+                    <input id="login-password" value={password} onChange={(e) => setPassword(e.target.value)} type={showPassword ? 'text' : 'password'} autoComplete="current-password" className="form-control !pr-10" placeholder="Your password" required />
+                    <button type="button" onClick={() => setShowPassword(v => !v)} className="input-icon-btn" aria-label={showPassword ? 'Hide password' : 'Show password'} title={showPassword ? 'Hide password' : 'Show password'}>
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
                   </div>
                 </div>
                 <label className="form-check cursor-pointer select-none">
@@ -206,23 +225,28 @@ export function LoginScreen() {
           </div>
 
           <div className="mt-3.5 card overflow-hidden">
-            <div className="px-3.5 py-2.5 flex items-center justify-between border-b border-border">
+            <button type="button" onClick={() => setShowDemo(v => !v)} className="w-full px-3.5 py-2.5 flex items-center justify-between hover:bg-muted/40 transition-colors">
               <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Demo accounts · click to fill</span>
-              <span className="badge badge-secondary">RBAC</span>
-            </div>
-            <div className="p-2 grid grid-cols-1 sm:grid-cols-2 gap-1">
-              {demoAccounts.map((acc) => (
-                <button
-                  key={acc.email}
-                  type="button"
-                  onClick={() => { setEmail(acc.email); setPassword(acc.password); }}
-                  className="text-left px-2.5 py-2 rounded-lg border border-transparent hover:border-border hover:bg-muted/60 transition-colors group"
-                >
-                  <div className="text-[11px] font-semibold text-foreground group-hover:text-primary transition-colors">{acc.label}</div>
-                  <div className="text-[9.5px] text-muted-foreground truncate">{acc.email}</div>
-                </button>
-              ))}
-            </div>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="badge badge-secondary">RBAC</span>
+                <ChevronDown className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${showDemo ? 'rotate-180' : ''}`} />
+              </span>
+            </button>
+            {showDemo && (
+              <div className="p-2 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-1 border-t border-border">
+                {demoAccounts.map((acc) => (
+                  <button
+                    key={acc.email}
+                    type="button"
+                    onClick={() => { setEmail(acc.email); setPassword(acc.password); setShowDemo(false); }}
+                    className="text-left px-2.5 py-2 rounded-lg border border-transparent hover:border-border hover:bg-muted/60 transition-colors group"
+                  >
+                    <div className="text-[11px] font-semibold text-foreground group-hover:text-primary transition-colors">{acc.label}</div>
+                    <div className="text-[9.5px] text-muted-foreground truncate">{acc.email}</div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center justify-between text-[9.5px] text-muted-foreground mt-4 px-1">

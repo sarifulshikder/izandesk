@@ -38,7 +38,7 @@ export function MetricsGrid({ summary, billing, sessions, routers, olts }: {
   ];
 
   return (
-    <div className="stat-grid">
+    <div className="stat-grid dashboard-metrics-grid">
       {tiles.map((t) => {
         const Icon = t.icon;
         return (

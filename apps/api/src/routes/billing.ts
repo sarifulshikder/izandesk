@@ -38,6 +38,25 @@ router.get('/metrics', asyncHandler(async (_req, res) => {
   res.json({ ok: true, metrics });
 }));
 
+router.get('/trend', asyncHandler(async (_req, res) => {
+  const months = (await pool.query(`SELECT to_char(m, 'YYYY-MM') AS month, m FROM generate_series(date_trunc('month', CURRENT_DATE) - INTERVAL '5 months', date_trunc('month', CURRENT_DATE), INTERVAL '1 month') AS m ORDER BY m`)).rows;
+  const generated = (await pool.query(`SELECT to_char(COALESCE(issue_date, CURRENT_DATE), 'YYYY-MM') AS month, COALESCE(SUM(total_amount),0)::numeric(14,2) AS generated FROM invoices WHERE COALESCE(issue_date, CURRENT_DATE) >= date_trunc('month', CURRENT_DATE) - INTERVAL '5 months' GROUP BY 1`)).rows;
+  const collected = (await pool.query(`SELECT to_char(COALESCE(verified_at, created_at), 'YYYY-MM') AS month, COALESCE(SUM(amount),0)::numeric(14,2) AS collected FROM payments WHERE status='COMPLETED' AND COALESCE(verified_at, created_at) >= date_trunc('month', CURRENT_DATE) - INTERVAL '5 months' GROUP BY 1`)).rows;
+  const genMap: Record<string, number> = {};
+  for (const r of generated) genMap[r.month] = Number(r.generated || 0);
+  const colMap: Record<string, number> = {};
+  for (const r of collected) colMap[r.month] = Number(r.collected || 0);
+  res.json({
+    ok: true,
+    trend: months.map((m: any) => ({
+      month: m.month,
+      label: new Date(`${m.month}-02T00:00:00Z`).toLocaleDateString('en', { month: 'short', timeZone: 'UTC' }),
+      generated: genMap[m.month] || 0,
+      collected: colMap[m.month] || 0,
+    })),
+  });
+}));
+
 router.get('/invoices', asyncHandler(async (req, res) => {
   const data = await listInvoices(req.query || {});
   res.json({ ok: true, data });
@@ -387,6 +406,21 @@ router.post('/payments/bkash/execute', asyncHandler(async (req, res) => {
   } catch (e: any) {
     return res.status(400).json({ ok: false, message: e.message || 'bKash execute failed' });
   }
+}));
+
+router.get('/payments/recent', asyncHandler(async (req, res) => {
+  const limit = Math.max(1, Math.min(20, parseInt(String(req.query.limit || '6'), 10) || 6));
+  const r = await pool.query(`
+    SELECT p.id, p.payment_ref, p.amount, p.currency, p.gateway, p.method,
+      p.verified_at, p.created_at, s.id AS subscriber_id, s.full_name,
+      s.client_code, i.invoice_number
+    FROM payments p
+    LEFT JOIN invoices i ON i.id=p.invoice_id
+    LEFT JOIN subscribers s ON s.id=COALESCE(p.subscriber_id, i.subscriber_id)
+    WHERE p.status='COMPLETED'
+    ORDER BY COALESCE(p.verified_at, p.created_at) DESC
+    LIMIT $1`, [limit]);
+  res.json({ ok: true, data: r.rows });
 }));
 
 router.get('/payments', asyncHandler(async (req, res) => {
