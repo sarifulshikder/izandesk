@@ -37,11 +37,12 @@ export function AreaHealthCard({ areas, total }: { areas: any[]; total?: number 
                   <div className="h-1 rounded-full bg-muted overflow-hidden mb-1.5">
                     <div className={`h-full rounded-full ${activePct < 70 ? 'bg-warning' : 'bg-primary'}`} style={{ width: `${activePct}%` }} />
                   </div>
-                  <div className="flex items-center gap-2.5 text-[9px] text-muted-foreground whitespace-nowrap">
+                  <div className="flex items-center gap-x-2.5 gap-y-0.5 text-[9px] text-muted-foreground flex-wrap">
                     <span><b className="text-success font-semibold">{active}</b> active</span>
                     <span><b className="text-foreground font-semibold">{Number(area.online || 0)}</b> online</span>
                     <span className={Number(area.due || 0) > 0 ? 'text-warning' : ''}><b className="font-semibold">{Number(area.due || 0)}</b> due</span>
-                    <span className="ml-auto"><b className="font-semibold">{Number(area.expiring || 0)}</b> expiring</span>
+                    <span className={Number(area.expired_validity || 0) > 0 ? 'text-danger' : ''}><b className="font-semibold">{Number(area.expired_validity || 0)}</b> expired</span>
+                    <span><b className="font-semibold">{Number(area.expiring || 0)}</b> expiring</span>
                   </div>
                 </Link>
               );

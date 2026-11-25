@@ -74,7 +74,7 @@ export default function DashboardPage() {
     const a: any[] = [];
     const sum = d.summary || {};
     if (Number(sum.suspended || 0) > 0) a.push({ icon: AlertTriangle, label: 'Suspended subscribers', count: sum.suspended, href: '/subscribers?status=SUSPENDED' });
-    if (Number(sum.expired || 0) > 0) a.push({ icon: AlertTriangle, label: 'Expired subscribers', count: sum.expired, href: '/subscribers?status=EXPIRED' });
+    if (Number(sum.expired_validity || 0) > 0) a.push({ icon: AlertTriangle, label: 'Expired validity', count: sum.expired_validity, href: '/subscribers?validity_expired=1' });
     if (Number(d.billing?.overdueInvoices || 0) > 0) a.push({ icon: Receipt, label: 'Overdue invoices', count: d.billing.overdueInvoices, href: '/billing' });
     if (Number(sum.overdue || 0) > 0) a.push({ icon: AlertTriangle, label: 'Subscribers with due', count: sum.overdue, href: '/subscribers?due=1' });
     const onuCritical = (d.onus || []).filter((u: any) => String(u.optical_status).toUpperCase() === 'CRITICAL' || String(u.status).toUpperCase() === 'LOS');

@@ -5,7 +5,7 @@ import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGar
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
 import { auditLog } from './audit';
-import { getCached } from './settings';
+import { getCached, getBusinessTimezone, getBusinessDateYmd, ymdInTimezone } from './settings';
 
 type AnyObj = Record<string, any>;
 
@@ -270,7 +270,8 @@ export async function applyProvisioningState(subId: string, desired: { status?: 
 export async function evaluateDuePolicies() {
   const policy = await getDefaultPolicy();
   const now = new Date();
-  const today = ymd(now);
+  const tz = await getBusinessTimezone();
+  const today = ymdInTimezone(now, tz);
   const warnBefore = Number(policy.warning_days || 3);
   const graceDays = Number(policy.grace_days || 7);
   const subs = (await pool.query(`SELECT s.*, (SELECT MIN(i.due_date)::date FROM invoices i WHERE i.subscriber_id=s.id AND i.status IN ('UNPAID','PARTIAL','OVERDUE')) as earliest_due
@@ -340,6 +341,7 @@ export async function evaluateDuePolicies() {
     const stageChanged = targetStage !== String(ref.suspension_stage || 'NONE');
     const statusChanged = targetStatus !== String(ref.status || s.status);
     const walledChanged = walled !== !!(ref.walled_garden ?? s.walled_garden);
+    const oldReason = ref.suspension_reason ?? s.suspension_reason ?? null;
     if (stageChanged || statusChanged || walledChanged) {
       await pool.query(`UPDATE subscribers SET suspension_stage=$2, status=$3, walled_garden=$4, grace_until=$5, suspension_reason=$6, suspension_source=$7, updated_at=now() WHERE id=$1`,
         [s.id, targetStage, targetStatus, walled, graceUntil ? graceUntil.toISOString() : null, reason, targetStage === 'NONE' ? 'NONE' : 'POLICY']);
@@ -347,7 +349,7 @@ export async function evaluateDuePolicies() {
         [s.id, statusChanged ? 'STATUS_CHANGE' : 'STAGE_CHANGE', targetStage, reason, JSON.stringify({ daysOverdue, daysToDue, currentDue, due: due ? ymd(due) : null, walled, validityExpired }), 'policy_engine']);
 
       // apply network enforcement (including walled-garden restriction profile/address-list/CoA)
-      if (stageChanged || statusChanged || walledChanged) {
+      {
         try {
           const profileOverride = walled ? (policy.walled_garden_profile || 'izn-walled-garden') : undefined;
           const coaAction: 'DISCONNECT'|'COA' = ((targetStatus === 'SUSPENDED' || targetStatus === 'EXPIRED') && !walled) ? 'DISCONNECT' : 'COA';
@@ -368,6 +370,8 @@ export async function evaluateDuePolicies() {
         }
       }
       actions.push({ subscriber_id: s.id, username: s.username, targetStage, targetStatus, walled_garden: walled, daysOverdue, daysToDue, reason });
+    } else if (reason !== oldReason && ['WARNING', 'GRACE', 'WALLED_GARDEN', 'ISOLATED', 'SUSPENDED'].includes(targetStage)) {
+      await pool.query(`UPDATE subscribers SET suspension_reason=$2, suspension_source='POLICY', updated_at=now() WHERE id=$1`, [s.id, reason]);
     }
   }
   return { ok: true, evaluated: subs.length, actions, policy: { grace_days: graceDays, warning_days: warnBefore, auto_suspend: !!policy.auto_suspend, isolate_on_suspend: !!policy.isolate_on_suspend, enable_walled_garden: !!policy.enable_walled_garden } };
@@ -569,14 +573,16 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
 }
 
 export async function getBillingMetrics() {
+  const tz = await getBusinessTimezone();
+  const today = ymdInTimezone(new Date(), tz);
   const [counts, invAgg, payAgg, invCounts] = await Promise.all([
     pool.query(`SELECT
       COUNT(*) FILTER (WHERE status='ACTIVE')::int as active,
       COUNT(*) FILTER (WHERE status='SUSPENDED' OR suspension_stage IN ('ISOLATED','SUSPENDED'))::int as suspended,
       COUNT(*) FILTER (WHERE status='EXPIRED')::int as expired
       FROM subscribers`),
-    pool.query(`SELECT COALESCE(SUM(total_amount),0)::numeric(12,2) as monthly_generated, COALESCE(SUM(due_amount),0)::numeric(12,2) as total_due FROM invoices WHERE to_char(COALESCE(issue_date, CURRENT_DATE),'YYYY-MM') = to_char(CURRENT_DATE,'YYYY-MM')`),
-    pool.query(`SELECT COALESCE(SUM(amount) FILTER (WHERE created_at::date = CURRENT_DATE),0)::numeric(12,2) as today, COALESCE(SUM(amount) FILTER (WHERE to_char(created_at,'YYYY-MM') = to_char(CURRENT_DATE,'YYYY-MM')),0)::numeric(12,2) as month FROM payments WHERE status='COMPLETED'`),
+    pool.query(`SELECT COALESCE(SUM(total_amount),0)::numeric(12,2) as monthly_generated, COALESCE(SUM(due_amount),0)::numeric(12,2) as total_due FROM invoices WHERE to_char(COALESCE(issue_date, ($1::timestamptz AT TIME ZONE $2)::date),'YYYY-MM') = to_char($1::timestamptz AT TIME ZONE $2,'YYYY-MM')`, [new Date().toISOString(), tz]),
+    pool.query(`SELECT COALESCE(SUM(amount) FILTER (WHERE (COALESCE(verified_at, created_at) AT TIME ZONE $2)::date = $1::date),0)::numeric(12,2) as today, COALESCE(SUM(amount) FILTER (WHERE to_char(COALESCE(verified_at, created_at) AT TIME ZONE $2,'YYYY-MM') = to_char($1::timestamptz AT TIME ZONE $2,'YYYY-MM')),0)::numeric(12,2) as month FROM payments WHERE status='COMPLETED'`, [today, tz]),
     pool.query(`SELECT COUNT(*) FILTER (WHERE status='OVERDUE')::int as overdue, COUNT(*) FILTER (WHERE status IN ('UNPAID','PARTIAL','OVERDUE'))::int as unpaid FROM invoices`),
   ]);
   return {
@@ -631,7 +637,8 @@ export async function getInvoiceWithItems(id: string) {
 }
 
 export async function ensureOverdueInvoiceStatuses() {
-  await pool.query(`UPDATE invoices SET status='OVERDUE', updated_at=now() WHERE status IN ('UNPAID','PARTIAL') AND due_date < CURRENT_DATE AND due_amount > 0`);
+  const today = await getBusinessDateYmd();
+  await pool.query(`UPDATE invoices SET status='OVERDUE', updated_at=now() WHERE status IN ('UNPAID','PARTIAL') AND due_date < $1::date AND due_amount > 0`, [today]);
 }
 
 export async function tryAcquireSchedulerLock(name: string, ttlMs = 55_000, holder = `pid:${process.pid}`) {

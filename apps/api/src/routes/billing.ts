@@ -8,6 +8,7 @@ import crypto = require('crypto');
 import { dispatchMessage, trySendTemplateToSubscriber } from '../integrations/messaging';
 import { renderInvoiceHtml, renderSimpleInvoicePdf } from '../integrations/pdf';
 import { auditLog, reqActor } from '../integrations/audit';
+import { getBusinessDateYmd } from '../integrations/settings';
 
 const router: Router = Router();
 
@@ -39,9 +40,10 @@ router.get('/metrics', asyncHandler(async (_req, res) => {
 }));
 
 router.get('/trend', asyncHandler(async (_req, res) => {
-  const months = (await pool.query(`SELECT to_char(m, 'YYYY-MM') AS month, m FROM generate_series(date_trunc('month', CURRENT_DATE) - INTERVAL '5 months', date_trunc('month', CURRENT_DATE), INTERVAL '1 month') AS m ORDER BY m`)).rows;
-  const generated = (await pool.query(`SELECT to_char(COALESCE(issue_date, CURRENT_DATE), 'YYYY-MM') AS month, COALESCE(SUM(total_amount),0)::numeric(14,2) AS generated FROM invoices WHERE COALESCE(issue_date, CURRENT_DATE) >= date_trunc('month', CURRENT_DATE) - INTERVAL '5 months' GROUP BY 1`)).rows;
-  const collected = (await pool.query(`SELECT to_char(COALESCE(verified_at, created_at), 'YYYY-MM') AS month, COALESCE(SUM(amount),0)::numeric(14,2) AS collected FROM payments WHERE status='COMPLETED' AND COALESCE(verified_at, created_at) >= date_trunc('month', CURRENT_DATE) - INTERVAL '5 months' GROUP BY 1`)).rows;
+  const bizToday = await getBusinessDateYmd();
+  const months = (await pool.query(`SELECT to_char(m, 'YYYY-MM') AS month, m FROM generate_series(date_trunc('month', $1::date) - INTERVAL '5 months', date_trunc('month', $1::date), INTERVAL '1 month') AS m ORDER BY m`, [bizToday])).rows;
+  const generated = (await pool.query(`SELECT to_char(COALESCE(issue_date, $1::date), 'YYYY-MM') AS month, COALESCE(SUM(total_amount),0)::numeric(14,2) AS generated FROM invoices WHERE COALESCE(issue_date, $1::date) >= date_trunc('month', $1::date) - INTERVAL '5 months' GROUP BY 1`, [bizToday])).rows;
+  const collected = (await pool.query(`SELECT to_char(COALESCE(verified_at, created_at), 'YYYY-MM') AS month, COALESCE(SUM(amount),0)::numeric(14,2) AS collected FROM payments WHERE status='COMPLETED' AND COALESCE(verified_at, created_at) >= date_trunc('month', $1::date) - INTERVAL '5 months' GROUP BY 1`, [bizToday])).rows;
   const genMap: Record<string, number> = {};
   for (const r of generated) genMap[r.month] = Number(r.generated || 0);
   const colMap: Record<string, number> = {};

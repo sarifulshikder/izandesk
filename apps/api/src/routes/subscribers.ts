@@ -19,6 +19,7 @@ import { mikrotikRemovePppSecret } from '../integrations/mikrotik';
 import { oltFindOnuByClientMac } from '../integrations/olt';
 import { removeSubscriberFromRadiusDb, syncSubscriberToRadiusDb } from '../integrations/radius';
 import { applyProvisioningState } from '../integrations/billing';
+import { getBusinessDateYmd } from '../integrations/settings';
 import { resellerScope, assertSubscriberOwnership } from './subscriber-scope';
 import { auditLog, reqActor } from '../integrations/audit';
 import {
@@ -370,7 +371,7 @@ const LIST_SELECT = `
          rs.name as reseller_name, rs.code as reseller_code
   ${FROM_SQL}`;
 
-function buildFilters(req: any) {
+function buildFilters(req: any, bizToday: string) {
   const q = str(req.query.q).toLowerCase();
   const status = str(req.query.status);
   const type = str(req.query.type || req.query.subscriber_type);
@@ -382,6 +383,7 @@ function buildFilters(req: any) {
   const due = str(req.query.due || req.query.overdue);
   const expiringRaw = str(req.query.expiring_days || req.query.expiring || req.query.expiring_soon);
   const expiringTomorrow = str(req.query.expiring_tomorrow);
+  const validityExpired = str(req.query.validity_expired || req.query.expired_validity);
   const where: string[] = [];
   const params: any[] = [];
   if (q) {
@@ -391,9 +393,13 @@ function buildFilters(req: any) {
   if (status) {
     const st = status.toUpperCase();
     if (st === 'EXPIRING' || st === 'EXPIRING_SOON') {
-      where.push(`s.expiry_date >= CURRENT_DATE AND s.expiry_date <= CURRENT_DATE + 7 * INTERVAL '1 day' AND s.status NOT IN ('TERMINATED')`);
+      params.push(bizToday);
+      where.push(`s.expiry_date >= $${params.length}::date AND s.expiry_date <= $${params.length}::date + 7 AND s.status NOT IN ('TERMINATED')`);
     } else if (st === 'DUE' || st === 'OVERDUE' || st === 'HAS_DUE') {
       where.push(`COALESCE(s.current_due, 0) > 0`);
+    } else if (st === 'EXPIRED_VALIDITY' || st === 'VALIDITY_EXPIRED') {
+      params.push(bizToday);
+      where.push(`s.expiry_date < $${params.length}::date AND s.status NOT IN ('TERMINATED')`);
     } else {
       params.push(status);
       where.push(`s.status = $${params.length}`);
@@ -406,12 +412,18 @@ function buildFilters(req: any) {
   if (routerId) { params.push(routerId); where.push(`s.router_id = $${params.length}`); }
   if (pkg) { params.push(`%${pkg}%`); where.push(`s.package_name LIKE $${params.length}`); }
   if (due === '1' || due === 'true' || due === 'yes') { where.push(`COALESCE(s.current_due, 0) > 0`); }
+  if (validityExpired === '1' || validityExpired === 'true' || validityExpired === 'yes') {
+    params.push(bizToday);
+    where.push(`s.expiry_date < $${params.length}::date AND s.status NOT IN ('TERMINATED')`);
+  }
   if (expiringTomorrow === '1' || expiringTomorrow === 'true' || expiringRaw.toLowerCase() === 'tomorrow') {
-    where.push(`s.expiry_date = CURRENT_DATE + 1 AND s.status NOT IN ('TERMINATED')`);
+    params.push(bizToday);
+    where.push(`s.expiry_date = $${params.length}::date + 1 AND s.status NOT IN ('TERMINATED')`);
   } else if (expiringRaw) {
     const days = Math.max(1, Math.min(365, parseInt(expiringRaw === '1' || expiringRaw === 'true' || expiringRaw === 'soon' ? '7' : expiringRaw, 10) || 7));
+    params.push(bizToday);
     params.push(days);
-    where.push(`s.expiry_date >= CURRENT_DATE AND s.expiry_date <= CURRENT_DATE + $${params.length} * INTERVAL '1 day' AND s.status NOT IN ('TERMINATED')`);
+    where.push(`s.expiry_date >= $${params.length - 1}::date AND s.expiry_date <= $${params.length - 1}::date + $${params.length} * INTERVAL '1 day' AND s.status NOT IN ('TERMINATED')`);
   }
   return { whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
 }
@@ -423,15 +435,18 @@ function buildFilters(req: any) {
 // Status summary cards (must be registered before '/:id')
 router.get('/summary', asyncHandler(async (req, res) => {
   const scope = await resellerScope(req);
-  if (scope.restricted && !scope.uuid) return res.json({ ok: true, summary: { total: 0, by_status: {}, active: 0, pending: 0, suspended: 0, expired: 0, terminated: 0, expiring_soon: 0, expiring_tomorrow: 0, overdue: 0 } });
+  if (scope.restricted && !scope.uuid) return res.json({ ok: true, summary: { total: 0, by_status: {}, active: 0, pending: 0, suspended: 0, expired: 0, expired_validity: 0, terminated: 0, expiring_soon: 0, expiring_tomorrow: 0, overdue: 0 } });
+  const bizToday = await getBusinessDateYmd();
   const params: any[] = [];
   let where = '';
   if (scope.uuid) { params.push(scope.uuid); where = 'WHERE reseller_id=$1'; }
+  const whereAnd = where ? `${where} AND` : 'WHERE';
   const total = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${where}`, params)).rows[0].c;
   const byStatus = (await pool.query(`SELECT status, COUNT(*)::int AS c FROM subscribers ${where} GROUP BY status`, params)).rows;
-  const expiring = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${where}${where ? ' AND' : ' WHERE'} expiry_date >= CURRENT_DATE AND expiry_date <= CURRENT_DATE + 7 AND status NOT IN ('TERMINATED')`, params)).rows[0].c;
-  const expiringTomorrow = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${where}${where ? ' AND' : ' WHERE'} expiry_date = CURRENT_DATE + 1 AND status NOT IN ('TERMINATED')`, params)).rows[0].c;
-  const overdue = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${where}${where ? ' AND' : ' WHERE'} current_due > 0`, params)).rows[0].c;
+  const expiring = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${whereAnd} expiry_date >= $${params.length + 1}::date AND expiry_date <= $${params.length + 1}::date + 7 AND status NOT IN ('TERMINATED')`, [...params, bizToday])).rows[0].c;
+  const expiringTomorrow = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${whereAnd} expiry_date = $${params.length + 1}::date + 1 AND status NOT IN ('TERMINATED')`, [...params, bizToday])).rows[0].c;
+  const overdue = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${whereAnd} current_due > 0`, params)).rows[0].c;
+  const expiredValidity = (await pool.query(`SELECT COUNT(*)::int AS c FROM subscribers ${whereAnd} expiry_date < $${params.length + 1}::date AND status NOT IN ('TERMINATED')`, [...params, bizToday])).rows[0].c;
   const by_status: Record<string, number> = {};
   for (const r of byStatus) by_status[r.status] = Number(r.c);
   res.json({
@@ -443,6 +458,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
       pending: by_status.PENDING || 0,
       suspended: by_status.SUSPENDED || 0,
       expired: by_status.EXPIRED || 0,
+      expired_validity: Number(expiredValidity),
       terminated: by_status.TERMINATED || 0,
       expiring_soon: Number(expiring),
       expiring_tomorrow: Number(expiringTomorrow),
@@ -456,9 +472,12 @@ router.get('/summary', asyncHandler(async (req, res) => {
 router.get('/area-health', asyncHandler(async (req, res) => {
   const scope = await resellerScope(req);
   if (scope.restricted && !scope.uuid) return res.json({ ok: true, data: [], total: 0 });
+  const bizToday = await getBusinessDateYmd();
   const params: any[] = [];
   let where = '';
   if (scope.uuid) { params.push(scope.uuid); where = 'WHERE s.reseller_id=$1'; }
+  params.push(bizToday);
+  const todayParam = `$${params.length}::date`;
   const rows = (await pool.query(`
     WITH online_subscribers AS (
       SELECT DISTINCT subscriber_id FROM subscriber_sessions
@@ -469,15 +488,16 @@ router.get('/area-health', asyncHandler(async (req, res) => {
       (COUNT(s.id) FILTER (WHERE s.status='ACTIVE'))::int AS active,
       (COUNT(s.id) FILTER (WHERE s.status='SUSPENDED'))::int AS suspended,
       (COUNT(s.id) FILTER (WHERE s.status='EXPIRED'))::int AS expired,
+      (COUNT(s.id) FILTER (WHERE s.expiry_date < ${todayParam} AND s.status <> 'TERMINATED'))::int AS expired_validity,
       (COUNT(s.id) FILTER (WHERE os.subscriber_id IS NOT NULL))::int AS online,
       (COUNT(s.id) FILTER (WHERE COALESCE(s.current_due,0) > 0))::int AS due,
-      (COUNT(s.id) FILTER (WHERE s.expiry_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 7 AND s.status <> 'TERMINATED'))::int AS expiring
+      (COUNT(s.id) FILTER (WHERE s.expiry_date BETWEEN ${todayParam} AND ${todayParam} + 7 AND s.status <> 'TERMINATED'))::int AS expiring
     FROM subscribers s
     LEFT JOIN areas a ON a.id=s.area_id
     LEFT JOIN online_subscribers os ON os.subscriber_id=s.id
     ${where}
     GROUP BY a.id, a.name
-    ORDER BY due DESC, total DESC, area_name ASC`, params)).rows;
+    ORDER BY expired_validity DESC, due DESC, total DESC, area_name ASC`, params)).rows;
   res.json({ ok: true, data: rows.slice(0, 8), total: rows.length });
 }));
 
@@ -486,16 +506,15 @@ router.get('/renewals', asyncHandler(async (req, res) => {
   const days = Math.max(1, Math.min(30, parseInt(String(req.query.days || '7'), 10) || 7));
   const limit = Math.max(1, Math.min(20, parseInt(String(req.query.limit || '6'), 10) || 6));
   if (scope.restricted && !scope.uuid) return res.json({ ok: true, data: [], total: 0, days });
-  const params: any[] = [];
-  const where = [`s.expiry_date >= CURRENT_DATE`, `s.status <> 'TERMINATED'`];
-  params.push(days);
-  where.push(`s.expiry_date <= CURRENT_DATE + $${params.length} * INTERVAL '1 day'`);
+  const bizToday = await getBusinessDateYmd();
+  const params: any[] = [bizToday, days];
+  const where = [`s.expiry_date >= $1::date`, `s.status <> 'TERMINATED'`, `s.expiry_date <= $1::date + $2 * INTERVAL '1 day'`];
   if (scope.uuid) { params.push(scope.uuid); where.push(`s.reseller_id=$${params.length}`); }
   params.push(limit);
   const rows = (await pool.query(`
     SELECT s.id, s.full_name, s.client_code, s.username, s.package_name,
       s.monthly_bill, s.current_due, s.expiry_date, s.status,
-      (s.expiry_date-CURRENT_DATE)::int AS days_left, COUNT(*) OVER()::int AS total_matching
+      (s.expiry_date - $1::date)::int AS days_left, COUNT(*) OVER()::int AS total_matching
     FROM subscribers s
     WHERE ${where.join(' AND ')}
     ORDER BY s.expiry_date ASC, COALESCE(s.current_due,0) DESC, s.full_name ASC
@@ -508,7 +527,8 @@ router.get('/renewals', asyncHandler(async (req, res) => {
 // CSV export (must be registered before '/:id')
 router.get('/export', asyncHandler(async (req, res) => {
   const scope = await resellerScope(req);
-  const { whereSql, params } = buildFilters(req);
+  const bizToday = await getBusinessDateYmd();
+  const { whereSql, params } = buildFilters(req, bizToday);
   const scopedParams = [...params];
   let scopedWhere = whereSql;
   if (scope.uuid) { scopedParams.push(scope.uuid); scopedWhere = scopedWhere ? `${scopedWhere} AND s.reseller_id=$${scopedParams.length}` : `WHERE s.reseller_id=$${scopedParams.length}`; }
@@ -537,7 +557,8 @@ router.get('/export', asyncHandler(async (req, res) => {
 
 router.get('/', asyncHandler(async (req, res) => {
   const { page, limit, offset } = getPagination(req);
-  const { whereSql, params } = buildFilters(req);
+  const bizToday = await getBusinessDateYmd();
+  const { whereSql, params } = buildFilters(req, bizToday);
   const scope = await resellerScope(req);
   if (scope.restricted && !scope.uuid) return res.json({ data: [], total: 0, page, limit });
   const scopedParams = [...params];

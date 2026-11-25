@@ -161,7 +161,7 @@ export function Sidebar() {
         { name: 'Live Sessions', href: '/subscribers/live', icon: Activity, badge: 'Live' },
         { name: 'Leads Pipeline', href: '/leads', icon: UsersRound },
         { name: 'Installation Orders', href: '/installation-orders', icon: Truck },
-        { name: 'Expired', href: '/subscribers?status=EXPIRED', icon: Clock3 },
+        { name: 'Expired Validity', href: '/subscribers?validity_expired=1', icon: Clock3 },
         { name: 'Suspended', href: '/subscribers?status=SUSPENDED', icon: UserX },
         { name: 'Pending / Inactive', href: '/subscribers?status=PENDING', icon: UserMinus },
       ],

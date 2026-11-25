@@ -218,6 +218,18 @@ export async function getCached(key: string, fallback?: any): Promise<any> {
   }
 }
 
+export async function getBusinessTimezone(): Promise<string> {
+  return String(await getCached('general.timezone', 'Asia/Dhaka') || 'Asia/Dhaka');
+}
+
+export function ymdInTimezone(date: Date, tz: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+}
+
+export async function getBusinessDateYmd(date = new Date()): Promise<string> {
+  return ymdInTimezone(date, await getBusinessTimezone());
+}
+
 export async function getSetting(key: string, fallback?: any): Promise<any> {
   const all = await getAllSettings();
   return key in all ? all[key] : (fallback !== undefined ? fallback : defFor(key)?.default);

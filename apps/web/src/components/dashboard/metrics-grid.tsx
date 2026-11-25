@@ -30,7 +30,7 @@ export function MetricsGrid({ summary, billing, sessions, routers, olts }: {
     { label: 'Active Lines', value: String(active), hint: `${inactive} inactive accounts`, icon: UserCheck, accent: 'teal', href: '/subscribers?status=ACTIVE' },
     { label: 'Offline', value: String(Number(s.offline || Math.max(total - online, 0))), hint: 'No active PPPoE session', icon: WifiOff, accent: 'secondary', href: '/subscribers?status=OFFLINE' },
     { label: 'Suspended', value: String(Number(s.suspended || 0)), hint: 'Access currently restricted', icon: UserX, accent: 'danger', href: '/subscribers?status=SUSPENDED' },
-    { label: 'Expired', value: String(Number(s.expired || 0)), hint: 'Awaiting renewal', icon: Clock3, accent: 'warning', href: '/subscribers?status=EXPIRED' },
+    { label: 'Expired Validity', value: String(Number(s.expired_validity ?? s.expired ?? 0)), hint: 'Past package expiry date', icon: Clock3, accent: 'warning', href: '/subscribers?validity_expired=1' },
     { label: 'Expiring Tomorrow', value: String(Number(s.expiring_tomorrow || 0)), hint: 'Act before expiry', icon: BellRing, accent: 'orange', href: '/subscribers?expiring=tomorrow' },
     { label: 'Expiring · 7 days', value: String(Number(s.expiring_soon || 0)), hint: 'Renewal window approaching', icon: BellRing, accent: 'warning', href: '/subscribers?expiring=7' },
     { label: 'Routers Online', value: `${routersOnline}/${(routers || []).length}`, hint: 'Edge & NAS fleet', icon: Router, accent: 'info', href: '/routers' },

@@ -20,6 +20,7 @@ export default function SubscribersPage() {
   const [dueOnly, setDueOnly] = useState(false);
   const [expiringDays, setExpiringDays] = useState<number | null>(null);
   const [expiringTomorrow, setExpiringTomorrow] = useState(false);
+  const [validityExpired, setValidityExpired] = useState(false);
   const [clientView, setClientView] = useState<'compact' | 'detailed'>('compact');
 
   useEffect(() => {
@@ -38,6 +39,7 @@ export default function SubscribersPage() {
     else if (!(s === 'DUE' || s === 'OVERDUE' || s === 'HAS_DUE')) setDueOnly(false);
     const expTomorrow = searchParams?.get('expiring_tomorrow') || '';
     const exp = searchParams?.get('expiring') || searchParams?.get('expiring_days') || searchParams?.get('expiring_soon') || '';
+    const valExp = searchParams?.get('validity_expired') || searchParams?.get('expired_validity') || '';
     const isTomorrow = expTomorrow === '1' || expTomorrow === 'true' || exp.toLowerCase() === 'tomorrow';
     if (isTomorrow) {
       setExpiringTomorrow(true);
@@ -49,6 +51,15 @@ export default function SubscribersPage() {
     } else if (!(s === 'EXPIRING' || s === 'EXPIRING_SOON')) {
       setExpiringTomorrow(false);
       setExpiringDays(null);
+    }
+    if (valExp === '1' || valExp === 'true' || valExp === 'yes') {
+      setValidityExpired(true);
+      setStatus('');
+      setDueOnly(false);
+      setExpiringTomorrow(false);
+      setExpiringDays(null);
+    } else {
+      setValidityExpired(false);
     }
     const v = String(searchParams?.get('view') || '').toLowerCase();
     if (v === 'all-info' || v === 'detailed' || v === 'all') setClientView('detailed');
@@ -103,6 +114,7 @@ export default function SubscribersPage() {
       if (status) params.set('status', status);
       if (type) params.set('type', type);
       if (dueOnly) params.set('due', '1');
+      if (validityExpired) params.set('validity_expired', '1');
       if (expiringTomorrow) params.set('expiring_tomorrow', '1');
       else if (expiringDays) params.set('expiring', String(expiringDays));
       params.set('limit', '100');
@@ -110,7 +122,7 @@ export default function SubscribersPage() {
       setRows(res.data || []); setTotal(res.total || 0);
     } catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
-  }, [token, q, status, type, dueOnly, expiringDays, expiringTomorrow]);
+  }, [token, q, status, type, dueOnly, validityExpired, expiringDays, expiringTomorrow]);
 
   useEffect(() => { loadRefs(); }, [loadRefs]);
   useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t); }, [load]);
@@ -399,9 +411,10 @@ export default function SubscribersPage() {
     finally { setFupBusy(false); }
   };
 
+  const todayStr = new Date().toLocaleDateString('en-CA');
   const counts = {
     active: rows.filter(r => String(r.status).toUpperCase() === 'ACTIVE').length,
-    expired: rows.filter(r => String(r.status).toUpperCase() === 'EXPIRED').length,
+    expiredValidity: rows.filter(r => { const d = String(r.expiry_date || '').slice(0, 10); return d && d < todayStr && String(r.status).toUpperCase() !== 'TERMINATED'; }).length,
     suspended: rows.filter(r => String(r.status).toUpperCase() === 'SUSPENDED').length,
     pending: rows.filter(r => ['PENDING','INACTIVE'].includes(String(r.status).toUpperCase())).length,
   };
@@ -441,23 +454,23 @@ export default function SubscribersPage() {
       {error && <div className="alert alert-danger">{error}</div>}
 
       <div className="stat-grid-5">
-        <button onClick={()=>{ setStatus(''); setDueOnly(false); setExpiringDays(null); setExpiringTomorrow(false); }} className={`dash-stat dash-stat-primary compact ${status === '' && !dueOnly && !expiringDays && !expiringTomorrow ? '!border-primary/50' : ''}`}>
+        <button onClick={()=>{ setStatus(''); setDueOnly(false); setValidityExpired(false); setExpiringDays(null); setExpiringTomorrow(false); }} className={`dash-stat dash-stat-primary compact ${status === '' && !dueOnly && !validityExpired && !expiringDays && !expiringTomorrow ? '!border-primary/50' : ''}`}>
           <span className="dash-stat-icon"><Users /></span>
           <span className="dash-stat-body"><span className="dash-stat-label">Total Clients</span><span className="dash-stat-value">{total}</span><span className="dash-stat-hint">all records</span></span>
         </button>
-        <button onClick={()=>setStatus('ACTIVE')} className={`dash-stat dash-stat-success compact ${status === 'ACTIVE' ? '!border-primary/50' : ''}`}>
+        <button onClick={()=>{ setStatus('ACTIVE'); setValidityExpired(false); }} className={`dash-stat dash-stat-success compact ${status === 'ACTIVE' && !validityExpired ? '!border-primary/50' : ''}`}>
           <span className="dash-stat-icon"><UserCheck /></span>
           <span className="dash-stat-body"><span className="dash-stat-label">Active</span><span className="dash-stat-value">{counts.active}</span><span className="dash-stat-hint">in current view</span></span>
         </button>
-        <button onClick={()=>setStatus('EXPIRED')} className={`dash-stat dash-stat-warning compact ${status === 'EXPIRED' ? '!border-primary/50' : ''}`}>
+        <button onClick={()=>{ setStatus(''); setDueOnly(false); setExpiringTomorrow(false); setExpiringDays(null); setValidityExpired(true); }} className={`dash-stat dash-stat-warning compact ${validityExpired ? '!border-primary/50' : ''}`}>
           <span className="dash-stat-icon"><Clock3 /></span>
-          <span className="dash-stat-body"><span className="dash-stat-label">Expired</span><span className="dash-stat-value">{counts.expired}</span><span className="dash-stat-hint">renewal needed</span></span>
+          <span className="dash-stat-body"><span className="dash-stat-label">Expired Validity</span><span className="dash-stat-value">{counts.expiredValidity}</span><span className="dash-stat-hint">past expiry date</span></span>
         </button>
-        <button onClick={()=>setStatus('SUSPENDED')} className={`dash-stat dash-stat-danger compact ${status === 'SUSPENDED' ? '!border-primary/50' : ''}`}>
+        <button onClick={()=>{ setStatus('SUSPENDED'); setValidityExpired(false); }} className={`dash-stat dash-stat-danger compact ${status === 'SUSPENDED' && !validityExpired ? '!border-primary/50' : ''}`}>
           <span className="dash-stat-icon"><UserX /></span>
           <span className="dash-stat-body"><span className="dash-stat-label">Suspended</span><span className="dash-stat-value">{counts.suspended}</span><span className="dash-stat-hint">access restricted</span></span>
         </button>
-        <button onClick={()=>setStatus('PENDING')} className={`dash-stat dash-stat-info compact ${status === 'PENDING' ? '!border-primary/50' : ''}`}>
+        <button onClick={()=>{ setStatus('PENDING'); setValidityExpired(false); }} className={`dash-stat dash-stat-info compact ${status === 'PENDING' && !validityExpired ? '!border-primary/50' : ''}`}>
           <span className="dash-stat-icon"><FileSpreadsheet /></span>
           <span className="dash-stat-body"><span className="dash-stat-label">Pending</span><span className="dash-stat-value">{counts.pending}</span><span className="dash-stat-hint">awaiting activation</span></span>
         </button>
@@ -467,19 +480,24 @@ export default function SubscribersPage() {
         {[
           ['', 'All'],
           ['ACTIVE', 'Active'],
-          ['EXPIRED', 'Expired'],
           ['SUSPENDED', 'Suspended'],
           ['PENDING', 'Pending'],
         ].map(([k, label]) => (
-          <button key={k || 'all'} onClick={() => { setStatus(k); if (k === '') { setDueOnly(false); setExpiringDays(null); setExpiringTomorrow(false); } }} className={`filter-chip ${status === k ? 'active' : ''}`}>{label}</button>
+          <button key={k || 'all'} onClick={() => { setStatus(k); setValidityExpired(false); if (k === '') { setDueOnly(false); setExpiringDays(null); setExpiringTomorrow(false); } }} className={`filter-chip ${status === k && !validityExpired ? 'active' : ''}`}>{label}</button>
         ))}
+        <button onClick={() => { setStatus(''); setDueOnly(false); setExpiringTomorrow(false); setExpiringDays(null); setValidityExpired(true); }} className={`filter-chip ${validityExpired ? 'active' : ''}`}>Expired Validity</button>
         <span className="toolbar-divider" />
         <Link href="/gis" className="btn btn-ghost btn-sm"><MapPin className="w-3.5 h-3.5"/>Client Locations</Link>
         <button onClick={() => setClientView(v => v === 'detailed' ? 'compact' : 'detailed')} className={`filter-chip ${clientView === 'detailed' ? 'active' : ''}`}>All Client Info</button>
-        {(dueOnly || expiringDays || expiringTomorrow) && <span className="toolbar-divider" />}
+        {(dueOnly || validityExpired || expiringDays || expiringTomorrow) && <span className="toolbar-divider" />}
         {dueOnly && (
           <button onClick={() => setDueOnly(false)} className="filter-chip active !bg-warning/10 !text-warning !border-warning/30 inline-flex items-center gap-1">
             <AlertCircle className="w-3 h-3" /> With Due <X className="w-3 h-3" />
+          </button>
+        )}
+        {validityExpired && (
+          <button onClick={() => setValidityExpired(false)} className="filter-chip active !bg-danger/10 !text-danger !border-danger/30 inline-flex items-center gap-1">
+            <Clock3 className="w-3 h-3" /> Expired Validity <X className="w-3 h-3" />
           </button>
         )}
         {expiringTomorrow && (
