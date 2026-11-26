@@ -615,10 +615,13 @@ export async function mikrotikEnsureParentalProfile(r: RouterRow, opts: { profil
   } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
-export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: { addressList?: string; portalUrl?: string; portalHost?: string; portalPort?: number; dnsAllow?: string[] } = {}) {
+export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: { addressList?: string; portalUrl?: string; portalHost?: string; portalPort?: number; dnsAllow?: string[]; tag?: string } = {}) {
   const mode = String(r.integration_mode || 'API').toUpperCase();
   const list = String(opts.addressList || 'izn-walled-garden').trim() || 'izn-walled-garden';
-  const commentTag = 'IzanDesk-WalledGarden';
+  // Distinct comment tag per captive list so the expiry redirect (izn-expired
+  // → /expired) and the dues walled-garden (izn-walled-garden → /walled-garden)
+  // rules coexist on the same router without overwriting each other.
+  const commentTag = String(opts.tag || 'IzanDesk-WalledGarden').replace(/[^A-Za-z0-9_-]/g, '') || 'IzanDesk-WalledGarden';
   const portalUrl = String(opts.portalUrl || process.env.WALLED_GARDEN_PORTAL_URL || 'https://izandesk.duckdns.org/walled-garden').trim();
   let portalHost = String(opts.portalHost || '').trim();
   let portalPort = Number(opts.portalPort || 80) || 80;
@@ -626,29 +629,47 @@ export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: 
   if (!portalHost) portalHost = 'izandesk.duckdns.org';
   const dnsAllow = Array.isArray(opts.dnsAllow) ? opts.dnsAllow.filter(Boolean) : [portalHost];
 
-  const results: any = { ok: true, mode, addressList: list, portalUrl, portalHost, portalPort, steps: {} };
+  // RouterOS NAT `dst-address` / `to-addresses` require an IP address, not a
+  // hostname — resolve the portal host via DNS. If resolution fails, fall
+  // back to the raw host (some routers resolve internally) and record it.
+  let portalIp = portalHost;
+  const ipv4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+  if (!ipv4.test(portalHost)) {
+    try {
+      const dns = await import('node:dns');
+      const { address } = await dns.promises.lookup(portalHost, { family: 4 });
+      if (address) portalIp = address;
+    } catch { /* keep hostname */ }
+  }
+
+  const results: any = { ok: true, mode, addressList: list, portalUrl, portalHost, portalIp, portalPort, steps: {} };
 
   const ensureRest = async (o:any) => {
     // 1) allow DNS for walled-garden users
     try {
       const fwf: any[] = await restFetch(o, `/ip/firewall/filter?comment=${encodeURIComponent(commentTag + ':dns')}`).catch(()=>[]) as any;
       if (!Array.isArray(fwf) || !fwf.length) {
-        await restSend(o, 'PUT', '/ip/firewall/filter', { chain: 'forward', 'src-address-list': list, protocol: 'udp', 'dst-port': '53', action: 'accept', comment: commentTag + ':dns', place: '0' } as any).catch(()=>restSend(o,'PUT','/ip/firewall/filter',{ chain:'forward','src-address-list':list,protocol:'udp','dst-port':'53',action:'accept',comment: commentTag + ':dns' }));
+        await restSend(o, 'PUT', '/ip/firewall/filter', { chain: 'forward', 'src-address-list': list, protocol: 'udp', 'dst-port': '53', action: 'accept', comment: commentTag + ':dns' } as any).catch(()=>restSend(o,'PUT','/ip/firewall/filter',{ chain:'forward','src-address-list':list,protocol:'udp','dst-port':'53',action:'accept',comment: commentTag + ':dns' }));
       }
       results.steps.dns = { ok: true };
     } catch (e:any) { results.steps.dns = { ok:false, error:e.message }; }
-    // 2) allow access to portal host (best-effort via address-list resolve not automatic; allow dst-port 80/443)
+    // 2) allow access to portal host (dst-nat accept + forward accept, ordered above drop-other)
     try {
       const nat1: any[] = await restFetch(o, `/ip/firewall/nat?comment=${encodeURIComponent(commentTag + ':allow-portal')}`).catch(()=>[]) as any;
       if (!Array.isArray(nat1) || !nat1.length) {
-        await restSend(o, 'PUT', '/ip/firewall/nat', { chain: 'dstnat', 'src-address-list': list, protocol: 'tcp', 'dst-port': '80,443', 'dst-address': portalHost, action: 'accept', comment: commentTag + ':allow-portal' }).catch(()=>{});
+        await restSend(o, 'PUT', '/ip/firewall/nat', { chain: 'dstnat', 'src-address-list': list, protocol: 'tcp', 'dst-port': '80,443', 'dst-address': portalIp, action: 'accept', comment: commentTag + ':allow-portal' }).catch(()=>{});
       }
-      results.steps.allowPortal = { ok: true, note: 'portal host allow rule added (IP/hostname match depends on router DNS resolution)' };
+      const fwf1: any[] = await restFetch(o, `/ip/firewall/filter?comment=${encodeURIComponent(commentTag + ':portal-fw')}`).catch(()=>[]) as any;
+      if (!Array.isArray(fwf1) || !fwf1.length) {
+        // RouterOS `filter/add` has no `place` parameter; add then move above drop-other.
+        await restSend(o, 'PUT', '/ip/firewall/filter', { chain: 'forward', 'src-address-list': list, 'dst-address': portalIp, protocol: 'tcp', 'dst-port': '80,443', action: 'accept', comment: commentTag + ':portal-fw' } as any);
+      }
+      results.steps.allowPortal = { ok: true, portal_ip: portalIp };
     } catch (e:any) { results.steps.allowPortal = { ok:false, error:e.message }; }
     // 3) redirect HTTP to portal
     try {
       const nat2: any[] = await restFetch(o, `/ip/firewall/nat?comment=${encodeURIComponent(commentTag + ':redirect-http')}`).catch(()=>[]) as any;
-      const body:any = { chain: 'dstnat', 'src-address-list': list, protocol: 'tcp', 'dst-port': '80', action: 'dst-nat', 'to-addresses': portalHost, 'to-ports': String(portalPort || 80), comment: commentTag + ':redirect-http' };
+      const body:any = { chain: 'dstnat', 'src-address-list': list, protocol: 'tcp', 'dst-port': '80', action: 'dst-nat', 'to-addresses': portalIp, 'to-ports': String(portalPort || 80), comment: commentTag + ':redirect-http' };
       if (Array.isArray(nat2) && nat2.length) {
         await restSend(o, 'PATCH', `/ip/firewall/nat/${nat2[0]['.id']||nat2[0].id}`, body).catch(()=>{});
         results.steps.redirect = { ok: true, action: 'updated' };
@@ -665,6 +686,19 @@ export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: 
       }
       results.steps.dropOther = { ok: true, note: 'other forwarding dropped for walled-garden list (DNS/portal rules should be ordered above)' };
     } catch (e:any) { results.steps.dropOther = { ok:false, error:e.message }; }
+    // ordering: accept rules (dns + portal-fw) must sit above drop-other
+    try {
+      const fw: any[] = await restFetch(o, `/ip/firewall/filter`).catch(()=>[]) as any;
+      const list3 = (fw||[]).filter((x:any)=>String(x.comment||'').startsWith(commentTag + ':'));
+      const dropId = String((list3.find((x:any)=>String(x.comment)===commentTag+':drop-other')||{})['.id']||'');
+      if (dropId) {
+        const pfw = list3.find((x:any)=>String(x.comment)===commentTag+':portal-fw');
+        const dnsR = list3.find((x:any)=>String(x.comment)===commentTag+':dns');
+        if (pfw?.['.id']) await restSend(o, 'POST', `/ip/firewall/filter/move`, { '.id': pfw['.id'], destination: dropId }).catch(()=>{});
+        if (dnsR?.['.id']) await restSend(o, 'POST', `/ip/firewall/filter/move`, { '.id': dnsR['.id'], destination: pfw?.['.id']||dropId }).catch(()=>{});
+      }
+      results.steps.ordering = { ok: true };
+    } catch (e:any) { results.steps.ordering = { ok:false, error:e.message }; }
   };
 
   const ensureApi = async () => {
@@ -678,16 +712,23 @@ export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: 
         if (!ex) await api.write('/ip/firewall/filter/add', [`=chain=forward`,`=src-address-list=${list}`,`=protocol=udp`,`=dst-port=53`,`=action=accept`,`=comment=${commentTag}:dns`]).catch(()=>{});
         results.steps.dns = { ok:true };
       } catch(e:any){ results.steps.dns={ok:false,error:e.message}; }
-      // allow portal host
+      // allow portal host (dst-nat accept + forward accept, ordered above drop-other)
       try {
         const nat = await safe('/ip/firewall/nat/print') as any[]; const ex = (nat||[]).find((x:any)=>String(x.comment)===commentTag+':allow-portal');
-        if (!ex) await api.write('/ip/firewall/nat/add', [`=chain=dstnat`,`=src-address-list=${list}`,`=protocol=tcp`,`=dst-port=80,443`,`=dst-address=${portalHost}`,`=action=accept`,`=comment=${commentTag}:allow-portal`]).catch(()=>{});
-        results.steps.allowPortal = { ok:true };
-      } catch(e:any){ results.steps.allowPortal={ok:false,error:e.message}; }
+        if (!ex) await api.write('/ip/firewall/nat/add', [`=chain=dstnat`,`=src-address-list=${list}`,`=protocol=tcp`,`=dst-port=80,443`,`=dst-address=${portalIp}`,`=action=accept`,`=comment=${commentTag}:allow-portal`]).catch(()=>{});
+        // RouterOS `filter/add` has no `place` parameter; add then explicitly
+        // `move` above `drop-other`. Do NOT swallow errors — surface them.
+        const fw = await safe('/ip/firewall/filter/print') as any[]; const exf = (fw||[]).find((x:any)=>String(x.comment)===commentTag+':portal-fw');
+        if (!exf) {
+          const added: any = await api.write('/ip/firewall/filter/add', [`=chain=forward`,`=src-address-list=${list}`,`=dst-address=${portalIp}`,`=protocol=tcp`,`=dst-port=80,443`,`=action=accept`,`=comment=${commentTag}:portal-fw`]);
+          results.steps.portalFw = { ok:true, action:'added', id: String(added?.[0]?.ret || added?.[0]?.['.id'] || '') || undefined };
+        } else { results.steps.portalFw = { ok:true, action:'exists', id: String(exf['.id']||'') || undefined }; }
+        results.steps.allowPortal = { ok:true, portal_ip: portalIp };
+      } catch(e:any){ results.steps.allowPortal={ok:false,error:e.message}; results.steps.portalFw={ok:false,error:e.message}; }
       // redirect http
       try {
         const nat = await safe('/ip/firewall/nat/print') as any[]; const ex = (nat||[]).find((x:any)=>String(x.comment)===commentTag+':redirect-http');
-        const params = [`=chain=dstnat`,`=src-address-list=${list}`,`=protocol=tcp`,`=dst-port=80`,`=action=dst-nat`,`=to-addresses=${portalHost}`,`=to-ports=${String(portalPort||80)}`,`=comment=${commentTag}:redirect-http`];
+        const params = [`=chain=dstnat`,`=src-address-list=${list}`,`=protocol=tcp`,`=dst-port=80`,`=action=dst-nat`,`=to-addresses=${portalIp}`,`=to-ports=${String(portalPort||80)}`,`=comment=${commentTag}:redirect-http`];
         if (ex) await api.write('/ip/firewall/nat/set', [`=.id=${ex['.id']}`, ...params.slice(0)]).catch(()=>{});
         else await api.write('/ip/firewall/nat/add', params).catch(()=>{});
         results.steps.redirect = { ok:true, action: ex?'updated':'created' };
@@ -695,9 +736,21 @@ export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: 
       // drop other
       try {
         const fw = await safe('/ip/firewall/filter/print') as any[]; const ex = (fw||[]).find((x:any)=>String(x.comment)===commentTag+':drop-other');
-        if (!ex) await api.write('/ip/firewall/filter/add', [`=chain=forward`,`=src-address-list=${list}`,`=action=drop`,`=comment=${commentTag}:drop-other`]).catch(()=>{});
+        if (!ex) await api.write('/ip/firewall/filter/add', [`=chain=forward`,`=src-address-list=${list}`,`=action=drop`,`=comment=${commentTag}:drop-other`]);
         results.steps.dropOther = { ok:true };
       } catch(e:any){ results.steps.dropOther={ok:false,error:e.message}; }
+      // ordering: accept rules (dns + portal-fw) must sit above drop-other
+      try {
+        const fw = await safe('/ip/firewall/filter/print') as any[];
+        const dropId = String(((fw||[]).find((x:any)=>String(x.comment)===commentTag+':drop-other')||{})['.id']||'');
+        if (dropId) {
+          const pfw = (fw||[]).find((x:any)=>String(x.comment)===commentTag+':portal-fw');
+          const dnsR = (fw||[]).find((x:any)=>String(x.comment)===commentTag+':dns');
+          if (pfw?.['.id']) await api.write('/ip/firewall/filter/move', [`=.id=${pfw['.id']}`, `=destination=${dropId}`]);
+          if (dnsR?.['.id']) await api.write('/ip/firewall/filter/move', [`=.id=${dnsR['.id']}`, `=destination=${pfw?.['.id']||dropId}`]);
+        }
+        results.steps.ordering = { ok:true };
+      } catch(e:any){ results.steps.ordering={ok:false,error:e.message}; }
     } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
   };
 
@@ -710,6 +763,82 @@ export async function mikrotikProvisionWalledGardenRedirect(r: RouterRow, opts: 
     return { ok: false, error: 'Router is not in API/REST mode; configure walled-garden redirect rules on NAS manually (address-list/firewall/nat/dns)', mode };
   }
   return results;
+}
+
+/** Add an IP to a firewall address-list (used for captive-portal redirect
+ *  lists such as izn-expired / izn-walled-garden). Idempotent. */
+export async function mikrotikAddressListAdd(r: RouterRow, opts: { list: string; address: string; comment?: string }) {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  const list = String(opts.list || '').trim();
+  const address = String(opts.address || '').trim();
+  if (!list || !address) throw new Error('list and address are required');
+  const comment = String(opts.comment || `IzanDesk:${list}`);
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    const fetchQ = () => restFetch(o, `/ip/firewall/address-list?list=${encodeURIComponent(list)}&address=${encodeURIComponent(address)}`)
+      .catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, `/ip/firewall/address-list?list=${encodeURIComponent(list)}&address=${encodeURIComponent(address)}`); throw e; });
+    const existing: any[] = await fetchQ() as any;
+    if (Array.isArray(existing) && existing.length) return { ok: true, action: 'exists', list, address, mode: 'REST' };
+    await restSend(o, 'PUT', '/ip/firewall/address-list', { list, address, comment }).catch(async (e) => { if (o.scheme === 'https') return restSendHttps(o, 'PUT', '/ip/firewall/address-list', { list, address, comment }); throw e; });
+    return { ok: true, action: 'added', list, address, mode: 'REST' };
+  }
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
+  try {
+    // print-all + filter in JS: query-style print with no match replies !empty,
+    // which node-routeros surfaces as an UNKNOWNREPLY exception.
+    const all: any[] = await api.write('/ip/firewall/address-list/print').catch(() => []) as any;
+    if ((all || []).some((x: any) => String(x.list) === list && String(x.address) === address)) return { ok: true, action: 'exists', list, address, mode: 'API' };
+    await api.write('/ip/firewall/address-list/add', [`=list=${list}`, `=address=${address}`, `=comment=${comment}`]);
+    return { ok: true, action: 'added', list, address, mode: 'API' };
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
+}
+
+/** Remove an IP from a firewall address-list (e.g. on reactivation/expiry
+ *  purge). Idempotent. */
+export async function mikrotikAddressListRemove(r: RouterRow, opts: { list: string; address: string }) {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  const list = String(opts.list || '').trim();
+  const address = String(opts.address || '').trim();
+  if (!list || !address) throw new Error('list and address are required');
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    const existing: any[] = await restFetch(o, `/ip/firewall/address-list?list=${encodeURIComponent(list)}&address=${encodeURIComponent(address)}`)
+      .catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, `/ip/firewall/address-list?list=${encodeURIComponent(list)}&address=${encodeURIComponent(address)}`); throw e; }) as any;
+    if (!Array.isArray(existing) || !existing.length) return { ok: true, action: 'not_found', list, address, mode: 'REST' };
+    const id = existing[0]['.id'] || existing[0].id;
+    await restSend(o, 'DELETE', `/ip/firewall/address-list/${id}`).catch(async (e) => { if (o.scheme === 'https') return restSendHttps(o, 'DELETE', `/ip/firewall/address-list/${id}`); throw e; });
+    return { ok: true, action: 'removed', list, address, mode: 'REST' };
+  }
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
+  try {
+    const all: any[] = await api.write('/ip/firewall/address-list/print').catch(() => []) as any;
+    const ex = (all || []).find((x: any) => String(x.list) === list && String(x.address) === address);
+    if (!ex) return { ok: true, action: 'not_found', list, address, mode: 'API' };
+    await api.write('/ip/firewall/address-list/remove', [`=.id=${ex['.id']}`]);
+    return { ok: true, action: 'removed', list, address, mode: 'API' };
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
+}
+
+/** Framed IP currently assigned to a PPP user on the router (from /ppp/active). */
+export async function mikrotikActiveAddressForUser(r: RouterRow, username: string): Promise<string | null> {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  const uname = String(username || '').trim();
+  if (!uname) return null;
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    const rows: any[] = await restFetch(o, `/ppp/active?name=${encodeURIComponent(uname)}`)
+      .catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, `/ppp/active?name=${encodeURIComponent(uname)}`); throw e; }) as any;
+    return Array.isArray(rows) && rows[0]?.address ? String(rows[0].address) : null;
+  }
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
+  try {
+    const rows: any[] = await api.write('/ppp/active/print').catch(() => []) as any;
+    const m = (rows || []).find((x: any) => String(x.name) === uname);
+    return m?.address ? String(m.address) : null;
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
 export async function mikrotikProvisionWireGuard(r: RouterRow, cfg: { ifName: string; listenPort?: number; privateKey?: string; address: string; peerName?: string; hubPublicKey: string; endpointHost: string; endpointPort: number; allowedAddress: string; keepalive?: number; presharedKey?: string; }) {

@@ -1,7 +1,7 @@
 import crypto = require('crypto');
 import { pool } from '../db';
 import { withSchedulerRun } from './scheduler-observability';
-import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikPurgePppUser, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikEnsureParentalProfile, mikrotikDisconnectPppUser, PARENTAL_CONTROL_PROFILE } from './mikrotik';
+import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikPurgePppUser, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikEnsureParentalProfile, mikrotikDisconnectPppUser, mikrotikProvisionWalledGardenRedirect, mikrotikAddressListAdd, mikrotikAddressListRemove, mikrotikActiveAddressForUser, PARENTAL_CONTROL_PROFILE } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
 import { auditLog } from './audit';
@@ -167,7 +167,7 @@ async function resolveNasForSubscriber(sub: AnyObj) {
   return null;
 }
 
-export async function applyProvisioningState(subId: string, desired: { status?: string; stage?: string; walled_garden?: boolean; reason?: string; sendCoa?: boolean; coaAction?: 'DISCONNECT'|'COA'; coaRateLimit?: string; profileOverride?: string; addressList?: string }) {
+export async function applyProvisioningState(subId: string, desired: { status?: string; stage?: string; walled_garden?: boolean; reason?: string; sendCoa?: boolean; coaAction?: 'DISCONNECT'|'COA'; coaRateLimit?: string; profileOverride?: string; addressList?: string; captive?: 'expired'|'walled' }) {
   const sub0 = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subId])).rows[0];
   if (!sub0) throw new Error('Subscriber not found');
   const updates: any = {};
@@ -195,7 +195,16 @@ export async function applyProvisioningState(subId: string, desired: { status?: 
   const results: AnyObj = { subscriber_id: subId, mode };
 
   const effective = { ...cur, profile_name: cur.package_profile_name || cur.package_name || 'default' };
-  const walled = !!(desired.walled_garden ?? effective.walled_garden) && desired.status !== 'ACTIVE';
+  // An explicit walled_garden flag is authoritative: within-grace validity
+  // expiry keeps status ACTIVE while restricting the session (walled garden +
+  // captive redirect), so the old `status !== 'ACTIVE'` guard must only apply
+  // when the flag is derived from the subscriber's current state.
+  const walled = desired.walled_garden !== undefined
+    ? !!desired.walled_garden
+    : (!!effective.walled_garden && desired.status !== 'ACTIVE');
+  // Captive-portal address list: validity expiry redirects to the /expired
+  // notice page, money-dues walled garden to /walled-garden.
+  const captiveList = desired.addressList || (walled ? (desired.captive === 'expired' ? 'izn-expired' : 'izn-walled-garden') : undefined);
   const restrictedProfile = desired.profileOverride || (walled ? 'izn-walled-garden' : null);
   if (restrictedProfile) effective.profile_name = restrictedProfile;
   if (desired.status === 'SUSPENDED' || desired.stage === SUSPENSION_STAGES.ISOLATED || desired.stage === SUSPENSION_STAGES.SUSPENDED) {
@@ -215,8 +224,19 @@ export async function applyProvisioningState(subId: string, desired: { status?: 
   if (mode === 'ROUTER' && router && ['API','REST'].includes(String(router.integration_mode||'').toUpperCase())) {
     try {
       if (walled) {
-        results.walled_garden_profile = await mikrotikEnsureWalledGarden(router, { profileName: restrictedProfile || 'izn-walled-garden', rateLimit: desired.coaRateLimit || '64k/64k' });
+        results.walled_garden_profile = await mikrotikEnsureWalledGarden(router, { profileName: restrictedProfile || 'izn-walled-garden', rateLimit: desired.coaRateLimit || '64k/64k' }).catch((e: any) => ({ ok: false, error: e.message }));
       }
+      // Resolve the subscriber's current session IP so the captive address
+      // lists (izn-expired / izn-walled-garden) can carry it for the NAT
+      // redirect to the notice page.
+      let sessionIp: string | null = null;
+      try {
+        const sess = (await pool.query(`SELECT ip_address FROM subscriber_sessions WHERE subscriber_id=$1 AND ip_address IS NOT NULL ORDER BY updated_at DESC LIMIT 1`, [subId])).rows[0];
+        sessionIp = (sess?.ip_address as string) || (cur.ip_address as string) || null;
+        if (!sessionIp && effective.username) {
+          sessionIp = await mikrotikActiveAddressForUser(router, String(effective.username)).catch(() => null);
+        }
+      } catch {}
       // desired.status is authoritative: stage ISOLATED/SUSPENDED below can
       // rewrite effective.status to SUSPENDED, so check the requested status.
       const effStatus = String(desired.status || effective.status || '').toUpperCase();
@@ -232,8 +252,40 @@ export async function applyProvisioningState(subId: string, desired: { status?: 
              JSON.stringify({ router: router.name || router.host, username: effective.username, active_removed: results.router.active_removed, secret: results.router.secret, mode: results.router.mode }), 'enforcement']).catch(() => {});
           await auditLog({ action: 'SUBSCRIBER_PPP_PURGED', entity_type: 'subscriber', entity_id: subId, details: { username: effective.username, router: router.name || router.host, active_removed: results.router.active_removed, secret: results.router.secret, reason: desired.reason || null } }).catch(() => {});
         }
+        // No session survives a purge — drop any stale captive address-list entries.
+        if (sessionIp) {
+          for (const l of ['izn-expired', 'izn-walled-garden']) {
+            await mikrotikAddressListRemove(router, { list: l, address: sessionIp }).catch(() => {});
+          }
+        }
       } else {
-        results.router = await mikrotikSyncPppSecret(router, effective);
+        // Keep secret sync and captive provisioning independent: a profile
+        // mismatch on the router must not skip the captive redirect setup.
+        try {
+          results.router = await mikrotikSyncPppSecret(router, effective);
+        } catch (e: any) { results.router = { ok: false, error: e.message }; }
+        if (walled && captiveList) {
+          // Captive notice: make sure the router has the NAT redirect rules for
+          // the captive list (dstnat tcp/80 → portal notice page), and put the
+          // subscriber's session IP into the list when known. Idempotent.
+          const base = String(process.env.CAPTIVE_PORTAL_BASE_URL || String(process.env.WALLED_GARDEN_PORTAL_URL || 'https://izandesk.duckdns.org').replace(/\/[^/]*$/, '')).replace(/\/+$/, '');
+          const page = desired.captive === 'expired' ? '/expired' : '/walled-garden';
+          results.captive_redirect = await mikrotikProvisionWalledGardenRedirect(router, {
+            addressList: captiveList,
+            portalUrl: `${base}${page}`,
+            tag: desired.captive === 'expired' ? 'IzanDesk-Expired' : 'IzanDesk-WalledGarden',
+          }).catch((e: any) => ({ ok: false, error: e.message }));
+          if (sessionIp) {
+            results.captive = await mikrotikAddressListAdd(router, { list: captiveList, address: sessionIp, comment: `IzanDesk:${captiveList}:${cur.username || subId}` }).catch((e: any) => ({ ok: false, error: e.message }));
+          }
+        } else if (!walled && effStatus === 'ACTIVE' && sessionIp) {
+          // Reactivated/renewed: remove captive entries so traffic flows normally.
+          results.captive_cleared = [];
+          for (const l of ['izn-expired', 'izn-walled-garden']) {
+            const r = await mikrotikAddressListRemove(router, { list: l, address: sessionIp }).catch((e: any) => ({ ok: false, error: e.message }));
+            (results.captive_cleared as any[]).push({ list: l, ...r });
+          }
+        }
       }
     } catch (e:any) { results.router = { ok:false, error: e.message }; }
   }
@@ -241,7 +293,7 @@ export async function applyProvisioningState(subId: string, desired: { status?: 
   // RADIUS AAA sync (radcheck/radreply/radusergroup) for RADIUS and hybrid consistency
   if (cur.username) {
     try {
-      const syncRes = await syncSubscriberToRadiusDb(effective, { walledGarden: walled, restrictedRateLimit: desired.coaRateLimit || '64k/64k', addressList: desired.addressList || 'izn-walled-garden' });
+      const syncRes = await syncSubscriberToRadiusDb(effective, { walledGarden: walled, restrictedRateLimit: desired.coaRateLimit || '64k/64k', addressList: captiveList || 'izn-walled-garden' });
       const ruStatus = (effective.status==='SUSPENDED'||effective.status==='EXPIRED'||effective.status==='TERMINATED') && !walled ? 'DISABLED' : (walled ? 'WALLED_GARDEN' : 'SYNCED');
       await pool.query(`INSERT INTO radius_users(subscriber_id,username,password,profile,framed_ip_address,status,last_synced_at,last_error)
         VALUES($1,$2,$3,$4,$5,$6,now(),NULL)
@@ -259,7 +311,7 @@ export async function applyProvisioningState(subId: string, desired: { status?: 
       let action: 'DISCONNECT'|'COA' = desired.coaAction || (suspendedHard ? 'DISCONNECT' : 'COA');
       const attrs: AnyObj = {};
       if (walled) {
-        attrs['Mikrotik-Address-List'] = desired.addressList || 'izn-walled-garden';
+        attrs['Mikrotik-Address-List'] = captiveList || 'izn-walled-garden';
         attrs['Mikrotik-Rate-Limit'] = desired.coaRateLimit || '64k/64k';
         if (restrictedProfile) attrs['Mikrotik-Group'] = restrictedProfile;
         action = 'COA';
@@ -379,7 +431,11 @@ export async function evaluateDuePolicies() {
         try {
           const profileOverride = walled ? (policy.walled_garden_profile || 'izn-walled-garden') : undefined;
           const coaAction: 'DISCONNECT'|'COA' = ((targetStatus === 'SUSPENDED' || targetStatus === 'EXPIRED') && !walled) ? 'DISCONNECT' : 'COA';
-          const applied = await applyProvisioningState(s.id, { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction, profileOverride, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? 'izn-walled-garden' : undefined });
+          // Validity-expired (no money due) subscribers land on the expiry
+          // captive page (/expired, address-list izn-expired); money-overdue
+          // subscribers stay on the walled-garden page.
+          const captive: 'expired'|'walled'|undefined = walled ? (currentDue > 0 ? 'walled' : 'expired') : undefined;
+          const applied = await applyProvisioningState(s.id, { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction, profileOverride, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? (captive === 'expired' ? 'izn-expired' : 'izn-walled-garden') : undefined, captive });
           // applyProvisioningState returns ok:true even when an individual
           // router/RADIUS/CoA step failed. Do not silently record a successful
           // enforcement when the subscriber state was changed but the network

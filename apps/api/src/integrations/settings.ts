@@ -46,6 +46,8 @@ export const SETTINGS_SCHEMA: SettingDef[] = [
   { key: 'general.company_address', category: 'general', label: 'Address', type: 'text', default: '' },
   { key: 'general.company_phone', category: 'general', label: 'Phone', type: 'string', default: '' },
   { key: 'general.company_email', category: 'general', label: 'Email', type: 'string', default: '' },
+  { key: 'general.support_whatsapp', category: 'general', label: 'Support WhatsApp Number', type: 'string', default: '', description: 'Shown on the captive expiry/recharge page (e.g. 8801XXXXXXXXX).' },
+  { key: 'general.support_hours', category: 'general', label: 'Support Hours', type: 'string', default: '', description: 'Shown on the captive expiry/recharge page (e.g. "9:00–21:00 daily").' },
   { key: 'general.timezone', category: 'general', label: 'Timezone', type: 'select', options: ['Asia/Dhaka', 'UTC', 'Asia/Kolkata', 'Asia/Dubai', 'Europe/London'], default: 'Asia/Dhaka' },
   { key: 'general.currency', category: 'general', label: 'Currency', type: 'select', options: ['BDT', 'USD', 'EUR', 'INR', 'GBP', 'AED'], default: 'BDT' },
   { key: 'general.currency_symbol', category: 'general', label: 'Currency Symbol', type: 'string', default: '৳' },

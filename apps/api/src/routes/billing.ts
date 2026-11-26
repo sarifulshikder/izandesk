@@ -666,6 +666,38 @@ router.post('/walled-garden/provision-router', asyncHandler(async (req, res) => 
   res.json({ ok: true, router: { id: router.id, name: router.name, host: router.host, integration_mode: router.integration_mode }, portalUrl, result });
 }));
 
+// One-time per-router setup for the captive EXPIRY notice: NAT-redirects
+// HTTP (tcp/80) of every IP in address-list "izn-expired" to the public
+// /expired page ("your subscription has expired — please recharge").
+// Expired subscribers' session IPs are added to the list automatically by
+// applyProvisioningState whenever their state changes.
+router.post('/captive/provision-router', asyncHandler(async (req, res) => {
+  if (!requireBillingRole(req, res)) return;
+  const b = req.body || {};
+  const routerId = b.router_id || b.routerId;
+  if (!routerId) return res.status(400).json({ message: 'router_id is required' });
+  const r = await pool.query('SELECT * FROM network_routers WHERE id=$1', [routerId]);
+  const router = r.rows[0];
+  if (!router) return res.status(404).json({ message: 'Router not found' });
+  if (!['API','REST'].includes(String(router.integration_mode || '').toUpperCase())) {
+    return res.status(400).json({ ok: false, message: 'Selected router/NAS is not directly manageable via API/REST. Configure address-list "izn-expired" and NAT dstnat tcp/80 → your portal /expired URL on the NAS manually.', router: { id: router.id, name: router.name, host: router.host, integration_mode: router.integration_mode } });
+  }
+  const policy = (await pool.query('SELECT * FROM billing_policies ORDER BY is_default DESC, created_at ASC LIMIT 1')).rows[0] || {};
+  const base = String(b.portal_base_url || policy?.config?.portal_base_url || process.env.CAPTIVE_PORTAL_BASE_URL || process.env.WALLED_GARDEN_PORTAL_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+  const portalUrl = b.portal_url || `${base}/expired`;
+  const addressList = b.address_list || 'izn-expired';
+  const result = await mikrotikProvisionWalledGardenRedirect(router, {
+    addressList,
+    portalUrl,
+    portalHost: b.portal_host,
+    portalPort: b.portal_port ? Number(b.portal_port) : undefined,
+    tag: 'IzanDesk-Expired',
+  });
+  await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES(NULL,'CAPTIVE_ROUTER_PROVISION',NULL,$1,$2::jsonb,$3)`,
+    ['Provisioned captive expiry redirect rules on router', JSON.stringify({ router_id: router.id, router: router.name, address_list: addressList, result }), (req as any).user?.email || 'user']);
+  res.json({ ok: true, router: { id: router.id, name: router.name, host: router.host, integration_mode: router.integration_mode }, addressList, portalUrl, result });
+}));
+
 
 router.get('/invoices/:id/html', asyncHandler(async (req, res) => {
   if (!verifyInvoiceToken(req.params.id, String(req.query.token || ''))) return res.status(401).send('Invalid or expired invoice link');

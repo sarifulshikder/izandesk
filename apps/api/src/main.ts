@@ -41,6 +41,7 @@ import ticketsRouter from './routes/tickets';
 import messagingRouter from './routes/messaging';
 import brandingRouter from './routes/branding';
 import portalRouter from './routes/portal';
+import captiveRouter from './routes/captive';
 import systemRouter from './routes/system';
 import { registerProbeRoutes } from './routes/probes';
 import acsRouter from './routes/acs';
@@ -312,6 +313,9 @@ async function bootstrap() {
   });
   app.use('/api/branding', brandingRouter);
   app.use('/api/portal', portalRouter);
+  // Public captive expiry portal (router-redirected notice page): no auth,
+  // rate-limited per IP inside the router.
+  app.use('/api/captive', captiveRouter);
   app.use('/api/system', (req, res, next) => { const h = req.headers.authorization; if (h?.startsWith('Bearer ')) return authMiddleware(req, res, next); return next(); }, systemRouter);
   app.use('/api/settings', authMiddleware, settingsRouter);
   app.use('/api/acs', authMiddleware, acsRouter);
