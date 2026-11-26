@@ -750,7 +750,7 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
 export async function getBillingMetrics() {
   const tz = await getBusinessTimezone();
   const today = ymdInTimezone(new Date(), tz);
-  const [counts, invAgg, payAgg, invCounts] = await Promise.all([
+  const [counts, invAgg, payAgg, invCounts, captive] = await Promise.all([
     pool.query(`SELECT
       COUNT(*) FILTER (WHERE status='ACTIVE')::int as active,
       COUNT(*) FILTER (WHERE status='SUSPENDED' OR suspension_stage IN ('ISOLATED','SUSPENDED'))::int as suspended,
@@ -759,6 +759,11 @@ export async function getBillingMetrics() {
     pool.query(`SELECT COALESCE(SUM(total_amount),0)::numeric(12,2) as monthly_generated, COALESCE(SUM(due_amount),0)::numeric(12,2) as total_due FROM invoices WHERE to_char(COALESCE(issue_date, ($1::timestamptz AT TIME ZONE $2)::date),'YYYY-MM') = to_char($1::timestamptz AT TIME ZONE $2,'YYYY-MM')`, [new Date().toISOString(), tz]),
     pool.query(`SELECT COALESCE(SUM(amount) FILTER (WHERE (COALESCE(verified_at, created_at) AT TIME ZONE $2)::date = $1::date),0)::numeric(12,2) as today, COALESCE(SUM(amount) FILTER (WHERE to_char(COALESCE(verified_at, created_at) AT TIME ZONE $2,'YYYY-MM') = to_char($1::timestamptz AT TIME ZONE $2,'YYYY-MM')),0)::numeric(12,2) as month FROM payments WHERE status='COMPLETED'`, [today, tz]),
     pool.query(`SELECT COUNT(*) FILTER (WHERE status='OVERDUE')::int as overdue, COUNT(*) FILTER (WHERE status IN ('UNPAID','PARTIAL','OVERDUE'))::int as unpaid FROM invoices`),
+    pool.query(`SELECT
+      COUNT(*) FILTER (WHERE suspension_stage='WALLED_GARDEN' AND walled_garden=true)::int as walled_garden,
+      COUNT(*) FILTER (WHERE suspension_stage='WALLED_GARDEN' AND walled_garden=true AND current_due > 0)::int as walled_due,
+      COUNT(*) FILTER (WHERE suspension_stage='WALLED_GARDEN' AND walled_garden=true AND current_due <= 0)::int as walled_validity
+      FROM subscribers`),
   ]);
   return {
     activeSubscribers: Number(counts.rows[0]?.active || 0),
@@ -770,6 +775,9 @@ export async function getBillingMetrics() {
     thisMonthCollections: Number(payAgg.rows[0]?.month || 0),
     overdueInvoices: Number(invCounts.rows[0]?.overdue || 0),
     unpaidInvoices: Number(invCounts.rows[0]?.unpaid || 0),
+    captiveWalledGarden: Number(captive.rows[0]?.walled_garden || 0),
+    captiveWalledDue: Number(captive.rows[0]?.walled_due || 0),
+    captiveWalledValidity: Number(captive.rows[0]?.walled_validity || 0),
   };
 }
 

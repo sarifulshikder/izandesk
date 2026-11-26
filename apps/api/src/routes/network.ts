@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler, sanitizeRouter, sanitizeRouters, networkGuard, hasNetworkWrite } from './helpers';
-import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret } from '../integrations/mikrotik';
+import { mikrotikTest, mikrotikTelemetry, mikrotikActiveSessions, mikrotikSyncPackage, mikrotikListPppSecrets, mikrotikListPppProfiles, mikrotikListHotspotUsers, mikrotikListHotspotProfiles, mikrotikSyncPppSecret, mikrotikProvisionWalledGardenRedirect } from '../integrations/mikrotik';
 import { invalidateMikrotikApi } from '../integrations/mikrotik-manager';
 import { mikrotikErrorMessage } from '../integrations/mikrotik-errors';
 import { syncNasForRouter, removeNasForRouter, syncAllRadiusNas, probeRadiusNas } from '../integrations/radius';
@@ -151,6 +151,11 @@ router.post('/routers', asyncHandler(async (req, res) => {
       b.nas_identifier || null,
     ]);
   try { await syncNasForRouter(r.rows[0]); } catch {}
+  // Auto-provision captive portal rules for API/REST routers
+  if (['API','REST'].includes(mode)) {
+    try { await mikrotikProvisionWalledGardenRedirect(r.rows[0], { addressList: 'izn-expired', portalUrl: process.env.CAPTIVE_EXPIRY_PORTAL_URL || 'https://izandesk.duckdns.org/expired', tag: 'IzanDesk-Expired' }).catch(()=>{}); } catch {}
+    try { await mikrotikProvisionWalledGardenRedirect(r.rows[0], { addressList: 'izn-walled-garden', portalUrl: process.env.WALLED_GARDEN_PORTAL_URL || 'https://izandesk.duckdns.org/walled-garden', tag: 'IzanDesk-WalledGarden' }).catch(()=>{}); } catch {}
+  }
   res.status(201).json(sanitizeRouter(r.rows[0]));
 }));
 
@@ -183,6 +188,11 @@ router.put('/routers/:id', asyncHandler(async (req, res) => {
   await redisDel(`iz:router:telemetry:${req.params.id}`);
   await invalidateMikrotikApi(String(req.params.id)).catch(() => {});
   try { await syncNasForRouter(r.rows[0], c.host); } catch {}
+  // Auto-provision captive portal rules for API/REST routers
+  if (['API','REST'].includes(mode)) {
+    try { await mikrotikProvisionWalledGardenRedirect(r.rows[0], { addressList: 'izn-expired', portalUrl: process.env.CAPTIVE_EXPIRY_PORTAL_URL || 'https://izandesk.duckdns.org/expired', tag: 'IzanDesk-Expired' }).catch(()=>{}); } catch {}
+    try { await mikrotikProvisionWalledGardenRedirect(r.rows[0], { addressList: 'izn-walled-garden', portalUrl: process.env.WALLED_GARDEN_PORTAL_URL || 'https://izandesk.duckdns.org/walled-garden', tag: 'IzanDesk-WalledGarden' }).catch(()=>{}); } catch {}
+  }
   res.json(sanitizeRouter(r.rows[0]));
 }));
 

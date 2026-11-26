@@ -250,4 +250,28 @@ export async function runMessagingSchedulerSweep() {
       await dispatchMessage({ channel_type: 'SMS', template_name: 'invoice_due_reminder_sms', to: r.phone, variables: { name: r.full_name, invoice_no: r.invoice_number, invoice_number: r.invoice_number, amount: r.due_amount, due: r.due_amount, due_date: r.due_date, brand: 'IzanDesk' }, related_type: 'INVOICE_DUE_REMINDER', related_id: String(r.invoice_id), requireEnabled: false }).catch(()=>{});
     }
   } catch {}
+
+  // Expiry reminders: notify subscribers whose validity expires within warning window
+  // (subscribers with auto_suspend_enabled, not terminated, validity_date in warn window)
+  try {
+    const policy = (await pool.query('SELECT * FROM billing_policies ORDER BY is_default DESC, created_at ASC LIMIT 1')).rows[0];
+    const warnDays = Number(policy?.warning_days ?? 3);
+    const tz = await (async () => { const r = await pool.query("SELECT value FROM settings WHERE key='general.timezone'"); return r.rows[0]?.value || 'Asia/Dhaka'; })();
+    const today = new Date().toISOString().slice(0,10);
+    const expiryRows = (await pool.query(`
+      SELECT s.id as subscriber_id, s.full_name, s.phone, s.expiry_date, s.client_code, s.username
+      FROM subscribers s
+      WHERE s.auto_suspend_enabled=true
+        AND s.status NOT IN ('TERMINATED','EXPIRED')
+        AND s.expiry_date IS NOT NULL
+        AND s.expiry_date::date <= (CURRENT_DATE + ($1::int * INTERVAL '1 day'))
+        AND s.expiry_date::date >= CURRENT_DATE
+        AND s.phone IS NOT NULL AND s.phone <> ''
+      ORDER BY s.expiry_date ASC LIMIT 100`, [warnDays])).rows;
+    for (const r of expiryRows) {
+      const sent = (await pool.query(`SELECT 1 FROM message_logs WHERE related_type='VALIDITY_EXPIRY_REMINDER' AND related_id=$1 AND status IN ('SENT','SIMULATED') AND created_at::date=CURRENT_DATE LIMIT 1`, [String(r.subscriber_id)])).rows[0];
+      if (sent) continue;
+      await dispatchMessage({ channel_type: 'SMS', template_name: 'validity_expiry_reminder_sms', to: r.phone, variables: { name: r.full_name, client_code: r.client_code, username: r.username, expiry_date: r.expiry_date, days_left: Math.ceil((new Date(r.expiry_date).getTime() - new Date(today).getTime()) / (1000*60*60*24)), brand: 'IzanDesk' }, related_type: 'VALIDITY_EXPIRY_REMINDER', related_id: String(r.subscriber_id), requireEnabled: false }).catch(()=>{});
+    }
+  } catch {}
 }

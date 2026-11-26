@@ -165,12 +165,12 @@ export default function CustomerPortalPage() {
     return (
       <div className="min-h-screen bg-background text-foreground flex items-center justify-center p-4">
         <div className="card w-full max-w-md p-6 space-y-4">
-          <div className="flex items-center gap-3"><div className="page-title-icon !w-10 !h-10">I</div><div><div className="font-bold text-lg">IzanDesk Self-Care Portal</div><div className="text-xs text-muted-foreground">Subscription, invoices, payments, usage, tickets, plans & more</div></div></div>
+          <div className="flex items-center gap-3"><div className="page-title-icon !w-10 !h-10">I</div><div><div className="font-bold text-lg">IzanDesk স্ব-পরিচর্যা পোর্টাল</div><div className="text-xs text-muted-foreground">সাবস্ক্রিপশন, ইনভয়েস, পেমেন্ট, ব্যবহার, টিকেট, প্ল্যান ও আরও</div></div></div>
           {err && <div className="alert alert-danger">{err}</div>}
-          <label className="block"><div className="form-label">Client Code / Username / Phone</div><input className="form-control" value={login.id} onChange={e=>setLogin({...login,id:e.target.value})} /></label>
-          <label className="block"><div className="form-label">Password</div><input type="password" className="form-control" value={login.password} onChange={e=>setLogin({...login,password:e.target.value})} /></label>
-          <button onClick={doLogin} disabled={busy} className="btn btn-primary w-full">{busy?'Signing in...':'Sign in to Portal'}</button>
-          <div className="text-xs text-muted-foreground">Use the portal password set for your subscriber account. Client code, username and phone are identifiers only.</div>
+          <label className="block"><div className="form-label">ক্লায়েন্ট কোড / ইউজারনেম / ফোন</div><input className="form-control" value={login.id} onChange={e=>setLogin({...login,id:e.target.value})} /></label>
+          <label className="block"><div className="form-label">পাসওয়ার্ড</div><input type="password" className="form-control" value={login.password} onChange={e=>setLogin({...login,password:e.target.value})} /></label>
+          <button onClick={doLogin} disabled={busy} className="btn btn-primary w-full">{busy?'সাইন ইন হচ্ছে...':'পোর্টালে সাইন ইন করুন'}</button>
+          <div className="text-xs text-muted-foreground">আপনার সাবস্ক্রাইবার অ্যাকাউন্টের জন্য সেট করা পোর্টাল পাসওয়ার্ড ব্যবহার করুন। ক্লায়েন্ট কোড, ইউজারনেম এবং ফোন শুধু শনাক্তকারী।</div>
         </div>
       </div>
     );
@@ -181,17 +181,17 @@ export default function CustomerPortalPage() {
   const isOnline = String(sess?.status||'').toUpperCase() === 'ONLINE';
   const monthUsage = (usage?.daily||[]).reduce((a:any,d:any)=>({rx:a.rx+Number(d.rx_bytes||0),tx:a.tx+Number(d.tx_bytes||0),sec:a.sec+Number(d.session_seconds||0)}),{rx:0,tx:0,sec:0});
   const tabs: any[] = [
-    ['overview','Overview',Wifi],
-    ['invoices','Invoices',Receipt],
-    ['payments','Payments',CreditCard],
-    ['usage','Usage',BarChart3],
-    ['tickets','Support',LifeBuoy],
-    ['plans','Plans',Package],
-    ['documents','Documents',FileText],
-    ['notifications','Notifications',Bell],
-    ['speedtest','Speedtest',Gauge],
-    ['wifi','Wi-Fi',Wifi],
-    ['profile','Profile',User],
+    ['overview','ওভারভিউ',Wifi],
+    ['invoices','ইনভয়েস',Receipt],
+    ['payments','পেমেন্ট',CreditCard],
+    ['usage','ব্যবহার',BarChart3],
+    ['tickets','সাপোর্ট',LifeBuoy],
+    ['plans','প্ল্যান',Package],
+    ['documents','নথি',FileText],
+    ['notifications','নোটিফিকেশন',Bell],
+    ['speedtest','স্পিডটেস্ট',Gauge],
+    ['wifi','ওয়াই-ফাই',Wifi],
+    ['profile','প্রোফাইল',User],
   ];
 
   const current = tabs.find((t:any)=>t[0]===tab) || tabs[0];
@@ -203,7 +203,7 @@ export default function CustomerPortalPage() {
       <div className="lg:hidden sticky top-0 z-40 border-b border-border/60 bg-card/95 backdrop-blur px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3 min-w-0">
           <button onClick={()=>setMenuOpen(v=>!v)} className="p-2 rounded-lg border border-border/60 bg-muted/30"><Menu className="w-5 h-5"/></button>
-          <div className="min-w-0"><div className="font-bold truncate">Self-Care Portal</div><div className="text-xs text-muted-foreground truncate">{current[1]}</div></div>
+          <div className="min-w-0"><div className="font-bold truncate">সেলফ-কെയার পোর্টাল</div><div className="text-xs text-muted-foreground truncate">{current[1]}</div></div>
         </div>
         <div className={`badge ${isOnline?'badge-success':'badge-secondary'}`}>{isOnline?'ONLINE':'OFFLINE'}</div>
       </div>
@@ -223,8 +223,8 @@ export default function CustomerPortalPage() {
             ))}
           </nav>
           <div className="pt-3 mt-3 border-t border-border/60 space-y-2">
-            <button onClick={()=>{load(token!); setMenuOpen(false);}} className="w-full px-3 py-2 rounded-xl border border-border/60 bg-muted/30 text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
-            <button onClick={logout} className="w-full px-3 py-2 rounded-xl border border-border/60 bg-muted/30 text-sm inline-flex items-center gap-2"><LogOut className="w-4 h-4"/>Logout</button>
+            <button onClick={()=>{load(token!); setMenuOpen(false);}} className="w-full px-3 py-2 rounded-xl border border-border/60 bg-muted/30 text-sm inline-flex items-center gap-2"><RefreshCw className="w-4 h-4"/>রিফ্রেশ</button>
+            <button onClick={logout} className="w-full px-3 py-2 rounded-xl border border-border/60 bg-muted/30 text-sm inline-flex items-center gap-2"><LogOut className="w-4 h-4"/>লগআউট</button>
           </div>
         </div>
       </div>}
@@ -237,7 +237,7 @@ export default function CustomerPortalPage() {
             <div className="mt-4 p-3 rounded-xl bg-muted/30 border border-border/60">
               <div className="font-medium text-sm truncate">{sub.full_name}</div>
               <div className="text-xs text-muted-foreground truncate">{sub.client_code} • {sub.username||'-'}</div>
-              <div className={`badge mt-2 ${isOnline?'badge-success':'badge-secondary'}`}>{isOnline?'ONLINE':'OFFLINE'}{sess?.ip_address ? ` • ${sess.ip_address}` : ''}</div>
+              <div className={`badge mt-2 ${isOnline?'badge-success':'badge-secondary'}`}>{isOnline?'অনলাইন':'অফলাইন'}{sess?.ip_address ? ` • ${sess.ip_address}` : ''}</div>
             </div>
           </div>
           <nav className="flex-1 p-3 space-y-1 overflow-auto">
@@ -246,8 +246,8 @@ export default function CustomerPortalPage() {
             ))}
           </nav>
           <div className="p-3 border-t border-border/60 space-y-2">
-            <button onClick={()=>load(token!)} className="w-full px-3 py-2 rounded-xl border border-border/60 bg-muted/30 hover:bg-muted/50 text-sm inline-flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4"/>Refresh</button>
-            <button onClick={logout} className="w-full px-3 py-2 rounded-xl border border-border/60 bg-muted/30 hover:bg-muted/50 text-sm inline-flex items-center justify-center gap-2"><LogOut className="w-4 h-4"/>Logout</button>
+            <button onClick={()=>load(token!)} className="w-full px-3 py-2 rounded-xl border border-border/60 bg-muted/30 hover:bg-muted/50 text-sm inline-flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4"/>রিফ্রেশ</button>
+            <button onClick={logout} className="w-full px-3 py-2 rounded-xl border border-border/60 bg-muted/30 hover:bg-muted/50 text-sm inline-flex items-center justify-center gap-2"><LogOut className="w-4 h-4"/>লগআউট</button>
           </div>
         </aside>
 
@@ -256,13 +256,13 @@ export default function CustomerPortalPage() {
           <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 space-y-5">
             <div className="page-header items-start">
               <div>
-                <span className="page-eyebrow">Self-care · {current[1]}</span>
+                <span className="page-eyebrow">সেলফ-কെയার · {current[1]}</span>
                 <h1 className="page-title">{current[1]}</h1>
-                <p className="page-subtitle">Welcome, {sub.full_name} ({sub.client_code})</p>
+                <p className="page-subtitle">স্বাগতম, {sub.full_name} ({sub.client_code})</p>
               </div>
               <div className="page-actions hidden lg:flex">
-                <button onClick={()=>load(token!)} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>Refresh</button>
-                <button onClick={logout} className="btn btn-outline"><LogOut className="w-4 h-4"/>Logout</button>
+                <button onClick={()=>load(token!)} className="btn btn-outline"><RefreshCw className="w-4 h-4"/>রিফ্রেশ</button>
+                <button onClick={logout} className="btn btn-outline"><LogOut className="w-4 h-4"/>লগআউট</button>
               </div>
             </div>
 
@@ -277,13 +277,13 @@ export default function CustomerPortalPage() {
 
             {/* summary cards */}
             <div className="stat-grid">
-              <div className={`dash-stat ${isOnline?'dash-stat-success':'dash-stat-secondary'}`}><span className="dash-stat-icon"><Wifi className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">Connection</span><span className="dash-stat-value">{isOnline?'ONLINE':'OFFLINE'}</span><span className="dash-stat-hint">{sess?.ip_address ? `IP ${sess.ip_address}` : 'No live session'}{sess?.source==='radacct' ? ' • RADIUS' : ''}</span></span></div>
-              <div className="dash-stat dash-stat-primary"><span className="dash-stat-icon"><Package className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">Package</span><span className="dash-stat-value">{sub.package_name||'-'}</span><span className="dash-stat-hint">{sub.bandwidth_mbps ? `${sub.bandwidth_mbps} Mbps` : ''} • {sub.connection_type}</span></span></div>
-              <div className="dash-stat dash-stat-warning"><span className="dash-stat-icon"><Receipt className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">Current Due</span><span className="dash-stat-value tabular-nums">{money(sub.current_due)}</span><span className="dash-stat-hint">payable now</span></span></div>
-              <div className="dash-stat dash-stat-info"><span className="dash-stat-icon"><BarChart3 className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">30d Usage</span><span className="dash-stat-value tabular-nums">↓ {fmtBytes(monthUsage.rx)} ↑ {fmtBytes(monthUsage.tx)}</span><span className="dash-stat-hint">{Math.round(monthUsage.sec/3600)}h session time</span></span></div>
+              <div className={`dash-stat ${isOnline?'dash-stat-success':'dash-stat-secondary'}`}><span className="dash-stat-icon"><Wifi className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">কানেকশন</span><span className="dash-stat-value">{isOnline?'অনলাইন':'অফলাইন'}</span><span className="dash-stat-hint">{sess?.ip_address ? `IP ${sess.ip_address}` : 'লাইভ সেশন নেই'}{sess?.source==='radacct' ? ' • RADIUS' : ''}</span></span></div>
+              <div className="dash-stat dash-stat-primary"><span className="dash-stat-icon"><Package className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">প্যাকেজ</span><span className="dash-stat-value">{sub.package_name||'-'}</span><span className="dash-stat-hint">{sub.bandwidth_mbps ? `${sub.bandwidth_mbps} Mbps` : ''} • {sub.connection_type}</span></span></div>
+              <div className="dash-stat dash-stat-warning"><span className="dash-stat-icon"><Receipt className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">বর্তমান বকিয়া</span><span className="dash-stat-value tabular-nums">{money(sub.current_due)}</span><span className="dash-stat-hint">এখনই चुका করতে হবে</span></span></div>
+              <div className="dash-stat dash-stat-info"><span className="dash-stat-icon"><BarChart3 className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">৩০ দিনের ব্যবহার</span><span className="dash-stat-value tabular-nums">↓ {fmtBytes(monthUsage.rx)} ↑ {fmtBytes(monthUsage.tx)}</span><span className="dash-stat-hint">{Math.round(monthUsage.sec/3600)}ঘণ্টা সেশন</span></span></div>
             </div>
 
-            {!!(notifications.announcements||ann).length && <div className="card p-4 border-info/30"><div className="font-semibold flex items-center gap-2 mb-2"><Bell className="w-4 h-4 text-info"/>Announcements</div><div className="space-y-2">{((notifications.announcements||ann) as any[]).slice(0,3).map((a:any,i:number)=>(<div key={a.id||i} className="text-sm"><div className="font-medium">{a.title}</div><div className="text-foreground">{a.body}</div></div>))}</div></div>}
+            {!!(notifications.announcements||ann).length && <div className="card p-4 border-info/30"><div className="font-semibold flex items-center gap-2 mb-2"><Bell className="w-4 h-4 text-info"/>ঘোষণা</div><div className="space-y-2">{((notifications.announcements||ann) as any[]).slice(0,3).map((a:any,i:number)=>(<div key={a.id||i} className="text-sm"><div className="font-medium">{a.title}</div><div className="text-foreground">{a.body}</div></div>))}</div></div>}
 
             {tab==='overview' && <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="card p-4 space-y-3"><h2 className="font-bold">Subscription</h2><div className="text-sm space-y-2 text-foreground"><div><b>Account:</b> {sub.client_code} • {sub.username||'-'}</div><div><b>Status:</b> {sub.status} {sub.suspension_stage && sub.suspension_stage!=='NONE' ? `(${sub.suspension_stage})` : ''}</div><div><b>Connection:</b> {sub.connection_type} ({sub.provisioning_mode})</div><div><b>Monthly Bill:</b> {money(sub.monthly_bill)}</div><div><b>Address:</b> {sub.address||'-'}</div></div><div className="p-3 rounded-xl bg-muted/30 border border-border/60 space-y-2"><div className="text-xs text-muted-foreground">Live Traffic (auto-refresh every 15s)</div><div className="text-sm font-medium">{sess ? `${sess.status} • ${sess.ip_address||'-'}` : 'No active session'}</div><div className="text-xs text-foreground">RX {fmtBytes(sess?.rx_bytes||0)} total • TX {fmtBytes(sess?.tx_bytes||0)} total • Rate ↓{Math.round(Number(sess?.rx_bps||0)/1000)} kbps ↑{Math.round(Number(sess?.tx_bps||0)/1000)} kbps</div>{sess?.uptime_seconds!=null && <div className="text-xs text-muted-foreground">Uptime: {Math.round(Number(sess.uptime_seconds||0)/60)} min</div>}{liveHistory.length>1 && (()=>{const max=Math.max(1,...liveHistory.map(h=>Math.max(h.rx,h.tx)));return (<div><div className="text-[10px] text-muted-foreground mb-1">Live rate samples (↓ RX / ↑ TX)</div><div className="flex items-end gap-0.5 h-10">{liveHistory.slice(-24).map((h,i)=>(<div key={i} className="flex-1 flex flex-col justify-end gap-px h-full"><div className="w-full bg-info/70 rounded-sm" style={{height:`${Math.max(2,(h.rx/max)*100)}%`}} title={`RX ${Math.round(h.rx/1000)} kbps`}/><div className="w-full bg-success/70 rounded-sm" style={{height:`${Math.max(2,(h.tx/max)*100)}%`}} title={`TX ${Math.round(h.tx/1000)} kbps`}/></div>))}</div></div>);})()}</div>{me.quota ? (<div className="p-3 rounded-xl bg-muted/30 border border-border/60 space-y-2"><div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">FUP/Quota ({me.quota.period.replace('_',' ')})</span><span className={me.quota.over_cap?'text-danger font-semibold':'text-foreground'}>{me.quota.over_cap?'Over cap':'Within cap'}</span></div><div className="text-sm">{fmtBytes(me.quota.used_bytes)} used of {me.quota.cap_gb} GB {me.quota.fup_speed_mbps ? `• FUP ${me.quota.fup_speed_mbps} Mbps` : ''}{sub.fup_exceeded ? ' • throttled (FUP enforced)' : ''}</div><div className="h-2 rounded-full bg-border/60 overflow-hidden"><div className={`${me.quota.over_cap?'bg-danger':'bg-info'} h-full`} style={{width:`${Math.min(100,me.quota.percent)}%`}}/></div><div className="text-xs text-muted-foreground">Remaining: {fmtBytes(me.quota.remaining_bytes)} ({Math.max(0,100-me.quota.percent).toFixed(1)}%) • policy enforcement depends on NAS/RADIUS configuration.</div></div>) : (<div className="text-xs text-muted-foreground">Quota/FUP: no data cap configured for this package (30-day usage shown in Usage).</div>)}</div>
