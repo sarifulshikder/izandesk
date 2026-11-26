@@ -720,13 +720,16 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
   const due = await recalcSubscriberDue(subscriberId);
   // A charge that clears the due (or a validity renewal of an EXPIRED subscriber)
   // restores ACTIVE; a manual suspension on a due-free subscriber is preserved.
+  // Also push due_date forward so the next evaluation doesn't re-trigger walled garden.
+  const newDueDate = due <= 0 && (charged || wasExpired) ? newExpiry : null;
   await pool.query(
     `UPDATE subscribers SET expiry_date=$2, old_expiry_date=$3,
+       due_date=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN $6 ELSE due_date END,
        status=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN 'ACTIVE' ELSE status END,
        suspension_stage=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN 'NONE' ELSE suspension_stage END,
        walled_garden=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN false ELSE walled_garden END,
        updated_at=now() WHERE id=$1`,
-    [subscriberId, newExpiry, oldExpiry, due, charged],
+    [subscriberId, newExpiry, oldExpiry, due, charged, newDueDate],
   );
 
   // Pure validity extension (no charge) on an expired/suspended subscriber with no
