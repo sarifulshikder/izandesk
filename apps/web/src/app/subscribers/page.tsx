@@ -6,11 +6,12 @@ import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch, getApiBaseUrl } from '@/lib/api';
 import { SubscriberFormWizard } from '@/components/subscribers/subscriber-form-wizard';
-import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, Download, Upload as UploadIcon, History, FileSpreadsheet, AlertCircle, CheckCircle, Package, MessageSquare, Phone, Mail, Activity, Users, UserCheck, UserX, Clock3, ExternalLink } from 'lucide-react';
+import { Search, Plus, Pencil, Trash2, X, Upload, FileText, User, RefreshCw, MapPin, Download, Upload as UploadIcon, History, FileSpreadsheet, AlertCircle, CheckCircle, Package, MessageSquare, Phone, Mail, Activity, Users, UserCheck, UserX, Clock3, ExternalLink, CreditCard, CalendarPlus, CalendarX } from 'lucide-react';
 
 export default function SubscribersPage() {
   const { token, user } = useAuth();
   const canReviewKyc = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'TECHNICIAN'].includes(String(user?.role));
+  const canRenew = ['SUPER_ADMIN', 'BILLING_OPERATOR'].includes(String(user?.role));
   const searchParams = useSearchParams();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -93,6 +94,13 @@ export default function SubscribersPage() {
   const [communications, setCommunications] = useState<any[]>([]);
   const [, setEquipLoading] = useState(false);
   const [showEquipModal, setShowEquipModal] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  // One-click renew ("recharge") modal state
+  const [renewTarget, setRenewTarget] = useState<any | null>(null);
+  const [renewDetail, setRenewDetail] = useState<any | null>(null);
+  const [renewForm, setRenewForm] = useState({ amount: '', method: 'CASH', extendDays: '', noCharge: false, note: '' });
+  const [renewBusy, setRenewBusy] = useState(false);
+  const [renewErr, setRenewErr] = useState<string | null>(null);
   const [editEquip, setEditEquip] = useState<any | null>(null);
   const [equipForm, setEquipForm] = useState<any>({
     equipment_type: 'CPE', serial_number: '', mac_address: '', inventory_serial_id: '', onu_id: '',
@@ -304,6 +312,66 @@ export default function SubscribersPage() {
     } catch (e: any) { setError(e.message); }
   };
 
+  // One-click renew ("recharge"): open the confirm modal for a subscriber row.
+  const openRenew = async (row: any) => {
+    if (!token || !canRenew) return;
+    setRenewErr(null);
+    setRenewTarget(row);
+    setRenewDetail(null);
+    const eff = Number(row.price_override ?? row.monthly_bill ?? 0);
+    setRenewForm({ amount: eff > 0 ? String(eff) : '', method: 'CASH', extendDays: '', noCharge: false, note: '' });
+    try {
+      const d = await apiFetch<any>(`/api/subscribers/${row.id}`, {}, token);
+      setRenewDetail(d);
+      const pkgPrice = Number(d?.package_info?.price || 0);
+      const amt = Number(row.price_override ?? row.monthly_bill ?? pkgPrice ?? 0);
+      if (amt > 0) setRenewForm(f => ({ ...f, amount: String(amt) }));
+    } catch { /* list row data is enough for the preview */ }
+  };
+
+  // Preview of the new expiry, mirroring the server-side validity math.
+  const renewPreview = (() => {
+    if (!renewTarget) return null;
+    const pkg = renewDetail?.package_info || null;
+    const unit = String(pkg?.validity_unit || 'CALENDAR_MONTH').toUpperCase();
+    const val = Math.max(1, Number(pkg?.validity_value || 1));
+    const today = new Date();
+    const curStr = String(renewTarget.expiry_date || '').slice(0, 10);
+    const cur = curStr ? new Date(curStr) : null;
+    const base = cur && !Number.isNaN(cur.getTime()) && cur.getTime() > today.getTime() ? cur : today;
+    const exp = new Date(base);
+    const days = Math.floor(Number(renewForm.extendDays || 0));
+    let label: string;
+    if (days > 0) { exp.setDate(exp.getDate() + days); label = `+${days} day(s)`; }
+    else if (unit === 'DAYS') { exp.setDate(exp.getDate() + val); label = `+${val} day(s)`; }
+    else if (unit === 'MONTHS') { exp.setMonth(exp.getMonth() + val); label = `+${val} month(s)`; }
+    else { exp.setMonth(exp.getMonth() + 1); label = '+1 calendar month'; }
+    return { newExpiry: exp.toISOString().slice(0, 10), label };
+  })();
+
+  const submitRenew = async () => {
+    if (!token || !renewTarget) return;
+    setRenewBusy(true); setRenewErr(null);
+    try {
+      const amount = renewForm.noCharge ? 0 : Number(renewForm.amount || 0);
+      if (!renewForm.noCharge && !(amount > 0)) throw new Error('Enter a charge amount, or tick "extend without charging"');
+      const r = await apiFetch<any>(`/api/subscribers/${renewTarget.id}/renew`, {
+        method: 'POST',
+        body: JSON.stringify({
+          amount,
+          method: renewForm.method,
+          extend_days: renewForm.extendDays ? Number(renewForm.extendDays) : undefined,
+          note: renewForm.note || undefined,
+        }),
+      }, token);
+      setNotice(`Renewed ${renewTarget.full_name || renewTarget.client_code}: charged ৳${Number(r.amount || 0).toLocaleString()} via ${r.method}, expiry ${r.old_expiry_date || '-'} → ${r.expiry_date} (${r.extend}). Due now ৳${Number(r.due || 0).toLocaleString()}${r.subscriber?.status ? `, status ${r.subscriber.status}` : ''}.`);
+      setRenewTarget(null);
+      await load();
+      if (detail?.id === renewTarget.id) await openDetail(detail.id);
+    } catch (e: any) { setRenewErr(e.message); }
+    finally { setRenewBusy(false); }
+  };
+
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
@@ -452,6 +520,7 @@ export default function SubscribersPage() {
       </div>
 
       {error && <div className="alert alert-danger">{error}</div>}
+      {notice && <div className="alert alert-success flex items-center justify-between gap-2">{notice}<button onClick={()=>setNotice(null)} className="p-1 rounded hover:bg-success/10"><X className="w-3.5 h-3.5"/></button></div>}
 
       <div className="stat-grid-5">
         <button onClick={()=>{ setStatus(''); setDueOnly(false); setValidityExpired(false); setExpiringDays(null); setExpiringTomorrow(false); }} className={`dash-stat dash-stat-primary compact ${status === '' && !dueOnly && !validityExpired && !expiringDays && !expiringTomorrow ? '!border-primary/50' : ''}`}>
@@ -522,6 +591,7 @@ export default function SubscribersPage() {
               <option value="provision">Re-provision</option>
               <option value="set_package">Set Package</option>
               <option value="set_reseller">Set Reseller</option>
+              {canRenew && <option value="renew">Renew (extend validity)</option>}
               <option value="delete">Delete</option>
             </select>
             <button onClick={handleBatchAction} disabled={!batchAction} className="btn btn-warning btn-sm">Apply</button>
@@ -613,6 +683,7 @@ export default function SubscribersPage() {
                       <div className="inline-flex items-center gap-0.5">
                         <Link href={`/subscribers/${r.id}`} onClick={e=>e.stopPropagation()} className="topbar-icon-btn !w-7 !h-7 !rounded-lg" title="Open 360° View"><ExternalLink className="w-3.5 h-3.5"/></Link>
                         <Link href={`/subscribers/${r.id}/live`} onClick={e=>e.stopPropagation()} className="topbar-icon-btn !w-7 !h-7 !rounded-lg" title="Open Live Dashboard"><Activity className="w-3.5 h-3.5"/></Link>
+                        {canRenew && <button onClick={(e)=>{e.stopPropagation();openRenew(r)}} className="topbar-icon-btn !w-7 !h-7 !rounded-lg hover:!text-success" title="Renew / extend validity"><CreditCard className="w-3.5 h-3.5"/></button>}
                         <button onClick={(e)=>{e.stopPropagation();openEdit(r)}} className="topbar-icon-btn !w-7 !h-7 !rounded-lg" title="Edit"><Pencil className="w-3.5 h-3.5"/></button>
                         <button onClick={(e)=>{e.stopPropagation();remove(r.id)}} className="topbar-icon-btn !w-7 !h-7 !rounded-lg hover:!text-danger" title="Delete"><Trash2 className="w-3.5 h-3.5"/></button>
                       </div>
@@ -654,6 +725,8 @@ export default function SubscribersPage() {
                 <div className="flex items-center gap-1 shrink-0">
                   <Link href={`/subscribers/${detail.id}`} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border" title="Open 360° View"><ExternalLink className="w-4 h-4"/></Link>
                   <button onClick={()=>downloadCaf(detail.id)} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border" title="Download CAF PDF"><FileText className="w-4 h-4"/></button>
+                  {canRenew && <button onClick={()=>openRenew(detail)} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border text-success" title="Renew / extend validity"><CreditCard className="w-4 h-4"/></button>}
+                  {canRenew && <button onClick={async ()=>{ const reason = window.prompt('Reason for expiry:', 'Manual expiry') || 'Manual expiry'; if (!reason || !token || !detail) return; setError(null); try { const r = await apiFetch<any>(`/api/billing/subscribers/${detail.id}/expire`, { method:'POST', body: JSON.stringify({ reason }) }, token); const rr = r?.applied?.results?.router; setNotice(`Expired ${detail.full_name || detail.client_code}. MikroTik purge: ${rr?.purged ? `secret ${rr.secret}, ${rr.active_removed} active session(s) killed` : (rr?.error || 'n/a')}.`); await openDetail(detail.id); await load(); } catch(e:any){ setError(e.message); } }} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border text-warning" title="Expire — remove from MikroTik ppp/secret + ppp/active"><CalendarX className="w-4 h-4"/></button>}
                   <button onClick={()=>openEdit(detail)} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border" title="Edit"><Pencil className="w-4 h-4"/></button>
                   <button onClick={()=>setDetail(null)} className="p-1.5 rounded-lg hover:bg-muted" title="Close"><X className="w-4 h-4"/></button>
                 </div>
@@ -1052,6 +1125,65 @@ export default function SubscribersPage() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Renew ("recharge") Modal */}
+      {renewTarget && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg card">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+              <div>
+                <h2 className="font-bold text-lg flex items-center gap-2"><CreditCard className="w-5 h-5 text-success"/>Renew Subscriber</h2>
+                <p className="text-xs text-muted-foreground">One-click recharge: record payment &amp; extend validity</p>
+              </div>
+              <button onClick={()=>setRenewTarget(null)} className="p-2 rounded-lg hover:bg-muted"><X className="w-4 h-4"/></button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {renewErr && <div className="alert alert-danger">{renewErr}</div>}
+
+              <div className="grid grid-cols-2 gap-2 text-xs p-3 rounded-xl bg-muted/30 border border-border">
+                <Info label="Name" value={renewTarget.full_name} />
+                <Info label="Client Code" value={renewTarget.client_code} />
+                <Info label="Username" value={renewTarget.username || '-'} />
+                <Info label="Phone" value={renewTarget.phone || '-'} />
+                <Info label="Package" value={renewTarget.package_name || '-'} />
+                <Info label="Plan Price" value={renewTarget.monthly_bill != null ? `৳${Number(renewTarget.monthly_bill).toLocaleString()}` : '-'} />
+                <Info label="Current Due" value={<span className={Number(renewTarget.current_due||0)>0?'text-warning font-semibold':''}>৳{Number(renewTarget.current_due||0).toLocaleString()}</span>} />
+                <Info label="Current Expiry" value={String(renewTarget.expiry_date||'-').slice(0,10)} />
+                <Info label="Status" value={renewTarget.status} />
+                <Info label="Validity" value={(() => { const p = renewDetail?.package_info; const u = String(p?.validity_unit||'CALENDAR_MONTH').toUpperCase(); const v = Math.max(1, Number(p?.validity_value||1)); return u==='DAYS' ? `${v} day(s)` : u==='MONTHS' ? `${v} month(s)` : '1 calendar month'; })()} />
+                <Info label="New Expiry" value={<span className="text-success font-semibold flex items-center gap-1"><CalendarPlus className="w-3.5 h-3.5"/>{renewPreview?.newExpiry} <span className="text-muted-foreground font-normal">({renewPreview?.label})</span></span>} />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <div className="text-xs font-semibold text-muted-foreground mb-1">Charge Amount (৳)</div>
+                  <input type="number" min="0" step="0.01" value={renewForm.amount} disabled={renewForm.noCharge} onChange={e=>setRenewForm({...renewForm, amount: e.target.value})} className="form-control w-full text-foreground outline-none focus:border-primary/50 disabled:opacity-50" placeholder="0" />
+                </label>
+                <Select label="Payment Via" value={renewForm.method} onChange={v=>setRenewForm({...renewForm, method: v})} options={['CASH','BANK','BKASH','NAGAD','ROCKET','OTHER']} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Input label="Extend by days (blank = package validity)" type="number" value={renewForm.extendDays} onChange={v=>setRenewForm({...renewForm, extendDays: v})} placeholder="e.g. 30" />
+                <Input label="Note (optional)" value={renewForm.note} onChange={v=>setRenewForm({...renewForm, note: v})} placeholder="e.g. paid in cash at office" />
+              </div>
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" checked={renewForm.noCharge} onChange={e=>setRenewForm({...renewForm, noCharge: e.target.checked})} className="w-4 h-4" />
+                Extend validity without charging (no payment recorded)
+              </label>
+
+              <div className="flex items-center justify-between p-3 rounded-xl border border-border bg-muted/20 text-sm">
+                <span className="text-muted-foreground">Total to collect</span>
+                <span className="font-bold text-lg tabular-nums">{renewForm.noCharge ? '৳0' : `৳${Number(renewForm.amount||0).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}`}</span>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button onClick={()=>setRenewTarget(null)} className="px-4 py-2 rounded-xl border border-border">Cancel</button>
+                <button onClick={submitRenew} disabled={renewBusy} className="btn btn-success">{renewBusy ? 'Renewing…' : <><CreditCard className="w-4 h-4"/>Renew</>}</button>
+              </div>
             </div>
           </div>
         </div>

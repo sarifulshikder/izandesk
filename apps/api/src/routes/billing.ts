@@ -183,6 +183,23 @@ router.post('/subscribers/:id/suspend', asyncHandler(async (req, res) => {
   res.json({ ok: true, applied });
 }));
 
+// Expiry event: mark EXPIRED and enforce on the network. For ROUTER-mode
+// subscribers this removes them from the MikroTik /ppp/secret and kills their
+// /ppp/active sessions; for RADIUS mode the radcheck entry is disabled and a
+// PoD (DISCONNECT) is sent to the NAS.
+router.post('/subscribers/:id/expire', asyncHandler(async (req, res) => {
+  if (!requireBillingRole(req, res)) return;
+  const b = req.body || {};
+  const reason = b.reason || 'Manual expiry';
+  // Source POLICY (not MANUAL): expiry must be reversible by payment/renewal —
+  // a MANUAL source would make reactivateSubscriber() skip the restore.
+  await pool.query(`UPDATE subscribers SET status='EXPIRED', suspension_stage='ISOLATED', walled_garden=false, suspension_reason=$2, suspension_source='POLICY', updated_at=now() WHERE id=$1`, [req.params.id, reason]);
+  const applied = await applyProvisioningState(req.params.id, { status: 'EXPIRED', stage: 'ISOLATED', walled_garden: false, reason, sendCoa: true, coaAction: 'DISCONNECT' });
+  await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'MANUAL_EXPIRE','ISOLATED',$2,$3::jsonb,$4)`,
+    [req.params.id, reason, JSON.stringify({ applied: applied?.results || null }), (req as any).user?.email || 'user']);
+  res.json({ ok: true, applied });
+}));
+
 router.post('/payments/sms/ingest', asyncHandler(async (req, res) => {
   // main.ts verifies the JWT (or the configured shared forwarder token)
   // before this public path reaches the router. A raw Authorization header is

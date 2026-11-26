@@ -18,7 +18,7 @@ import { hashPassword, verifyPassword, generateNtPasswordHash, isHashed, sanitiz
 import { mikrotikRemovePppSecret } from '../integrations/mikrotik';
 import { oltFindOnuByClientMac } from '../integrations/olt';
 import { removeSubscriberFromRadiusDb, syncSubscriberToRadiusDb } from '../integrations/radius';
-import { applyProvisioningState } from '../integrations/billing';
+import { applyProvisioningState, renewSubscriber } from '../integrations/billing';
 import { getBusinessDateYmd } from '../integrations/settings';
 import { resellerScope, assertSubscriberOwnership } from './subscriber-scope';
 import { auditLog, reqActor } from '../integrations/audit';
@@ -582,7 +582,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
   let pkg: any = null;
   try {
     if (sub.package_name) {
-      pkg = (await pool.query('SELECT id,name,download_mbps,upload_mbps,price,data_cap_gb,fup_speed_mbps FROM bandwidth_packages WHERE name=$1 LIMIT 1', [sub.package_name])).rows[0] || null;
+      pkg = (await pool.query('SELECT id,name,download_mbps,upload_mbps,price,data_cap_gb,fup_speed_mbps,validity_value,validity_unit FROM bandwidth_packages WHERE name=$1 LIMIT 1', [sub.package_name])).rows[0] || null;
     }
     if (pkg?.data_cap_gb != null) {
       const u = (await pool.query(`SELECT COALESCE(SUM(COALESCE(acctinputoctets,0)+COALESCE(acctoutputoctets,0)),0)::bigint AS used_bytes
@@ -836,6 +836,40 @@ router.put('/:id', asyncHandler(async (req, res) => {
   });
 
   res.json(sanitizeSubscriber({ ...fresh, provision_result }));
+}));
+
+/* One-click admin renewal ("recharge"): extend validity by the package validity
+ * (or an explicit day count) and optionally record a payment that clears dues
+ * and auto-reactivates the subscriber (PPP/RADIUS/CoA). */
+const RENEW_ROLES = ['SUPER_ADMIN', 'BILLING_OPERATOR'];
+router.post('/:id/renew', asyncHandler(async (req, res) => {
+  const role = String((req as any).user?.role || '');
+  if (!RENEW_ROLES.includes(role)) return res.status(403).json({ message: 'Only Super Admin / Billing Operator can renew subscribers' });
+  if (!(await assertSubscriberOwnership(req, res, req.params.id))) return;
+  const b = req.body || {};
+  const result = await renewSubscriber(req.params.id, {
+    amount: b.amount === '' || b.amount == null ? undefined : Number(b.amount),
+    method: b.method ? String(b.method) : undefined,
+    extendDays: b.extend_days ? Number(b.extend_days) : undefined,
+    note: b.note ? String(b.note) : undefined,
+  });
+  await auditLog({
+    ...reqActor(req),
+    action: 'SUBSCRIBER_RENEW',
+    entity_type: 'subscriber',
+    entity_id: req.params.id,
+    details: {
+      client_code: result.subscriber?.client_code,
+      amount: result.amount,
+      method: result.method,
+      extend: result.extend,
+      old_expiry_date: result.old_expiry_date,
+      new_expiry_date: result.expiry_date,
+      due_after: result.due,
+      payment_ref: result.payment?.payment_ref || null,
+    },
+  });
+  res.json({ ok: true, ...result, subscriber: sanitizeSubscriber(result.subscriber) });
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
@@ -1445,6 +1479,18 @@ router.post('/batch', asyncHandler(async (req, res) => {
           await pool.query('UPDATE subscribers SET reseller_id=$2, updated_at=now() WHERE id=$1', [id, params.reseller_id]);
           result = { ok: true };
           break;
+        case 'renew': {
+          const role = String((req as any).user?.role || '');
+          if (!RENEW_ROLES.includes(role)) throw new ValidationError('Only Super Admin / Billing Operator can renew subscribers');
+          const r = await renewSubscriber(id, {
+            amount: params?.amount === '' || params?.amount == null ? undefined : Number(params.amount),
+            method: params?.method ? String(params.method) : undefined,
+            extendDays: params?.extend_days ? Number(params.extend_days) : undefined,
+            note: params?.reason || undefined,
+          });
+          result = { ok: true, expiry_date: r.expiry_date, old_expiry_date: r.old_expiry_date, due: r.due, amount: r.amount, payment_ref: r.payment?.payment_ref || null };
+          break;
+        }
         default:
           throw new ValidationError(`Unknown action: ${action}`);
       }

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { RefreshCw, FileText, Play, AlertTriangle, ShieldAlert, CheckCircle2, CreditCard, Wallet, Send, RotateCcw, Ban, Clock3 } from 'lucide-react';
+import { RefreshCw, FileText, Play, AlertTriangle, ShieldAlert, CheckCircle2, CreditCard, Wallet, Send, RotateCcw, Ban, Clock3, CalendarX } from 'lucide-react';
 
 type AnyObj = Record<string, any>;
 
@@ -120,6 +120,19 @@ export default function BillingPage() {
     try {
       const r = await apiFetch<any>(`/api/billing/subscribers/${id}/reactivate`, { method: 'POST', body: JSON.stringify({ reason: 'Manual reactivation' }) }, token);
       setMsg(`Subscriber reactivated. Provisioning restore completed in ${r.duration_ms ?? '?'} ms (target < 2000 ms).`);
+      await load();
+    } catch (e:any) { setError(e.message); } finally { setWorking(null); }
+  };
+
+  const expireSubscriber = async (id: string) => {
+    if (!token) return;
+    const reason = window.prompt('Reason for expiry:', 'Manual expiry') || 'Manual expiry';
+    if (!reason) return;
+    setWorking('expire-'+id); setError(null); setMsg(null);
+    try {
+      const r = await apiFetch<any>(`/api/billing/subscribers/${id}/expire`, { method: 'POST', body: JSON.stringify({ reason }) }, token);
+      const routerRes = r?.applied?.results?.router;
+      setMsg(`Subscriber expired. MikroTik purge: ${routerRes?.purged ? `removed from /ppp/secret (${routerRes.secret}) and killed ${routerRes.active_removed} active session(s)` : (routerRes?.error || routerRes?.reason || 'n/a')}; CoA/PoD ${r?.applied?.results?.coa?.ok ? 'sent ('+r.applied.results.coa.action+')' : 'skipped/failed'}.`);
       await load();
     } catch (e:any) { setError(e.message); } finally { setWorking(null); }
   };
@@ -299,6 +312,7 @@ export default function BillingPage() {
                     <td className="px-4 py-2"><span className="badge badge-secondary">{s.status}</span></td>
                     <td className="px-4 py-2 text-right space-x-1">
                       <button onClick={()=>suspendSubscriber(s.id)} disabled={!!working} className="btn btn-danger btn-sm"><Ban className="w-3 h-3"/>Suspend</button>
+                      <button onClick={()=>expireSubscriber(s.id)} disabled={!!working} className="btn btn-warning btn-sm" title="Mark expired — removes PPP secret/active session from the router"><CalendarX className="w-3 h-3"/>Expire</button>
                       <button onClick={()=>reactivateSubscriber(s.id)} disabled={!!working} className="btn btn-success btn-sm"><RotateCcw className="w-3 h-3"/>Reactivate</button>
                     </td>
                   </tr>

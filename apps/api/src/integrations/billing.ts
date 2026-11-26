@@ -1,7 +1,7 @@
 import crypto = require('crypto');
 import { pool } from '../db';
 import { withSchedulerRun } from './scheduler-observability';
-import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikEnsureParentalProfile, mikrotikDisconnectPppUser, PARENTAL_CONTROL_PROFILE } from './mikrotik';
+import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikPurgePppUser, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikEnsureParentalProfile, mikrotikDisconnectPppUser, PARENTAL_CONTROL_PROFILE } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
 import { auditLog } from './audit';
@@ -217,7 +217,24 @@ export async function applyProvisioningState(subId: string, desired: { status?: 
       if (walled) {
         results.walled_garden_profile = await mikrotikEnsureWalledGarden(router, { profileName: restrictedProfile || 'izn-walled-garden', rateLimit: desired.coaRateLimit || '64k/64k' });
       }
-      results.router = await mikrotikSyncPppSecret(router, effective);
+      // desired.status is authoritative: stage ISOLATED/SUSPENDED below can
+      // rewrite effective.status to SUSPENDED, so check the requested status.
+      const effStatus = String(desired.status || effective.status || '').toUpperCase();
+      const hardExpired = ['EXPIRED', 'TERMINATED'].includes(effStatus) && !walled;
+      if (hardExpired && effective.username) {
+        // Expiry/termination event: remove the subscriber from the MikroTik
+        // entirely — kill /ppp/active sessions and delete the /ppp/secret.
+        // Reactivation re-creates the secret via mikrotikSyncPppSecret.
+        results.router = await mikrotikPurgePppUser(router, String(effective.username));
+        if (results.router?.ok) {
+          await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'PPP_PURGED',$2,$3,$4::jsonb,$5)`,
+            [subId, String(desired.stage || effective.suspension_stage || 'ISOLATED'), `PPP credentials removed from router ${router.name || router.host} (${desired.reason || 'expired'})`,
+             JSON.stringify({ router: router.name || router.host, username: effective.username, active_removed: results.router.active_removed, secret: results.router.secret, mode: results.router.mode }), 'enforcement']).catch(() => {});
+          await auditLog({ action: 'SUBSCRIBER_PPP_PURGED', entity_type: 'subscriber', entity_id: subId, details: { username: effective.username, router: router.name || router.host, active_removed: results.router.active_removed, secret: results.router.secret, reason: desired.reason || null } }).catch(() => {});
+        }
+      } else {
+        results.router = await mikrotikSyncPppSecret(router, effective);
+      }
     } catch (e:any) { results.router = { ok:false, error: e.message }; }
   }
 
@@ -319,7 +336,15 @@ export async function evaluateDuePolicies() {
       } else {
         // beyond grace
         if (policy.auto_suspend) {
-          if (policy.enable_walled_garden) {
+          if (!(currentDue > 0)) {
+            // Pure validity expiry (no money due): hard-expire so the expiry
+            // event purges the subscriber from the MikroTik /ppp/secret and
+            // /ppp/active, even when walled garden is enabled for money dues.
+            targetStage = SUSPENSION_STAGES.ISOLATED;
+            targetStatus = 'EXPIRED';
+            walled = false;
+            reason = 'Validity expired beyond grace: expired';
+          } else if (policy.enable_walled_garden) {
             targetStage = SUSPENSION_STAGES.WALLED_GARDEN;
             targetStatus = 'ACTIVE'; // restricted access (walled garden) rather than hard reject
             walled = true;
@@ -571,6 +596,96 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
     }
   } catch {}
   return { ok: true, duplicate: false, payment, invoice: updatedInvoice, subscriber_id: subscriberId, reactivation };
+}
+
+/**
+ * One-click admin renewal ("recharge"): extend the subscriber's validity by the
+ * package validity (or an explicit day count) and, when an amount is charged,
+ * record a completed payment that clears dues and triggers instant reactivation
+ * (PPP secret / RADIUS / CoA) through recordPaymentAndReactivate().
+ *
+ * The new expiry is based on max(current expiry, today) so an already-expired
+ * subscriber renews from today, not from the lapsed date.
+ */
+export async function renewSubscriber(subscriberId: string, opts: { amount?: number; method?: string; extendDays?: number; note?: string } = {}) {
+  const sub = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
+  if (!sub) throw new Error('Subscriber not found');
+  if (String(sub.status).toUpperCase() === 'TERMINATED') throw new Error('Cannot renew a terminated subscriber');
+  // Expiry is exactly what a renewal fixes: even a manual expiry must restore
+  // access (and re-create the purged PPP secret) once renewed.
+  const wasExpired = String(sub.status).toUpperCase() === 'EXPIRED';
+
+  let pkg: any = null;
+  if (sub.package_name) {
+    pkg = (await pool.query('SELECT price, validity_value, validity_unit FROM bandwidth_packages WHERE name=$1 LIMIT 1', [sub.package_name])).rows[0] || null;
+  }
+  const unit = String(pkg?.validity_unit || 'CALENDAR_MONTH').toUpperCase();
+  const val = Math.max(1, Number(pkg?.validity_value || 1));
+
+  // Work in the business timezone so a DATE column round-trips exactly
+  // (node-pg parses DATE at local midnight; slicing toISOString in UTC would
+  // shift the day in non-UTC zones).
+  const tz = await getBusinessTimezone();
+  const todayYmd = ymdInTimezone(new Date(), tz);
+  const cur = toDate(sub.expiry_date);
+  const curYmd = cur ? ymdInTimezone(cur, tz) : null;
+  const base = curYmd && curYmd > todayYmd ? new Date(`${curYmd}T00:00:00`) : new Date(`${todayYmd}T00:00:00`);
+  const exp = new Date(base);
+  let extendLabel: string;
+  const extendDays = Math.floor(Number(opts.extendDays || 0));
+  if (extendDays > 0) { exp.setDate(exp.getDate() + extendDays); extendLabel = `+${extendDays} day(s)`; }
+  else if (unit === 'DAYS') { exp.setDate(exp.getDate() + val); extendLabel = `+${val} day(s)`; }
+  else if (unit === 'MONTHS') { exp.setMonth(exp.getMonth() + val); extendLabel = `+${val} month(s)`; }
+  else { exp.setMonth(exp.getMonth() + 1); extendLabel = '+1 calendar month'; }
+  const newExpiry = ymdInTimezone(exp, tz);
+  const oldExpiry = curYmd;
+
+  const amount = opts.amount == null
+    ? Number(sub.price_override ?? sub.monthly_bill ?? pkg?.price ?? 0)
+    : Number(opts.amount);
+  if (!Number.isFinite(amount) || amount < 0) throw new Error('amount must be a non-negative number');
+  const charged = amount > 0;
+
+  let payment: any = null;
+  let reactivation: any = null;
+  if (charged) {
+    const rec = await recordPaymentAndReactivate({
+      gateway: String(opts.method || 'CASH').slice(0, 40),
+      amount,
+      subscriber_id: subscriberId,
+      method: String(opts.method || 'CASH'),
+      raw: { type: 'MANUAL_RENEW', note: opts.note || null, extend: extendLabel, old_expiry_date: oldExpiry, new_expiry_date: newExpiry },
+      status: 'COMPLETED',
+    });
+    payment = rec.payment || null;
+    reactivation = rec.reactivation || null;
+  }
+
+  const due = await recalcSubscriberDue(subscriberId);
+  // A charge that clears the due (or a validity renewal of an EXPIRED subscriber)
+  // restores ACTIVE; a manual suspension on a due-free subscriber is preserved.
+  await pool.query(
+    `UPDATE subscribers SET expiry_date=$2, old_expiry_date=$3,
+       status=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN 'ACTIVE' ELSE status END,
+       suspension_stage=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN 'NONE' ELSE suspension_stage END,
+       walled_garden=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN false ELSE walled_garden END,
+       updated_at=now() WHERE id=$1`,
+    [subscriberId, newExpiry, oldExpiry, due, charged],
+  );
+
+  // Pure validity extension (no charge) on an expired/suspended subscriber with no
+  // dues still needs provisioning restored (PPP secret/RADIUS/CoA). A renewal of
+  // an EXPIRED subscriber always restores access (force), even if the expiry was
+  // applied manually — otherwise the purged PPP secret would never come back.
+  if (!reactivation && due <= 0 && (charged ? wasExpired : true)) {
+    const cur2 = (await pool.query('SELECT status, suspension_stage FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
+    if (cur2 && (['SUSPENDED', 'EXPIRED'].includes(String(cur2.status).toUpperCase()) || String(cur2.suspension_stage || 'NONE') !== 'NONE')) {
+      reactivation = await reactivateSubscriber(subscriberId, `Renewed (validity extended ${extendLabel})`, { force: wasExpired || !charged ? true : false });
+    }
+  }
+
+  const fresh = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
+  return { ok: true, payment, reactivation, due, extend: extendLabel, old_expiry_date: oldExpiry, expiry_date: newExpiry, amount, method: String(opts.method || 'CASH'), subscriber: fresh };
 }
 
 export async function getBillingMetrics() {
@@ -846,6 +961,16 @@ export function startBillingScheduler() {
     const subId = String(job.data?.subscriberId || '');
     if (subId) return await reactivateSubscriber(subId, job.data?.reason || 'queued reactivation');
     return { skipped: true };
+  });
+  registerQueueHandler('billing', 'expire-subscriber', async (job) => {
+    const subId = String(job.data?.subscriberId || '');
+    if (!subId) return { skipped: true };
+    // Expiry event: mark EXPIRED and enforce — for ROUTER-mode subscribers this
+    // purges /ppp/active + /ppp/secret on the assigned MikroTik, for RADIUS mode
+    // it disables the radcheck entry and sends a PoD (DISCONNECT) to the NAS.
+    await pool.query(`UPDATE subscribers SET status='EXPIRED', suspension_stage=$2, walled_garden=false, suspension_reason=$3, suspension_source='POLICY', updated_at=now() WHERE id=$1`,
+      [subId, SUSPENSION_STAGES.ISOLATED, String(job.data?.reason || 'Validity expired')]);
+    return await applyProvisioningState(subId, { status: 'EXPIRED', stage: SUSPENSION_STAGES.ISOLATED, walled_garden: false, reason: String(job.data?.reason || 'Validity expired'), sendCoa: true, coaAction: 'DISCONNECT' });
   });
   registerQueueHandler('messaging', 'messaging-sweep', runMsg);
 

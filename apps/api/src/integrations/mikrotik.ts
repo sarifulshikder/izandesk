@@ -506,6 +506,50 @@ export async function mikrotikRemovePppSecret(r: RouterRow, username: string) {
   } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
 }
 
+/**
+ * Hard-remove a PPP subscriber from a MikroTik: kill every /ppp/active session
+ * for the username, then delete the /ppp/secret entry. Used when a subscriber
+ * expires or is terminated, so the credentials no longer exist on the router
+ * at all (reactivation re-creates the secret via mikrotikSyncPppSecret).
+ */
+export async function mikrotikPurgePppUser(r: RouterRow, username: string) {
+  const mode = String(r.integration_mode || 'API').toUpperCase();
+  const uname = String(username || '').trim();
+  if (!uname) return { ok: false, skipped: true, reason: 'no username' };
+  if (mode === 'REST') {
+    const o = rosOpts(r, 'REST') as any;
+    const actives: any[] = await restFetch(o, `/ppp/active?name=${encodeURIComponent(uname)}`).catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, `/ppp/active?name=${encodeURIComponent(uname)}`); throw e; }) as any;
+    let activeRemoved = 0;
+    for (const a of (Array.isArray(actives) ? actives : [])) {
+      const id = a?.['.id'] || a?.id;
+      if (!id) continue;
+      try { await restSend(o, 'DELETE', `/ppp/active/${id}`).catch(async (e)=>{ if (o.scheme==='https') return restSendHttps(o,'DELETE',`/ppp/active/${id}`); throw e; }); activeRemoved++; } catch {}
+    }
+    const secrets: any[] = await restFetch(o, `/ppp/secret?name=${encodeURIComponent(uname)}`).catch(async (e) => { if (o.scheme === 'https') return restFetchHttps(o, `/ppp/secret?name=${encodeURIComponent(uname)}`); throw e; }) as any;
+    let secretAction = 'not_found';
+    if (Array.isArray(secrets) && secrets.length) {
+      const id = secrets[0]['.id'] || secrets[0].id;
+      await restSend(o, 'DELETE', `/ppp/secret/${id}`).catch(async (e)=>{ if (o.scheme==='https') return restSendHttps(o,'DELETE',`/ppp/secret/${id}`); throw e; });
+      secretAction = 'removed';
+    }
+    return { ok: true, mode: 'REST', purged: true, active_removed: activeRemoved, secret: secretAction };
+  }
+  const api = await acquireMikrotikApi(r, 'API');
+  let __ok = true;
+  try {
+    const actives: any[] = await api.write('/ppp/active/print').catch(()=>[]) as any;
+    let activeRemoved = 0;
+    for (const m of (actives || []).filter((x:any)=>String(x.name)===uname)) {
+      try { await api.write('/ppp/active/remove', [`=.id=${m['.id']}`]); activeRemoved++; } catch {}
+    }
+    const secrets: any[] = await api.write('/ppp/secret/print').catch(()=>[]) as any;
+    const existing = (secrets || []).find((x:any)=>String(x.name)===uname);
+    let secretAction = 'not_found';
+    if (existing) { await api.write('/ppp/secret/remove', [`=.id=${existing['.id']}`]); secretAction = 'removed'; }
+    return { ok: true, mode: 'API', purged: true, active_removed: activeRemoved, secret: secretAction };
+  } catch (__e: any) { __ok = false; throw __e; } finally { await releaseMikrotikApi(r, api, __ok, 'API'); }
+}
+
 export async function mikrotikEnsureWalledGarden(r: RouterRow, opts: { profileName?: string; rateLimit?: string } = {}) {
   const mode = String(r.integration_mode || 'API').toUpperCase();
   const profileName = String(opts.profileName || 'izn-walled-garden').trim() || 'izn-walled-garden';
