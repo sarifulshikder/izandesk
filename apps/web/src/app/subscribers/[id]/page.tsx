@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { apiFetch } from '@/lib/api';
-import { ArrowLeft, RefreshCw, User, Activity, Package, MessageSquare, History, Wifi, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, RefreshCw, User, Activity, Package, MessageSquare, History, Wifi, ShieldCheck, CreditCard } from 'lucide-react';
 import { TelemetryChart } from '@/components/charts/telemetry-chart';
 
 function badge(status: string) {
@@ -24,7 +24,7 @@ function KV({ k, v }: { k: string; v: React.ReactNode }) {
 export default function Subscriber360Page() {
   const params = useParams<{ id: string }>();
   const id = String(params?.id || '');
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [d, setD] = useState<any>(null);
   const [fupLogs, setFupLogs] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
@@ -34,6 +34,11 @@ export default function Subscriber360Page() {
   const [telemetryHist, setTelemetryHist] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  // recharge & activate (created-EXPIRED / expired)
+  const [rechargeBusy, setRechargeBusy] = useState(false);
+  const [rechargeMsg, setRechargeMsg] = useState<string | null>(null);
+  const [rechargeMethod, setRechargeMethod] = useState('CASH');
+  const canRechargeAdmin = ['SUPER_ADMIN', 'BILLING_OPERATOR'].includes(String(user?.role || ''));
 
   const load = useCallback(async () => {
     if (!token || !id) return;
@@ -53,6 +58,17 @@ export default function Subscriber360Page() {
     finally { setLoading(false); }
   }, [token, id]);
   useEffect(() => { void load(); }, [load]);
+
+  const recharge = async () => {
+    if (!token || !id) return;
+    setRechargeBusy(true); setRechargeMsg(null); setErr(null);
+    try {
+      const r = await apiFetch<any>(`/api/subscribers/${id}/renew`, { method: 'POST', body: JSON.stringify({ method: rechargeMethod }) }, token);
+      setRechargeMsg(`Recharged ${money(r.amount)} (${r.method}). Subscriber ACTIVE; new expiry ${r.expiry_date || '-'}. Payment recorded.`);
+      await load();
+    } catch (e: any) { setErr(e.message || 'Recharge failed'); }
+    finally { setRechargeBusy(false); }
+  };
 
   if (loading) return <div className="p-6 text-sm text-muted-foreground">Loading subscriber 360° view...</div>;
   if (err) return <div className="p-6"><div className="alert alert-danger mb-3">{err}</div><Link href="/subscribers" className="btn btn-outline"><ArrowLeft className="w-4 h-4"/>Back</Link></div>;
@@ -84,6 +100,32 @@ export default function Subscriber360Page() {
         <div className="dash-stat dash-stat-info"><span className="dash-stat-body"><span className="dash-stat-label">Package</span><span className="dash-stat-value text-base">{d.package_name || '-'}</span><span className="dash-stat-hint">{d.bandwidth_mbps ? `${d.bandwidth_mbps} Mbps` : ''}</span></span></div>
         <div className="dash-stat dash-stat-secondary"><span className="dash-stat-body"><span className="dash-stat-label">Expiry</span><span className="dash-stat-value text-base">{d.expiry_date ? String(d.expiry_date).slice(0,10) : '-'}</span></span></div>
       </div>
+
+      {String(d.status).toUpperCase() === 'EXPIRED' && (
+        <div className="card p-4 border border-warning/40">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-bold flex items-center gap-2"><CreditCard className="w-4 h-4 text-warning"/>Recharge &amp; activate</h2>
+              <div className="text-xs text-muted-foreground mt-1">
+                {String(d.suspension_source || '').toUpperCase() === 'CREATION'
+                  ? <>This subscriber was created <b>EXPIRED</b> (payment-gated). Recharge records a payment of <b>exactly the package price ({money(d.monthly_bill)})</b> — no invoice at activation — extends validity by the package term, clears suspension, and restores provisioning.</>
+                  : <>EXPIRED subscriber. Recharge records a payment, clears dues, extends validity by the package term, restores provisioning.</>}
+              </div>
+            </div>
+            {canRechargeAdmin ? (
+              <div className="flex items-center gap-2">
+                <select className="form-control" value={rechargeMethod} onChange={e=>setRechargeMethod(e.target.value)}>
+                  <option value="CASH">Cash</option><option value="BANK">Bank</option><option value="BKASH">bKash</option><option value="NAGAD">Nagad</option><option value="ROCKET">Rocket</option><option value="CARD">Card</option><option value="ADJUSTMENT">Adjustment</option>
+                </select>
+                <button onClick={recharge} disabled={rechargeBusy} className="btn btn-primary"><CreditCard className="w-4 h-4"/>{rechargeBusy ? 'Recharging…' : `Recharge ${money(d.monthly_bill)} & activate`}</button>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">Reseller subscribers activate from <b>wallet balance</b> in the reseller portal (Pay from wallet).</div>
+            )}
+          </div>
+        </div>
+      )}
+      {rechargeMsg && <div className="alert alert-success text-xs">{rechargeMsg}</div>}
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <div className="card p-4"><h2 className="font-bold mb-2 flex items-center gap-2"><User className="w-4 h-4 text-primary"/>Profile</h2>

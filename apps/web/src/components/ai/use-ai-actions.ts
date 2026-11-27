@@ -51,10 +51,19 @@ export function useAiActions(onResult: (message: AiMessage) => void) {
       } else if (action.type === 'set_subscriber_status') {
         const { identifier, status } = action.payload;
         const sub = await one(`/api/subscribers?q=${encodeURIComponent(identifier)}`, 'subscriber', identifier);
-        const updated = await apiFetch<any>(`/api/subscribers/${sub.id}`, { method: 'PUT', body: JSON.stringify({ status }) }, token);
-        ok(`✅ **${updated.full_name || sub.full_name}** (\`${updated.client_code || sub.client_code}\`) is now **${updated.status || status}**.\n\n` +
-          `Provisioning was applied by the subscribers API.`,
-          [{ title: 'Open subscriber', url: `/subscribers/${sub.id}` }]);
+        // Payment-gated activation: created-EXPIRED can't be activated by raw status PUT;
+        // route through POST /api/subscribers/:id/renew (recorded payment == package price, single transaction).
+        const isCreatedExpired = String(sub.status || '').toUpperCase() === 'EXPIRED' && String(sub.suspension_source || '').toUpperCase() === 'CREATION';
+        if (String(status).toUpperCase() === 'ACTIVE' && isCreatedExpired) {
+          const r = await apiFetch<any>(`/api/subscribers/${sub.id}/renew`, { method: 'POST', body: JSON.stringify({}) }, token);
+          ok(`✅ **${r.subscriber?.full_name || sub.full_name}** (\`${r.subscriber?.client_code || sub.client_code}\`) recharged **৳${Number(r.amount || 0).toLocaleString()}** (payment recorded, no invoice) and is now **ACTIVE**.\n\nNew expiry: ${r.expiry_date || '-'}.`,
+            [{ title: 'Open subscriber', url: `/subscribers/${sub.id}` }]);
+        } else {
+          const updated = await apiFetch<any>(`/api/subscribers/${sub.id}`, { method: 'PUT', body: JSON.stringify({ status }) }, token);
+          ok(`✅ **${updated.full_name || sub.full_name}** (\`${updated.client_code || sub.client_code}\`) is now **${updated.status || status}**.\n\n` +
+            `Provisioning was applied by the subscribers API.`,
+            [{ title: 'Open subscriber', url: `/subscribers/${sub.id}` }]);
+        }
       } else if (action.type === 'topup_reseller_wallet') {
         const { identifier, amount } = action.payload;
         const reseller = await one(`/api/resellers?q=${encodeURIComponent(identifier)}`, 'reseller', identifier);

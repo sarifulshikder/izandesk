@@ -634,15 +634,28 @@ router.post('/', asyncHandler(async (req, res) => {
       if ((p.bandwidth_mbps == null || p.bandwidth_mbps === 0) && Number(pkgForExpiry.download_mbps || 0) > 0 && (reqBw === '' || reqBw == null || Number(reqBw) === 0)) p.bandwidth_mbps = Number(pkgForExpiry.download_mbps);
     }
   }
-  if (!p.expiry_date && p.package_name) {
-    const base = p.installation_date ? new Date(String(p.installation_date)) : new Date();
-    const unit = String(pkgForExpiry?.validity_unit || 'CALENDAR_MONTH').toUpperCase();
-    const val = Math.max(1, Number(pkgForExpiry?.validity_value || 1));
-    const exp = new Date(base);
-    if (unit === 'DAYS') exp.setDate(exp.getDate() + val);
-    else if (unit === 'MONTHS') exp.setMonth(exp.getMonth() + val);
-    else exp.setMonth(exp.getMonth() + 1); // CALENDAR_MONTH default
-    p.expiry_date = exp.toISOString().slice(0, 10);
+  // Payment-gated creation: every package-assigned subscriber starts EXPIRED (blocked),
+  // whichever role creates it. Admin no-package creations keep legacy PENDING behavior.
+  // Callers can never create an already-active subscriber.
+  const createdExpired = !!p.package_name;
+  if (scope.restricted && !createdExpired) throw new ValidationError('package_name is required for reseller-created subscribers');
+  if (createdExpired) {
+    p.status = 'EXPIRED';
+    // created-expired: not pre-granting package validity; activation re-computes expiry after payment.
+    p.expiry_date = new Date().toISOString().slice(0, 10);
+  } else {
+    // no-package creations keep legacy PENDING; callers cannot create an already-active subscriber.
+    p.status = 'PENDING';
+    if (!p.expiry_date && p.package_name) {
+      const base = p.installation_date ? new Date(String(p.installation_date)) : new Date();
+      const unit = String(pkgForExpiry?.validity_unit || 'CALENDAR_MONTH').toUpperCase();
+      const val = Math.max(1, Number(pkgForExpiry?.validity_value || 1));
+      const exp = new Date(base);
+      if (unit === 'DAYS') exp.setDate(exp.getDate() + val);
+      else if (unit === 'MONTHS') exp.setMonth(exp.getMonth() + val);
+      else exp.setMonth(exp.getMonth() + 1); // CALENDAR_MONTH default
+      p.expiry_date = exp.toISOString().slice(0, 10);
+    }
   }
 
   let clientCode = nullableStr(b.client_code);
@@ -698,11 +711,18 @@ router.post('/', asyncHandler(async (req, res) => {
   }
   if (!created) throw new Error('Could not allocate a unique client code');
 
+  // created-expired marker: blocks monthly invoicing + proves payment-gated activation is still pending.
+  if (createdExpired) {
+    await pool.query(`UPDATE subscribers SET suspension_stage='ISOLATED', walled_garden=false, suspension_source='CREATION', suspension_reason='Created expired; payment required to activate', grace_until=NULL, updated_at=now() WHERE id=$1`, [created.id]);
+    created.suspension_stage = 'ISOLATED'; created.walled_garden = false; created.suspension_source = 'CREATION';
+    created.suspension_reason = 'Created expired; payment required to activate';
+  }
+
   let provision_result: any = null;
   try {
     const applied = await applyProvisioningState(created.id, {
       status: created.status,
-      stage: stageForStatus(created.status),
+      stage: createdExpired ? 'ISOLATED' : stageForStatus(created.status),
       walled_garden: false,
       reason: 'Subscriber created',
       sendCoa: false,
@@ -735,6 +755,15 @@ router.put('/:id', asyncHandler(async (req, res) => {
   // (or fail validation) at all.
   const body = scope.restricted ? { ...b, reseller_id: scope.uuid } : b;
   const p = await buildPayload(body, existing);
+  // Payment-gated activation: EXPIRED subscribers cannot be re-activated by a raw field update.
+  if (String(p.status).toUpperCase() === 'ACTIVE' && String(existing.status).toUpperCase() === 'EXPIRED') {
+    if (scope.restricted) {
+      return res.status(403).json({ message: 'Resellers must pay from wallet balance via POST /api/resellers/:id/renew-subscriber to activate an expired subscriber' });
+    }
+    if (String(existing.suspension_source || '').toUpperCase() === 'CREATION') {
+      return res.status(400).json({ message: 'Created-expired subscriber must be recharged: use POST /api/subscribers/:id/renew (recorded payment >= package price)' });
+    }
+  }
   let pkgForExpiry: any = null;
   if (p.package_name) {
     pkgForExpiry = (await pool.query('SELECT price, download_mbps, validity_value, validity_unit FROM bandwidth_packages WHERE name=$1 LIMIT 1', [p.package_name])).rows[0] || null;
@@ -1336,6 +1365,17 @@ router.post('/import/execute', importUpload.single('file'), asyncHandler(async (
     try {
       const p: any = { ...item.data };
 
+      // Payment-gated creation (same rule as POST /api/subscribers):
+      // package-assigned rows start EXPIRED; no-package rows are PENDING; resellers require a package.
+      const createdExpired = !!p.package_name;
+      if (importScope.restricted && !createdExpired) throw new ValidationError('package_name is required for reseller-created subscribers');
+      if (createdExpired) {
+        p.status = 'EXPIRED';
+        p.expiry_date = new Date().toISOString().slice(0, 10);
+      } else {
+        p.status = 'PENDING';
+      }
+
       // Cleartext NAS secret + separate bcrypt hash for portal login.
       const rawPass = p.password;
       p.password = rawPass;
@@ -1374,11 +1414,16 @@ router.post('/import/execute', importUpload.single('file'), asyncHandler(async (
       ];
       const createdRow = (await pool.query(insertSql, values)).rows[0];
 
+      if (createdExpired) {
+        await pool.query(`UPDATE subscribers SET suspension_stage='ISOLATED', walled_garden=false, suspension_source='CREATION', suspension_reason='Created expired; payment required to activate', grace_until=NULL, updated_at=now() WHERE id=$1`, [createdRow.id]);
+        createdRow.suspension_stage = 'ISOLATED'; createdRow.suspension_source = 'CREATION';
+      }
+
       // Provision
       let provision_result: any = null;
       try {
         const applied = await applyProvisioningState(createdRow.id, {
-          status: createdRow.status, stage: stageForStatus(createdRow.status), walled_garden: false,
+          status: createdRow.status, stage: createdExpired ? 'ISOLATED' : stageForStatus(createdRow.status), walled_garden: false,
           reason: 'Bulk import', sendCoa: false,
         });
         provision_result = applied?.results || applied;

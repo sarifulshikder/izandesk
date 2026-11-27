@@ -15,7 +15,13 @@ import {
 } from 'lucide-react';
 
 type AnyObj = Record<string, any>;
+type PendingRecharge = { payment_ref: string; amount: number; gateway: string; at: string };
 const money = (v: any) => `৳${Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/* A reseller wallet RECHARGE credited by a verified gateway webhook carries metadata.payment_ref. */
+const isRechargeCredited = (txs: any[], ref: string) => !!ref && (txs || []).some((t: any) =>
+  String(t?.type || '').toUpperCase() === 'RECHARGE' &&
+  (String(t?.metadata?.payment_ref || '') === ref ||
+    (String(t?.created_by || '').toLowerCase() === 'gateway' && String(t?.description || '').toLowerCase().includes('gateway wallet recharge'))));
 const dt = (v: any) => v ? new Date(v).toLocaleString() : '-';
 const d = (v: any) => v ? new Date(v).toLocaleDateString() : '-';
 const daysLeft = (v: any) => { if (!v) return null; const t = new Date(v).getTime(); if (isNaN(t)) return null; return Math.ceil((t - Date.now()) / 86400000); };
@@ -162,6 +168,12 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const visibleCols = colOrder.filter(c => !hiddenCols[c]);
   const [payKind, setPayKind] = useState<'all' | 'online' | 'invoice'>('all'); const [payQ, setPayQ] = useState(''); const [payStatus, setPayStatus] = useState(''); const [payGateway, setPayGateway] = useState(''); const [payMethod, setPayMethod] = useState(''); const [payType, setPayType] = useState(''); const [payApproval, setPayApproval] = useState('');
   const [rechargeAmount, setRechargeAmount] = useState(''); const [showBalance, setShowBalance] = useState(false);
+  // reseller self-service wallet recharge via payment gateway
+  const [gwRechargeAmount, setGwRechargeAmount] = useState(''); const [gwName, setGwName] = useState('bkash'); const [gwBusy, setGwBusy] = useState(false);
+  const [gateways, setGateways] = useState<any[]>([]);
+  // gateway checkout return handling: PENDING recharges we started, credited only once a verified webhook credits the wallet
+  const [pendingRecharges, setPendingRecharges] = useState<PendingRecharge[]>([]);
+  const pendingRef = React.useRef<PendingRecharge[]>([]);
   const [topups, setTopups] = useState<AnyObj[]>([]);
   const [topupOpen, setTopupOpen] = useState(false);
   const [topupForm, setTopupForm] = useState<AnyObj>({ amount: '', gateway: 'bKash', method: 'Billpay', trx_id: '', payer_number: '', notes: '', terms_accepted: false });
@@ -201,6 +213,19 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   // Resellers may onboard their own subscribers — the API scopes them to this reseller.
   const canAddSubscriber = ['SUPER_ADMIN', 'BILLING_OPERATOR', 'RESELLER'].includes(String(user?.role));
 
+  // ---- reseller self-service recharge edge: surface credit_limit + buying margin ----
+  const creditLimit = Number(reseller?.credit_limit ?? balance?.reseller?.credit_limit ?? 0) || 0;
+  const creditLimitApplies = creditLimit > 0; // 0 = unlimited (backend rejects only when limit > 0 && newBalance > limit)
+  const walletBalance = Number(balance?.balance ?? reseller?.wallet_balance ?? 0) || 0;
+  const creditHeadroom = creditLimitApplies ? Math.max(0, +(creditLimit - walletBalance).toFixed(2)) : null;
+  const marginPct = Math.min(100, Math.max(0, Number(reseller?.buying_margin_percent ?? balance?.reseller?.buying_margin_percent ?? 0) || 0)); // wholesale = retail × (1 − margin%); applies to SUBSCRIBER activation, not wallet recharge
+  const walletTxs = (balance?.transactions || []) as any[];
+  const pendingRechargeActive = pendingRecharges.filter(p => !isRechargeCredited(walletTxs, p.payment_ref));
+  React.useEffect(() => { pendingRef.current = pendingRecharges; }, [pendingRecharges]);
+  const pendingKey = `resellerWalletPending:${resellerId}`;
+  const addPendingRecharge = (p: PendingRecharge) => setPendingRecharges(prev => [...prev.filter(x => x.payment_ref !== p.payment_ref), p]);
+  const removePendingRecharge = (ref: string) => setPendingRecharges(prev => prev.filter(x => x.payment_ref !== ref));
+
   const loadDashboard = useCallback(async () => { if (!token) return; const [d,c,n,bw,h] = await Promise.all([
     apiFetch<any>(`/api/resellers/${resellerId}/dashboard`, {}, token),
     apiFetch<any>(`/api/resellers/${resellerId}/charts`, {}, token).catch(()=>({data:null})),
@@ -212,6 +237,7 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   useEffect(() => { try { localStorage.setItem('resellerPortalWidgets', JSON.stringify(widgets)); } catch {} }, [widgets]);
   useEffect(() => { try { localStorage.setItem('resellerUserCols', JSON.stringify(colOrder)); localStorage.setItem('resellerUserHiddenCols', JSON.stringify(hiddenCols)); } catch {} }, [colOrder, hiddenCols]);
   const saveLayout = async (layout: any) => { if (!token) return; try { await apiFetch(`/api/resellers/${resellerId}/layout`, { method: 'PUT', body: JSON.stringify(layout) }, token); } catch {} };
+  useEffect(() => { if (!token) return; apiFetch<any>(`/api/resellers/${resellerId}/wallet/gateways`, {}, token).then((g: any) => { const arr = (g?.data || g || []); setGateways(Array.isArray(arr) ? arr : []); }).catch(() => {}); }, [token, resellerId]);
   const moveCol = (from: UserCol, to: UserCol) => {
     if (from === to) return;
     setColOrder(prev => { const next = [...prev]; next.splice(next.indexOf(from), 1); next.splice(next.indexOf(to), 0, from); saveLayout({ column_layout: { users: { order: next, hidden: hiddenCols } } }); return next; });
@@ -229,7 +255,10 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
       case 'contact': return <><div className="flex items-center gap-1"><Phone className="w-3 h-3" />{s.phone || '-'}</div><div className="flex items-center gap-1 text-muted-foreground truncate max-w-[180px]"><Mail className="w-3 h-3" />{s.email || '-'}</div></>;
       case 'address': return <><div className="truncate max-w-[200px]">{s.address || '-'}</div><div className="text-muted-foreground">{[s.zone,s.area].filter(Boolean).join(' / ') || '-'}</div></>;
       case 'actions': return <div className="flex flex-wrap gap-1.5">
-        <button disabled={actionBusy===`renew:${s.id}`} onClick={()=>renew(s.id)} className="btn btn-primary btn-sm"><CreditCard className="w-3 h-3" />Renew</button>
+        <div className="flex flex-col gap-0.5">
+          <button disabled={actionBusy===`renew:${s.id}` || String(s.status||'').toUpperCase()!=='EXPIRED'} onClick={()=>renew(s.id)} className="btn btn-primary btn-sm" title={String(s.status||'').toUpperCase()!=='EXPIRED' ? 'Only expired subscribers can be activated from wallet' : 'Pay from wallet balance'}><CreditCard className="w-3 h-3" />{String(s.status||'').toUpperCase()==='EXPIRED' ? 'Pay from wallet / Activate' : 'Renew'}</button>
+          {String(s.status||'').toUpperCase()==='EXPIRED' && (() => { const retail = Number(s.monthly_bill || 0); const est = +(retail * (1 - marginPct / 100)).toFixed(2) || retail; if (!(retail > 0)) return null; const short = est > 0 && walletBalance + 1e-9 < est; return <span className={`text-[10px] leading-tight ${short ? 'text-danger' : 'text-muted-foreground'}`} title="Wholesale = package retail × (1 − buying margin %); paid from your wallet">{money(est)} from wallet{retail !== est ? ` (retail ${money(retail)} − ${marginPct}% margin)` : ''}{short ? ` · insufficient (have ${money(walletBalance)})` : ''}</span>; })()}
+        </div>
         <button onClick={()=>openView(s)} className="btn btn-outline btn-sm"><Eye className="w-3 h-3" />View</button>
         <button onClick={()=>openEdit(s)} className="btn btn-outline btn-sm"><Edit3 className="w-3 h-3" />Edit</button>
         {canAddSubscriber && <button disabled={!!actionBusy} onClick={()=>setDeleteTarget(s)} className="btn btn-outline btn-sm text-danger"><Trash2 className="w-3 h-3" />Delete</button>}
@@ -246,6 +275,43 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   // reseller's subscribers and never returns document images or approval actions.
   const loadKyc = useCallback(async () => { if (!token) return; try { const r = await apiFetch<any>('/api/kyc/queue?limit=100', {}, token); setKycRows(r.data || []); } catch { setKycRows([]); } }, [token]);
   const loadBalance = useCallback(async () => { if (!token) return; const r = await apiFetch<any>(`/api/resellers/${resellerId}/balance-report`, {}, token); setBalance(r.data); }, [token, resellerId]);
+  // re-read server truth after a gateway return / window focus (wallet credited server-side only on verified webhook)
+  const refreshWallet = useCallback(async () => { await Promise.all([loadBalance().catch(() => {}), loadDashboard().catch(() => {})]); }, [loadBalance, loadDashboard]);
+
+  // hydrate + persist pending gateway recharges across redirects (checkout return handling)
+  useEffect(() => { try { const raw = localStorage.getItem(pendingKey); if (raw) setPendingRecharges(JSON.parse(raw)); } catch {} }, [pendingKey]);
+  useEffect(() => { try { localStorage.setItem(pendingKey, JSON.stringify(pendingRecharges)); } catch {} }, [pendingRecharges, pendingKey]);
+  // prune pending entries once a verified gateway recharge has credited the wallet
+  useEffect(() => {
+    const txs = (balance?.transactions || []) as any[];
+    setPendingRecharges(prev => {
+      const next = prev.filter(p => !isRechargeCredited(txs, p.payment_ref));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [balance]);
+  // gateway checkout RETURN handling + window-focus re-check. We always re-read server truth; never trust the return query, never claim credited before a verified webhook.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleReturn = async () => {
+      const p = new URLSearchParams(window.location.search);
+      const returned = (p.get('wallet_return') || p.get('bkash') || p.get('payment_status') || p.get('status') || '').toLowerCase();
+      const retRef = p.get('payment_ref') || p.get('paymentID') || p.get('paymentId') || p.get('payment_id') || '';
+      if (!returned && !retRef) return;
+      await refreshWallet();
+      if (/cancel|cancelled|canceled/.test(returned) || p.get('wallet_return') === 'cancel') setMsg('Payment cancelled. Nothing was credited; your wallet is unchanged. You can retry.');
+      else if (/fail|error/.test(returned)) setMsg('Gateway returned an error. If you completed payment, your wallet updates once the verified confirmation arrives — Refresh status.');
+      else setMsg('Returned from payment gateway. Wallet is credited only after verified confirmation — re-checking…');
+    };
+    // only re-check the wallet on focus/visibility when a payment is actually awaiting verification
+    const onVisible = () => { if (document.visibilityState === 'visible' && pendingRef.current.length) refreshWallet(); };
+    const onFocus = () => { if (pendingRef.current.length) refreshWallet(); };
+    void handleReturn();
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('popstate', handleReturn);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { window.removeEventListener('focus', onFocus); window.removeEventListener('popstate', handleReturn); document.removeEventListener('visibilitychange', onVisible); };
+  }, [refreshWallet]);
+
   const loadTopups = useCallback(async () => { if (!token) return; try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/wallet/topups`, {}, token); setTopups(r.data || []); } catch {} }, [token, resellerId]);
   const submitTopup = async () => { if (!token) return; const amount = Number(topupForm.amount); if (!(amount > 0)) { setErr('Enter a valid amount'); return; } if (!topupForm.terms_accepted) { setErr('Please accept the terms and conditions'); return; } setTopupBusy(true); setErr(null); try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/wallet/topups`, { method: 'POST', body: JSON.stringify({ ...topupForm, amount }) }, token); setMsg(r.message || 'Top-up request submitted.'); setTopupOpen(false); setTopupForm({ amount: '', gateway: 'bKash', method: 'Billpay', trx_id: '', payer_number: '', notes: '', terms_accepted: false }); await loadTopups(); } catch (e: any) { setErr(e.message); } finally { setTopupBusy(false); } };
   const loadSharing = useCallback(async () => { if (!token) return; const r = await apiFetch<any>(`/api/resellers/${resellerId}/sharing-report`, {}, token); setSharing(r.data || []); }, [token, resellerId]);
@@ -369,7 +435,29 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
   const selectedSessionKeys = useMemo(() => Object.keys(sessionSelected).filter(k => sessionSelected[k]), [sessionSelected]);
   const allSessionsSelected = sessions.length > 0 && sessions.every((s,i)=> sessionSelected[sessionKey(s,i)]);
 
-  const recharge = async () => { if (!token) return; const amount = Number(rechargeAmount); if (!(amount > 0)) { setErr('Enter a valid amount'); return; } setErr(null); setMsg(null); try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/wallet/recharge`, { method: 'POST', body: JSON.stringify({ amount, description: 'Portal wallet recharge' }) }, token); setMsg(`Wallet recharged ${money(amount)}. New balance: ${money(r.balance)}`); setRechargeAmount(''); await Promise.all([loadBalance().catch(()=>{}), loadDashboard().catch(()=>{})]); } catch (e: any) { setErr(e.message); } };
+  // Reseller self-service wallet recharge via payment gateway (wallet credited only after verified gateway confirmation).
+  const rechargeGateway = async () => {
+    if (!token) return;
+    const amount = Number(gwRechargeAmount);
+    if (!Number.isFinite(amount) || !(amount > 0)) { setErr('Enter a valid amount'); return; }
+    // surface credit_limit BEFORE starting checkout — the server rejects crediting past it (and a paid-but-uncredited payment is worse). 0 = unlimited.
+    if (creditLimitApplies && +(walletBalance + amount).toFixed(2) > creditLimit + 1e-9) {
+      setErr(`Recharge would exceed credit limit (${money(creditLimit)}). Headroom: ${money(creditHeadroom ?? 0)}. Lower the amount.`); return;
+    }
+    setErr(null); setMsg(null); setGwBusy(true);
+    try {
+      const r = await apiFetch<any>(`/api/resellers/${resellerId}/wallet/recharge-gateway`, { method: 'POST', body: JSON.stringify({ amount, gateway: gwName }) }, token);
+      const url = r.checkout?.paymentUrl || r.checkout?.approvalUrl || null;
+      const ref = String(r.payment_ref || '');
+      // track PENDING; we NEVER claim credited here — server credits only on a verified gateway webhook
+      if (ref) addPendingRecharge({ payment_ref: ref, amount, gateway: gwName, at: new Date().toISOString() });
+      const noCheckout = !url && !r.checkout?.clientSecret;
+      setMsg(`Payment started (${gwName})${ref ? ` — ref ${ref}` : ''}. Status: PENDING verification; wallet is credited automatically once the gateway sends a verified confirmation.${url ? ' Complete payment in the opened window.' : ''}${noCheckout ? ` No checkout URL was returned${r.checkout?.message ? ` (${r.checkout.message})` : ''}; complete payment at your gateway, then Refresh status.` : ''}`);
+      setGwRechargeAmount('');
+      if (url) { try { window.open(url, '_blank', 'noopener'); } catch {} }
+    } catch (e: any) { setErr(e.message); } finally { setGwBusy(false); }
+  };
+  const recharge = async () => { if (!token) return; const amount = Number(rechargeAmount); if (!(amount > 0)) { setErr('Enter a valid amount'); return; } if (creditLimitApplies && +(walletBalance + amount).toFixed(2) > creditLimit + 1e-9) { setErr(`Recharge would exceed credit limit (${money(creditLimit)}). Headroom: ${money(creditHeadroom ?? 0)}.`); return; } setErr(null); setMsg(null); try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/wallet/recharge`, { method: 'POST', body: JSON.stringify({ amount, description: 'Portal wallet recharge' }) }, token); setMsg(`Wallet recharged ${money(amount)}. New balance: ${money(r.balance)}`); setRechargeAmount(''); await Promise.all([loadBalance().catch(()=>{}), loadDashboard().catch(()=>{})]); } catch (e: any) { setErr(e.message); } };
   const renew = async (subscriberId: string) => { if (!token || !subscriberId) return; setErr(null); setMsg(null); setActionBusy(`renew:${subscriberId}`); try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/renew-subscriber`, { method: 'POST', body: JSON.stringify({ subscriber_id: subscriberId }) }, token); setMsg(`Renewed. Charged ${money(r.charged)} (retail ${money(r.retail)}, margin ${r.margin_percent}%). Balance: ${money(r.balance)}. New expiry: ${r.subscriber?.expiry_date || '-'}.`); await Promise.all([loadUsers().catch(()=>{}), loadBalance().catch(()=>{}), loadDashboard().catch(()=>{})]); } catch (e: any) { setErr(e.message); } finally { setActionBusy(null); } };
   const disconnect = async (s: AnyObj) => { if (!token) return; const uname = s.username; if (!uname && !s.subscriber_id) return; if (!confirm(`Disconnect ${uname || s.full_name || 'user'}?`)) return; setErr(null); setMsg(null); setActionBusy(`dc:${uname || s.subscriber_id}`); try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/disconnect`, { method: 'POST', body: JSON.stringify({ username: uname, subscriber_id: s.subscriber_id }) }, token); setMsg(r.message || (r.ok ? 'Disconnect requested' : 'Disconnect failed')); await loadSessions().catch(()=>{}); } catch (e: any) { setErr(e.message); } finally { setActionBusy(null); } };
   const reconnect = async (s: AnyObj) => { if (!token) return; setErr(null); setMsg(null); setActionBusy(`rc:${s.username || s.subscriber_id}`); try { const r = await apiFetch<any>(`/api/resellers/${resellerId}/reconnect`, { method: 'POST', body: JSON.stringify({ username: s.username, subscriber_id: s.subscriber_id }) }, token); setMsg(r.message || (r.ok ? 'Reconnect requested' : 'Reconnect failed')); } catch (e: any) { setErr(e.message); } finally { setActionBusy(null); } };
@@ -604,11 +692,42 @@ export function ResellerPortal({ resellerId }: { resellerId: string }) {
 
       {tab === 'balance' && (
         <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3"><Card label="Current Balance" value={money(balance?.balance ?? reseller?.wallet_balance ?? 0)} icon={Wallet} tone="green" /><Card label="Total Credited" value={money(balance?.totals?.total_credited ?? 0)} icon={ArrowUpRight} tone="green" /><Card label="Total Debited" value={money(balance?.totals?.total_debited ?? 0)} icon={ArrowDownLeft} tone="red" /></div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3"><Card label="Current Balance" value={money(walletBalance)} icon={Wallet} tone="green" /><Card label="Total Credited" value={money(balance?.totals?.total_credited ?? 0)} icon={ArrowUpRight} tone="green" /><Card label="Total Debited" value={money(balance?.totals?.total_debited ?? 0)} icon={ArrowDownLeft} tone="red" /><Card label="Credit Limit" value={creditLimitApplies ? money(creditLimit) : 'Unlimited'} icon={CreditCard} tone="green" /></div>
+          <div className="text-xs text-muted-foreground px-1">{creditLimitApplies ? `Credit limit ${money(creditLimit)} · headroom ${money(creditHeadroom ?? 0)} before recharge is rejected (balance can't exceed the limit).` : 'No credit limit (0 = unlimited).'} Buying margin {marginPct}% → subscriber activation wholesale = package retail × (1 − {marginPct}%); wallet recharge itself is at face value.</div>
           {isResellerUser && <div className="card p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><div className="font-bold flex items-center gap-2"><Plus className="w-4 h-4 text-success" />Add Money (payment gateway)</div><div className="text-xs text-muted-foreground">Submit a payment reference; the ISP admin verifies and credits your wallet.</div></div><button onClick={()=>setTopupOpen(true)} className="btn btn-primary btn-sm">Request Top-up</button></div>
             {!!topups.length && <div className="overflow-auto mt-3"><table className="w-full text-xs min-w-[700px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Date</th><th className="text-left py-2 px-2">Amount</th><th className="text-left py-2 px-2">Gateway</th><th className="text-left py-2 px-2">Trx ID</th><th className="text-left py-2 px-2">Status</th><th className="text-left py-2 px-2">Note</th></tr></thead><tbody>{topups.map(t=><tr key={t.id} className="border-b border-border/50"><td className="py-2 px-2">{dt(t.created_at)}</td><td className="py-2 px-2 font-semibold">{money(t.amount)}</td><td className="py-2 px-2">{t.gateway}</td><td className="py-2 px-2 font-mono">{t.trx_id || '-'}</td><td className="py-2 px-2">{statusBadge(t.status)}</td><td className="py-2 px-2 text-muted-foreground">{t.rejection_reason || '-'}</td></tr>)}</tbody></table></div>}
           </div>}
           {canRecharge && <div className="card p-4 flex flex-col md:flex-row md:items-end gap-3"><div className="flex-1"><div className="font-bold mb-1 flex items-center gap-2"><Plus className="w-4 h-4 text-success" />Add Money / Recharge</div><div className="text-xs text-muted-foreground mb-2">Recharge prepaid reseller wallet balance.</div><input className="form-control w-full md:w-64" type="number" placeholder="Amount (BDT)" value={rechargeAmount} onChange={e=>setRechargeAmount(e.target.value)} /></div><button onClick={recharge} className="btn btn-primary">Recharge Wallet</button></div>}
+          <div className="card p-4 flex flex-col md:flex-row md:items-end gap-3">
+            <div className="flex-1">
+              <div className="font-bold mb-1 flex items-center gap-2"><CreditCard className="w-4 h-4 text-primary" />Recharge via payment gateway</div>
+              <div className="text-xs text-muted-foreground mb-2">Reseller self-service. A PENDING payment is created; wallet is credited <span className="font-medium">only after a verified gateway confirmation</span> (not a direct credit).{creditLimitApplies ? ` Max this recharge: ${money(creditHeadroom ?? 0)} (credit limit ${money(creditLimit)}).` : ''}</div>
+              <div className="flex flex-wrap gap-2">
+                <select className="form-control w-full md:w-44" value={gwName} onChange={e=>setGwName(e.target.value)}>
+                  {(gateways.length ? gateways : [{gateway:'bkash'}]).map((g:any)=><option key={g.gateway||g.id||g.name} value={String(g.gateway||g.id||g.name).toLowerCase()}>{g.gateway||g.id||g.name}</option>)}
+                </select>
+                <input className="form-control w-full md:w-40" type="number" placeholder="Amount (BDT)" value={gwRechargeAmount} onChange={e=>setGwRechargeAmount(e.target.value)} />
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <button onClick={rechargeGateway} disabled={gwBusy} className="btn btn-primary">{gwBusy ? 'Starting…' : 'Pay & recharge'}</button>
+              <button onClick={()=>refreshWallet()} className="btn btn-outline btn-sm"><RefreshCw className="w-3.5 h-3.5" />Refresh status</button>
+            </div>
+          </div>
+          {!!pendingRechargeActive.length && (
+            <div className="card p-4">
+              <div className="font-bold mb-2 flex items-center gap-2"><Clock3 className="w-4 h-4 text-warning" />Pending gateway recharges <span className="text-xs font-normal text-muted-foreground">(PENDING verification — not yet credited)</span></div>
+              <div className="space-y-1.5">
+                {pendingRechargeActive.map(p => (
+                  <div key={p.payment_ref} className="flex flex-wrap items-center justify-between gap-2 text-xs border border-border/50 rounded-lg p-2">
+                    <div><span className="font-mono">{p.payment_ref}</span> · {money(p.amount)} · {p.gateway} · {dt(p.at)}</div>
+                    <div className="flex items-center gap-1.5">{statusBadge('PENDING')}<button onClick={()=>refreshWallet()} className="btn btn-outline btn-sm">Check</button><button onClick={()=>removePendingRecharge(p.payment_ref)} className="btn btn-outline btn-sm" title="Stop tracking (does not cancel the payment)">Dismiss</button></div>
+                  </div>
+                ))}
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-2">Complete payment at your gateway. Wallet credit appears here once the gateway's verified webhook arrives; this list never implies money was added. If it was cancelled, nothing is charged.</div>
+            </div>
+          )}
           <div className="card p-4"><h2 className="font-bold mb-3">Partner Balance Report (Ledger)</h2><div className="overflow-auto"><table className="w-full text-xs min-w-[900px]"><thead className="text-muted-foreground uppercase"><tr className="border-b border-border"><th className="text-left py-2 px-2">Date</th><th className="text-left py-2 px-2">Type</th><th className="text-left py-2 px-2">Subscriber</th><th className="text-left py-2 px-2">Amount</th><th className="text-left py-2 px-2">Balance After</th><th className="text-left py-2 px-2">Comments</th><th className="text-left py-2 px-2">Added By</th></tr></thead><tbody>{(balance?.transactions || []).map((t: any) => (<tr key={t.id} className="border-b border-border/50"><td className="py-2 px-2 text-muted-foreground whitespace-nowrap">{dt(t.created_at)}</td><td className="py-2 px-2"><div className="font-medium">{t.type}</div><div className="text-muted-foreground">{t.direction}</div></td><td className="py-2 px-2">{t.subscriber_name || t.client_code || t.subscriber_username || '-'}</td><td className={`py-2 px-2 font-semibold ${t.direction==='CREDIT'?'text-success':'text-danger'}`}>{t.direction==='CREDIT'?'+':'-'}{money(t.amount)}</td><td className="py-2 px-2 font-medium">{money(t.balance_after)}</td><td className="py-2 px-2 max-w-[280px] truncate" title={t.description || ''}>{t.description || '-'}</td><td className="py-2 px-2 text-muted-foreground">{t.created_by || '-'}</td></tr>))}{!(balance?.transactions || []).length && <tr><td colSpan={7} className="py-8 text-center text-muted-foreground">No transactions found.</td></tr>}</tbody></table></div></div>
         </div>
       )}

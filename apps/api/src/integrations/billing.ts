@@ -141,7 +141,7 @@ export async function generateInvoiceForSubscriber(sub: AnyObj, opts: { cycleDat
 
 export async function runBatchInvoicing(opts: { subscriber_ids?: string[]; cycleDate?: string } = {}) {
   const cycleDate = opts.cycleDate ? new Date(opts.cycleDate) : new Date();
-  let q = `SELECT s.* FROM subscribers s WHERE COALESCE(s.monthly_bill,0) > 0 AND s.status <> 'TERMINATED'`;
+  let q = `SELECT s.* FROM subscribers s WHERE COALESCE(s.monthly_bill,0) > 0 AND s.status <> 'TERMINATED' AND NOT (s.status='EXPIRED' AND COALESCE(s.suspension_source,'')='CREATION')`;
   const params: any[] = [];
   if (opts.subscriber_ids && opts.subscriber_ids.length) { params.push(opts.subscriber_ids); q += ` AND s.id = ANY($1::uuid[])`; }
   q += ` ORDER BY s.created_at ASC`;
@@ -459,6 +459,36 @@ export async function evaluateDuePolicies() {
   return { ok: true, evaluated: subs.length, actions, policy: { grace_days: graceDays, warning_days: warnBefore, auto_suspend: !!policy.auto_suspend, isolate_on_suspend: !!policy.isolate_on_suspend, enable_walled_garden: !!policy.enable_walled_garden } };
 }
 
+/** Credit a reseller wallet from a VERIFIED gateway payment (reseller self-service recharge).
+ *  Binds to a PENDING payment created by POST /api/resellers/:id/wallet/recharge-gateway;
+ *  idempotent; enforces credit_limit; never trusts caller-supplied amount. */
+export async function creditResellerWalletFromGatewayPayment(opts: { paymentRef: string; trxId?: string | null; raw?: any }): Promise<any> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const pr = (await client.query('SELECT * FROM payments WHERE payment_ref=$1 FOR UPDATE', [opts.paymentRef])).rows[0];
+    if (!pr) { await client.query('ROLLBACK'); return { ok: false, reason: 'payment not found' }; }
+    const meta = (pr.gateway_response || {}) as any;
+    if (meta.purpose !== 'RESELLER_WALLET_RECHARGE') { await client.query('ROLLBACK'); return { ok: false, reason: 'not a reseller wallet payment' }; }
+    if (String(pr.status || '').toUpperCase() === 'COMPLETED') { await client.query('ROLLBACK'); return { ok: true, duplicate: true }; }
+    const resellerId = meta.reseller_id;
+    const rr = (await client.query('SELECT * FROM resellers WHERE id=$1 FOR UPDATE', [resellerId])).rows[0];
+    if (!rr) { await client.query('ROLLBACK'); return { ok: false, reason: 'reseller not found' }; }
+    const amount = Number(pr.amount || 0);
+    if (!(amount > 0)) { await client.query('ROLLBACK'); return { ok: false, reason: 'invalid amount' }; }
+    const newBal = +(Number(rr.wallet_balance || 0) + amount).toFixed(2);
+    const limit = Number(rr.credit_limit || 0);
+    if (limit > 0 && newBal > limit) { await client.query('ROLLBACK'); return { ok: false, reason: `credit limit exceeded (${limit})` }; }
+    await client.query(`UPDATE payments SET status='COMPLETED', verified_at=now(), trx_id=COALESCE($2,trx_id), updated_at=now() WHERE id=$1`, [pr.id, opts.trxId || null]);
+    await client.query(`UPDATE resellers SET wallet_balance=$2, updated_at=now() WHERE id=$1`, [rr.id, newBal]);
+    await client.query(`INSERT INTO reseller_wallet_transactions(reseller_id,type,direction,amount,balance_after,reference_type,reference_id,description,metadata,created_by)
+      VALUES($1,'RECHARGE','CREDIT',$2,$3,'PAYMENT',$4,$5,$6::jsonb,$7)`,
+      [rr.id, amount, newBal, pr.id, 'Gateway wallet recharge', JSON.stringify({ payment_ref: pr.payment_ref, trx_id: opts.trxId || null }), 'gateway']);
+    await client.query('COMMIT');
+    return { ok: true, balance: newBal, amount };
+  } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+}
+
 export async function reactivateSubscriber(subscriberId: string, reason = 'Payment confirmed', opts: { force?: boolean } = {}) {
   const start = Date.now();
   const current = (await pool.query('SELECT suspension_source, suspension_reason FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
@@ -611,8 +641,18 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
         [subscriberId, amount, payment.payment_ref, 'PAYMENT', `${invoice ? 'Invoice payment' : 'Advance payment'} via ${input.gateway}`, JSON.stringify({ invoice_id: invoice?.id || updatedInvoice?.id || null, trx_id: trx, advance: !invoice })]).catch(()=>{});
     }
     const due = await recalcSubscriberDue(subscriberId);
-    const sub = (await pool.query('SELECT status, suspension_stage, walled_garden FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
-    if (status === 'COMPLETED' && due <= 0 && sub && (sub.status === 'SUSPENDED' || sub.status === 'EXPIRED' || String(sub.suspension_stage || 'NONE') !== 'NONE' || sub.walled_garden)) {
+    const sub = (await pool.query('SELECT status, suspension_stage, walled_garden, suspension_source, package_name FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
+    // Payment-gate for created-EXPIRED: reactivation requires a recorded payment >= package price.
+    // (Anything less is still recorded as money received, but cannot flip created-EXPIRED -> ACTIVE;
+    //  the strict single-transaction path is activateCreatedExpired / POST /api/subscribers/:id/renew.)
+    let reactivateBlocked = false;
+    if (sub && String(sub.suspension_source || '').toUpperCase() === 'CREATION' && String(sub.status || '').toUpperCase() === 'EXPIRED') {
+      const pkgPriceRow = sub.package_name ? (await pool.query('SELECT price FROM bandwidth_packages WHERE name=$1 LIMIT 1', [sub.package_name]).catch(() => ({ rows: [] as any[] }))).rows[0] : null;
+      const pkgPrice = Number(pkgPriceRow?.price || 0);
+      const required = pkgPrice > 0 ? pkgPrice : 0;
+      reactivateBlocked = required > 0 && amount + 0.001 < required;
+    }
+    if (!reactivateBlocked && status === 'COMPLETED' && due <= 0 && sub && (sub.status === 'SUSPENDED' || sub.status === 'EXPIRED' || String(sub.suspension_stage || 'NONE') !== 'NONE' || sub.walled_garden)) {
       reactivation = await reactivateSubscriber(subscriberId, `Payment confirmed (${input.gateway}${trx ? ' '+trx : ''})`);
     }
   }
@@ -654,6 +694,27 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
   return { ok: true, duplicate: false, payment, invoice: updatedInvoice, subscriber_id: subscriberId, reactivation };
 }
 
+/** Unified validity rule (shared by admin recharge + reseller wallet renewal):
+ *  new expiry = max(current expiry, today) + package validity_value/unit
+ *  (or +extendDays; package CALENDAR_MONTH default; business timezone). */
+export async function computeNewExpiry(sub: any, pkg: any, extendDaysIn?: number): Promise<{ newExpiry: string; oldExpiry: string | null; extendLabel: string }> {
+  const unit = String(pkg?.validity_unit || 'CALENDAR_MONTH').toUpperCase();
+  const val = Math.max(1, Number(pkg?.validity_value || 1));
+  const tz = await getBusinessTimezone();
+  const todayYmd = ymdInTimezone(new Date(), tz);
+  const cur = toDate(sub?.expiry_date);
+  const curYmd = cur ? ymdInTimezone(cur, tz) : null;
+  const base = curYmd && curYmd > todayYmd ? new Date(`${curYmd}T00:00:00`) : new Date(`${todayYmd}T00:00:00`);
+  const exp = new Date(base);
+  let extendLabel: string;
+  const extendDays = Math.floor(Number(extendDaysIn || 0));
+  if (extendDays > 0) { exp.setDate(exp.getDate() + extendDays); extendLabel = `+${extendDays} day(s)`; }
+  else if (unit === 'DAYS') { exp.setDate(exp.getDate() + val); extendLabel = `+${val} day(s)`; }
+  else if (unit === 'MONTHS') { exp.setMonth(exp.getMonth() + val); extendLabel = `+${val} month(s)`; }
+  else { exp.setMonth(exp.getMonth() + 1); extendLabel = '+1 calendar month'; }
+  return { newExpiry: ymdInTimezone(exp, tz), oldExpiry: curYmd, extendLabel };
+}
+
 /**
  * One-click admin renewal ("recharge"): extend the subscriber's validity by the
  * package validity (or an explicit day count) and, when an amount is charged,
@@ -663,6 +724,69 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
  * The new expiry is based on max(current expiry, today) so an already-expired
  * subscriber renews from today, not from the lapsed date.
  */
+/** Strict single-transaction activation for created-EXPIRED (suspension_source='CREATION') subscribers.
+ *  Recorded payment == package price (fallback subscriber monthly_bill) + activation commit together;
+ *  no invoice at activation; no advance credit; nothing applied on any failure. Provisioning after commit is best-effort. */
+export async function activateCreatedExpired(subscriberId: string, opts: { method?: string; note?: string } = {}) {
+  const pre = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
+  if (!pre) throw new Error('Subscriber not found');
+  if (String(pre.status).toUpperCase() !== 'EXPIRED' || String(pre.suspension_source || '').toUpperCase() !== 'CREATION') {
+    throw new Error('activateCreatedExpired applies only to created-EXPIRED (suspension_source=CREATION) subscribers');
+  }
+  let pkg: any = null;
+  if (pre.package_name) pkg = (await pool.query('SELECT price, validity_value, validity_unit FROM bandwidth_packages WHERE name=$1 LIMIT 1', [pre.package_name])).rows[0] || null;
+  const pkgPrice = Number(pkg?.price || 0);
+  const amount = pkgPrice > 0 ? pkgPrice : Number(pre.monthly_bill || 0);
+  if (!(amount > 0)) throw new Error('A recorded payment >= package price is required to reactivate a created-EXPIRED subscriber');
+  const { newExpiry, oldExpiry, extendLabel } = await computeNewExpiry(pre, pkg);
+  const payment_ref = `ADM-RECHARGE-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  const method = String(opts.method || 'CASH').slice(0, 40);
+
+  const client = await pool.connect();
+  let payment: any = null;
+  try {
+    await client.query('BEGIN');
+    const locked = (await client.query('SELECT * FROM subscribers WHERE id=$1 FOR UPDATE', [subscriberId])).rows[0];
+    if (!locked) throw new Error('Subscriber not found');
+    if (String(locked.status).toUpperCase() !== 'EXPIRED' || String(locked.suspension_source || '').toUpperCase() !== 'CREATION') {
+      throw new Error('Subscriber is no longer created-EXPIRED');
+    }
+    payment = (await client.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, verified_at, gateway_response)
+      VALUES($1,NULL,$2::uuid,$3,$3,$4::numeric,'BDT','COMPLETED',now(),$5::jsonb) RETURNING *`,
+      [payment_ref, subscriberId, method, amount, JSON.stringify({ type: 'ADMIN_CREATED_EXPIRED_RECHARGE', note: opts.note || null, extend: extendLabel, old_expiry_date: oldExpiry, new_expiry_date: newExpiry, package_price: pkgPrice })])).rows[0];
+    await client.query(`UPDATE subscribers SET status='ACTIVE', suspension_stage='NONE', walled_garden=false, suspension_source='NONE', suspension_reason=NULL, grace_until=NULL,
+       expiry_date=$2, old_expiry_date=$3, due_date=$2, next_bill_date=$2, excess_amount=GREATEST(0, COALESCE(excess_amount,0)-$4), updated_at=now() WHERE id=$1`,
+      [subscriberId, newExpiry, oldExpiry, amount]);
+    await client.query('COMMIT');
+  } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
+
+  // post-commit best-effort (mirrors recordPaymentAndReactivate extras; NOT inside the money transaction)
+  try { await recalcSubscriberDue(subscriberId); } catch {}
+  let reactivation: any = null;
+  try { reactivation = await applyProvisioningState(subscriberId, { status: 'ACTIVE', stage: SUSPENSION_STAGES.NONE, walled_garden: false, reason: `Admin recharge ${payment_ref}`, sendCoa: true, coaAction: 'COA' }); } catch (e: any) { reactivation = { ok: false, error: e.message }; }
+  try { await pool.query(`INSERT INTO wallet_transactions(subscriber_id, type, amount, reference_id, reference_type, description, metadata) VALUES($1,'CREDIT',$2,$3,'PAYMENT',$4,$5::jsonb)`,
+    [subscriberId, amount, payment_ref, 'PAYMENT', `Admin recharge via ${method}`, JSON.stringify({ payment_ref })]); } catch {}
+  try { await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'REACTIVATED','NONE',$2,$3::jsonb,'admin')`,
+    [subscriberId, `Admin recharge ${payment_ref}`, JSON.stringify({ amount, payment_ref, expiry: newExpiry })]); } catch {}
+  try {
+    const cashAccR = await pool.query("SELECT id FROM finance_accounts WHERE code='1000' LIMIT 1").catch(() => ({ rows: [] as any[] }));
+    const revAccR = await pool.query("SELECT id FROM finance_accounts WHERE code='4000' LIMIT 1").catch(() => ({ rows: [] as any[] }));
+    const cashAcc = (cashAccR as any).rows[0]?.id, revAcc = (revAccR as any).rows[0]?.id;
+    if (cashAcc && revAcc) {
+      const je = await pool.query(`INSERT INTO finance_journal_entries(entry_no,entry_date,description,source_type,source_id,posted,created_by) VALUES($1,CURRENT_DATE,$2,'PAYMENT',$3,true,'system') RETURNING id`,
+        [`JE-PAY-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`, `Payment ${payment_ref}`, payment_ref]).catch(() => ({ rows: [] as any[] }));
+      const jid = (je as any).rows[0]?.id;
+      if (jid) await pool.query(`INSERT INTO finance_journal_lines(entry_id,account_id,debit,credit,memo) VALUES($1,$2,$3,0,'cash/mfs'),($1,$4,0,$3,'revenue')`, [jid, cashAcc, amount, revAcc]).catch(() => {});
+      await pool.query(`INSERT INTO finance_transactions(txn_date,txn_type,method,amount,currency,reference_type,reference_id,subscriber_id,description,created_by) VALUES(CURRENT_DATE,'COLLECTION',$1,$2,'BDT','PAYMENT',$3,$4::uuid,$5,'system')`,
+        [method, amount, payment_ref, subscriberId, `Payment ${payment_ref}`]).catch(() => {});
+    }
+  } catch {}
+  try { await auditLog({ action: 'PAYMENT_COMPLETED', entity_type: 'payment', entity_id: payment?.id || payment_ref, details: { gateway: method, amount, subscriber_id: subscriberId, admin_recharge: true, created_expired_activation: true } }); } catch {}
+
+  const fresh = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
+  return { ok: true, payment, reactivation, due: 0, extend: extendLabel, old_expiry_date: oldExpiry, expiry_date: newExpiry, amount, method, subscriber: fresh };
+}
+
 export async function renewSubscriber(subscriberId: string, opts: { amount?: number; method?: string; extendDays?: number; note?: string } = {}) {
   const sub = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
   if (!sub) throw new Error('Subscriber not found');
@@ -675,31 +799,21 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
   if (sub.package_name) {
     pkg = (await pool.query('SELECT price, validity_value, validity_unit FROM bandwidth_packages WHERE name=$1 LIMIT 1', [sub.package_name])).rows[0] || null;
   }
-  const unit = String(pkg?.validity_unit || 'CALENDAR_MONTH').toUpperCase();
-  const val = Math.max(1, Number(pkg?.validity_value || 1));
+  const { newExpiry, oldExpiry, extendLabel } = await computeNewExpiry(sub, pkg, opts.extendDays);
 
-  // Work in the business timezone so a DATE column round-trips exactly
-  // (node-pg parses DATE at local midnight; slicing toISOString in UTC would
-  // shift the day in non-UTC zones).
-  const tz = await getBusinessTimezone();
-  const todayYmd = ymdInTimezone(new Date(), tz);
-  const cur = toDate(sub.expiry_date);
-  const curYmd = cur ? ymdInTimezone(cur, tz) : null;
-  const base = curYmd && curYmd > todayYmd ? new Date(`${curYmd}T00:00:00`) : new Date(`${todayYmd}T00:00:00`);
-  const exp = new Date(base);
-  let extendLabel: string;
-  const extendDays = Math.floor(Number(opts.extendDays || 0));
-  if (extendDays > 0) { exp.setDate(exp.getDate() + extendDays); extendLabel = `+${extendDays} day(s)`; }
-  else if (unit === 'DAYS') { exp.setDate(exp.getDate() + val); extendLabel = `+${val} day(s)`; }
-  else if (unit === 'MONTHS') { exp.setMonth(exp.getMonth() + val); extendLabel = `+${val} month(s)`; }
-  else { exp.setMonth(exp.getMonth() + 1); extendLabel = '+1 calendar month'; }
-  const newExpiry = ymdInTimezone(exp, tz);
-  const oldExpiry = curYmd;
-
-  const amount = opts.amount == null
-    ? Number(sub.price_override ?? sub.monthly_bill ?? pkg?.price ?? 0)
-    : Number(opts.amount);
+  // Payment-gated activation for created-EXPIRED subscribers: recorded payment == package price
+  // (fallback: subscriber monthly_bill when no package row exists). No amount=0 free activation.
+  const createdExpired = String(sub.suspension_source || '').toUpperCase() === 'CREATION';
+  // created-EXPIRED uses the strict single-transaction activation path
+  if (createdExpired) return await activateCreatedExpired(subscriberId, { method: opts.method, note: opts.note });
+  let amount: number;
+  if (opts.amount == null) {
+    amount = Number(sub.price_override ?? sub.monthly_bill ?? pkg?.price ?? 0);
+  } else {
+    amount = Number(opts.amount);
+  }
   if (!Number.isFinite(amount) || amount < 0) throw new Error('amount must be a non-negative number');
+  if (!(amount > 0) && wasExpired) throw new Error('A recorded payment >= package price is required to reactivate an EXPIRED subscriber');
   const charged = amount > 0;
 
   let payment: any = null;
@@ -728,6 +842,7 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
        status=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN 'ACTIVE' ELSE status END,
        suspension_stage=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN 'NONE' ELSE suspension_stage END,
        walled_garden=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN false ELSE walled_garden END,
+       suspension_source=CASE WHEN $4::numeric <= 0 AND ($5::boolean OR status='EXPIRED') THEN 'NONE' ELSE suspension_source END,
        updated_at=now() WHERE id=$1`,
     [subscriberId, newExpiry, oldExpiry, due, charged, newDueDate],
   );

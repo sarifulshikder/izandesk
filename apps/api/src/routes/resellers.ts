@@ -2,7 +2,9 @@ import { Router } from 'express';
 import XLSX = require('xlsx');
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
-import { recalcSubscriberDue, reactivateSubscriber, getInvoiceWithItems, applyProvisioningState } from '../integrations/billing';
+import { recalcSubscriberDue, reactivateSubscriber, getInvoiceWithItems, applyProvisioningState, computeNewExpiry } from '../integrations/billing';
+import { getGatewayConfig } from './billing';
+import { getKernel } from '../kernel/kernel-instance';
 import { renderSimpleInvoicePdf } from '../integrations/pdf';
 import { nextTicketNo } from '../utils/ticket-no';
 
@@ -146,6 +148,63 @@ router.get('/:id/wallet', asyncHandler(async (req, res) => {
   res.json({ data: { reseller, balance: Number(reseller.wallet_balance || 0), transactions: tx.rows } });
 }));
 
+/* Reseller self-service wallet recharge through a configured payment gateway.
+   Wallet is credited ONLY on verified gateway completion (see /api/billing/webhooks/:gateway),
+   never directly by the reseller. Admin direct credit remains POST /:id/wallet/recharge. */
+/* Reseller-safe list of enabled payment gateways for self-service wallet recharge (no staff-only /api/billing). */
+router.get('/:id/wallet/gateways', asyncHandler(async (req, res) => {
+  const user = getUser(req);
+  if (user.role === 'RESELLER') {
+    const rid = await resolveResellerIdForUser(req);
+    if (rid !== req.params.id) return res.status(403).json({ message: 'Forbidden' });
+  } else if (!isAdminLike(user.role)) {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+  const cfg = (await pool.query('SELECT gateway, enabled, mode, (credentials IS NOT NULL AND credentials <> \'{}\'::jsonb) as has_credentials FROM payment_gateway_configs WHERE enabled=true ORDER BY gateway')).rows;
+  const kernel = getKernel();
+  const plugins = (kernel?.listPlugins().filter(p => p.type === 'PAYMENT_GATEWAY') || []).map(p => ({ id: p.id, name: p.name, gateway: p.id.replace(/^payment-/, '') }));
+  res.json({ ok: true, data: cfg, plugins });
+}));
+
+router.post('/:id/wallet/recharge-gateway', asyncHandler(async (req, res) => {
+  const user = getUser(req);
+  if (user.role === 'RESELLER') {
+    const rid = await resolveResellerIdForUser(req);
+    if (rid !== req.params.id) return res.status(403).json({ message: 'Forbidden' });
+  } else if (!isAdminLike(user.role)) {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+  const amount = Number(req.body?.amount || 0);
+  if (!(amount > 0)) return res.status(400).json({ message: 'amount must be > 0' });
+  const gateway = String(req.body?.gateway || '').toLowerCase();
+  if (!gateway) return res.status(400).json({ message: 'gateway is required' });
+  const r = (await pool.query('SELECT * FROM resellers WHERE id=$1', [req.params.id])).rows[0];
+  if (!r) return res.status(404).json({ message: 'Reseller not found' });
+  if (String(r.status).toUpperCase() !== 'ACTIVE') return res.status(400).json({ message: 'Reseller is not active' });
+  const cfg = await getGatewayConfig(gateway);
+  if (cfg && cfg.enabled === false) return res.status(403).json({ message: `Payment gateway '${gateway}' is disabled.` });
+  const kernel = getKernel();
+  const pluginMeta = kernel?.listPlugins().find(p => p.type === 'PAYMENT_GATEWAY' && (p.id === gateway || p.id === `payment-${gateway}` || p.name.toLowerCase().includes(gateway)));
+  const plugin = pluginMeta ? kernel?.getPlugin(pluginMeta.id)?.instance : null;
+  const payment_ref = `REW-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  let checkout: any = { ok: false, gateway, message: 'Payment plugin not available' };
+  if (plugin && typeof plugin.createCheckoutSession === 'function') {
+    try {
+      checkout = await plugin.createCheckoutSession({
+        paymentRef: payment_ref, amount, currency: 'BDT', subscriber: null, invoice: null,
+        returnUrl: req.body?.return_url, cancelUrl: req.body?.cancel_url, webhookUrl: req.body?.webhook_url,
+        metadata: { purpose: 'RESELLER_WALLET_RECHARGE', reseller_id: req.params.id, ...(req.body?.metadata || {}) },
+        mode: (cfg?.mode || 'SANDBOX'), config: cfg?.config || {}, credentials: cfg?.credentials || {}, webhookSecret: cfg?.webhook_secret || null,
+      });
+    } catch (e: any) { checkout = { ok: false, gateway, message: e.message }; }
+  }
+  await pool.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, checkout_url, client_secret, gateway_response)
+    VALUES($1,NULL,NULL,$2,$3,$4,'BDT','PENDING',$5,$6,$7::jsonb)`,
+    [payment_ref, gateway, req.body?.method || null, amount, checkout.paymentUrl || checkout.approvalUrl || null, checkout.clientSecret || null,
+      JSON.stringify({ purpose: 'RESELLER_WALLET_RECHARGE', reseller_id: req.params.id, checkout })]);
+  res.json({ ok: true, payment_ref, checkout, note: 'Wallet credited only after verified gateway confirmation (webhook).' });
+}));
+
 router.post('/:id/wallet/recharge', asyncHandler(async (req, res) => {
   const user = getUser(req);
   // Recharging a prepaid wallet grants real money — only admin roles may do it.
@@ -207,13 +266,20 @@ router.post('/:id/renew-subscriber', asyncHandler(async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(403).json({ message: 'Subscriber does not belong to this reseller' });
     }
+    // Payment-gated activation: wallet renewal only for EXPIRED subscribers.
+    if (String(sub.status || '').toUpperCase() !== 'EXPIRED') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'Subscriber is not expired; wallet activation applies to expired subscribers' });
+    }
     if (!sub.reseller_id) {
       await client.query('UPDATE subscribers SET reseller_id=$2, updated_at=now() WHERE id=$1', [sub.id, reseller.id]);
     }
     resellerId = String(reseller.id);
     packageName = sub.package_name || null;
 
-    retail = Number(sub.monthly_bill || 0);
+    // retail basis = package price (fallback subscriber monthly_bill); ৳500 package in the target flow.
+    const pkgRow = packageName ? (await client.query('SELECT price, validity_value, validity_unit FROM bandwidth_packages WHERE name=$1 LIMIT 1', [packageName])).rows[0] : null;
+    retail = Number(pkgRow?.price || 0) > 0 ? Number(pkgRow.price) : Number(sub.monthly_bill || 0);
     marginPct = Math.min(100, Math.max(0, Number(reseller.buying_margin_percent || 0)));
     wholesale = +(retail * (1 - marginPct / 100)).toFixed(2);
     charge = wholesale > 0 ? wholesale : retail;
@@ -243,12 +309,10 @@ router.post('/:id/renew-subscriber', asyncHandler(async (req, res) => {
     const dueRes = await client.query(`SELECT COALESCE(SUM(GREATEST(due_amount,0)),0)::numeric(12,2) AS due FROM invoices WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE')`, [sub.id]);
     newSubDue = Number(dueRes.rows[0]?.due || 0);
 
-    // A renewal must extend the service period (at least 30 days from today).
-    const base = sub.expiry_date ? new Date(sub.expiry_date) : new Date();
-    const start = !isNaN(base.getTime()) && base.getTime() > Date.now() ? base : new Date();
-    start.setDate(start.getDate() + 30);
-    expiryDate = start.toISOString().slice(0, 10);
-    await client.query(`UPDATE subscribers SET current_due=$2::numeric, expiry_date=$3, status=CASE WHEN $2::numeric <= 0 THEN 'ACTIVE' ELSE status END, suspension_stage=CASE WHEN $2::numeric <= 0 THEN 'NONE' ELSE suspension_stage END, walled_garden=CASE WHEN $2::numeric <= 0 THEN false ELSE walled_garden END, updated_at=now() WHERE id=$1`,
+    // Unified validity rule (same as admin recharge): max(current expiry, today) + package validity.
+    const computed = await computeNewExpiry(sub, pkgRow);
+    expiryDate = computed.newExpiry;
+    await client.query(`UPDATE subscribers SET current_due=$2::numeric, expiry_date=$3, status=CASE WHEN $2::numeric <= 0 THEN 'ACTIVE' ELSE status END, suspension_stage=CASE WHEN $2::numeric <= 0 THEN 'NONE' ELSE suspension_stage END, suspension_source=CASE WHEN $2::numeric <= 0 THEN 'NONE' ELSE suspension_source END, walled_garden=CASE WHEN $2::numeric <= 0 THEN false ELSE walled_garden END, updated_at=now() WHERE id=$1`,
       [sub.id, newSubDue, expiryDate]);
 
     pref = `RWAL-${Date.now()}-${Math.floor(Math.random()*1000)}`;

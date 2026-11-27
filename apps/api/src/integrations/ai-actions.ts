@@ -104,6 +104,19 @@ export async function executeAiAction(
 
     case 'set_subscriber_status': {
       const sub = await one(config, actor, `/api/subscribers?q=${encodeURIComponent(p.identifier)}`, 'subscriber', p.identifier);
+      // Payment-gated activation: created-EXPIRED subscribers cannot be activated by a raw status PUT.
+      // Route activation through POST /api/subscribers/:id/renew, which records a payment == package
+      // price in ONE transaction, extends validity and restores provisioning.
+      const isCreatedExpired = String(sub.status || '').toUpperCase() === 'EXPIRED' && String(sub.suspension_source || '').toUpperCase() === 'CREATION';
+      if (String(p.status).toUpperCase() === 'ACTIVE' && isCreatedExpired) {
+        const recharged: any = await api(config, actor, `/api/subscribers/${sub.id}/renew`, { method: 'POST', body: {} });
+        return {
+          ok: true,
+          message: `${recharged.subscriber?.full_name || sub.full_name} (${recharged.subscriber?.client_code || sub.client_code || p.identifier}) recharged ${money(recharged.amount)} (payment recorded, no invoice) and is now ACTIVE. New expiry: ${recharged.expiry_date || '-'}.`,
+          cards: [{ title: 'Open subscriber', url: `/subscribers/${sub.id}` }],
+          raw: recharged,
+        };
+      }
       const updated: any = await api(config, actor, `/api/subscribers/${sub.id}`, {
         method: 'PUT', body: { status: p.status },
       });

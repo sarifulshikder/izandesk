@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
-import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses, ingestMfsSmsEvent, runFupEnforcementSweep, evaluateFupForSubscriber, signInvoiceToken, verifyInvoiceToken } from '../integrations/billing';
+import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses, ingestMfsSmsEvent, runFupEnforcementSweep, evaluateFupForSubscriber, signInvoiceToken, verifyInvoiceToken, creditResellerWalletFromGatewayPayment } from '../integrations/billing';
 import { getKernel } from '../kernel/kernel-instance';
 import { mikrotikProvisionWalledGardenRedirect } from '../integrations/mikrotik';
 import crypto = require('crypto');
@@ -248,6 +248,11 @@ router.post('/payments/record', asyncHandler(async (req, res) => {
   )).rows;
   if (!matches.length) return res.status(404).json({ message: 'No subscriber matched that identifier' });
   if (matches.length > 1) return res.status(400).json({ message: `${matches.length} subscribers matched — be more specific` });
+  // created-EXPIRED activation requires recorded payment == package price in ONE transaction: use POST /api/subscribers/:id/renew
+  const tgt = (await pool.query('SELECT status, suspension_source FROM subscribers WHERE id=$1', [matches[0].id])).rows[0];
+  if (tgt && String(tgt.status || '').toUpperCase() === 'EXPIRED' && String(tgt.suspension_source || '').toUpperCase() === 'CREATION') {
+    return res.status(400).json({ message: 'Created-expired subscriber must be recharged: use POST /api/subscribers/:id/renew (recorded payment >= package price, single transaction)' });
+  }
   const rec = await recordPaymentAndReactivate({
     gateway: String(b.gateway || 'AI_COPILOT').slice(0, 40),
     amount,
@@ -263,6 +268,11 @@ router.post('/payments/record', asyncHandler(async (req, res) => {
 
 router.post('/subscribers/:id/reactivate', asyncHandler(async (req, res) => {
   if (!requireBillingRole(req, res)) return;
+  // created-EXPIRED subscribers require recorded payment == package price via POST /api/subscribers/:id/renew
+  const s = (await pool.query("SELECT status, suspension_source FROM subscribers WHERE id=$1", [req.params.id])).rows[0];
+  if (s && String(s.status).toUpperCase() === 'EXPIRED' && String(s.suspension_source || '').toUpperCase() === 'CREATION') {
+    return res.status(400).json({ message: 'Created-expired subscriber must be recharged: use POST /api/subscribers/:id/renew (recorded payment >= package price)' });
+  }
   const result = await reactivateSubscriber(req.params.id, req.body?.reason || 'Manual reactivation', { force: true });
   res.json(result);
 }));
@@ -287,7 +297,7 @@ router.post('/gateways/:gateway', asyncHandler(async (req, res) => {
   res.json({ ok: true, gateway: r.rows[0] });
 }));
 
-async function getGatewayConfig(gateway: string) {
+export async function getGatewayConfig(gateway: string) {
   const r = await pool.query('SELECT * FROM payment_gateway_configs WHERE gateway=$1', [gateway]);
   const row = r.rows[0];
   if (!row) return null;
@@ -586,9 +596,11 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
 
   // A valid HMAC/provider parse is not enough: bind every accepted event to a
   // PENDING payment created by this system and cap the amount at checkout.
+  let pendingPayment: any = null;
   if (verification.verified) {
     const pref = String(verification.paymentRef || verification.payment_ref || payload.paymentRef || payload.payment_ref || '').trim();
     const pending = pref ? (await pool.query("SELECT * FROM payments WHERE payment_ref=$1 AND status='PENDING'", [pref])).rows[0] : null;
+    pendingPayment = pending;
     const amt = Number(verification.amount ?? payload.amount ?? 0);
     if (!pending || !(amt > 0) || amt > Number(pending.amount || 0) + 0.01) {
       verification = { ...verification, ok: false, verified: false, status: 'FAILED', message: 'Webhook does not match a pending payment', raw: payload };
@@ -629,6 +641,14 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
 
   if (verification.verified && (String(verification.status).toUpperCase() === 'COMPLETED' || String(verification.status).toUpperCase() === 'PAID' || String(verification.status).toUpperCase() === 'SUCCESS')) {
     const amount = Number(verification.amount || payload.amount || 0);
+    // Reseller self-service wallet recharge: credit reseller, NOT subscriber billing.
+    if (pendingPayment && pendingPayment.gateway_response?.purpose === 'RESELLER_WALLET_RECHARGE') {
+      const result = amount > 0
+        ? await creditResellerWalletFromGatewayPayment({ paymentRef: pendingPayment.payment_ref, trxId: trxId || undefined, raw: payload })
+        : { ok: false, message: 'No amount in webhook' };
+      await pool.query('UPDATE payment_webhook_events SET processed=true, processed_at=now(), result=$2::jsonb WHERE id=$1', [eventRow?.id, JSON.stringify({ verification, result })]);
+      return res.json({ ok: true, verified: true, processed: true, result });
+    }
     const invoiceId = verification.invoiceId || payload.invoiceId || payload.invoice_id;
     const result = amount > 0 ? await recordPaymentAndReactivate({ gateway, amount, invoice_id: invoiceId, subscriber_id: verification.subscriber_id || payload.subscriber_id, trx_id: trxId || undefined, method: payload.method || 'webhook', payer_number: payload.payer || payload.msisdn || verification.payer?.msisdn, raw: payload, payment_ref: paymentRef || undefined, currency: verification.currency || payload.currency || 'BDT', status: 'COMPLETED', dedupe_key: dedupeKey }) : { ok:false, message:'No amount in webhook' };
     await pool.query('UPDATE payment_webhook_events SET processed=true, processed_at=now(), result=$2::jsonb WHERE id=$1', [eventRow?.id, JSON.stringify({ verification, result })]);

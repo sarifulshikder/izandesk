@@ -172,6 +172,12 @@ test.describe('mutating flows (opt-in)', () => {
       await modal.locator('input').first().fill('Smoke Test User');
       await modal.getByRole('button', { name: /Next/ }).click();
       await modal.locator('label').filter({ hasText: 'PPPoE Username' }).locator('input').fill(username);
+      // reseller-created subscribers REQUIRE a package (payment-gated created-EXPIRED)
+      const pkgs = await (await request.get('/api/subscribers/packages/catalog', { headers })).json();
+      const list = Array.isArray(pkgs?.data) ? pkgs.data : (Array.isArray(pkgs) ? pkgs : []);
+      const pkgName = (list.find((x: any) => Number(x.price) > 0) || list[0] || {}).name;
+      test.skip(!pkgName, 'no billable package available');
+      await modal.locator('label').filter({ hasText: 'Package' }).locator('select').selectOption(String(pkgName));
       await modal.getByRole('button', { name: /Next/ }).click();
       await modal.getByRole('button', { name: /Next/ }).click();
       await modal.getByRole('button', { name: /Create Subscriber/ }).click();

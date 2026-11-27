@@ -379,6 +379,11 @@ export function SubscriberFormWizard({
                 ]} />
               </div>
               <div className="text-xs text-muted-foreground p-3 rounded-xl border border-border bg-muted/20">Review all details. Client code will be generated automatically for new subscribers. You can edit later and upload KYC documents from the subscriber details panel.</div>
+              {!initial && form.package_name && (
+                <div className="alert alert-warning text-xs">
+                  <b>Payment-gated activation:</b> this subscriber will be created in <b>EXPIRED</b> mode with service blocked. It becomes <b>ACTIVE</b> only after recharge — admin records a payment of the package price (<b>POST /api/subscribers/:id/renew</b> / “Recharge &amp; activate”), or a reseller pays from wallet balance (<b>renew-subscriber</b>). The chosen “Status” is not honored; no working credentials are provisioned until payment.
+                </div>
+              )}
             </div>
           )}
 

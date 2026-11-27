@@ -53,7 +53,9 @@ export async function syncSubscriberToRadiusDb(sub: any, opts: { walledGarden?: 
   const profile = String(sub.profile_name || sub.package_name || 'default');
   const ip = sub.ip_address || null;
   const suspended = sub.status === 'SUSPENDED' || sub.status === 'TERMINATED' || sub.status === 'EXPIRED';
-  const walled = !!(opts.walledGarden || sub.walled_garden || sub.suspension_stage === 'WALLED_GARDEN' || sub.suspension_stage === 'ISOLATED');
+  // Walled-garden restriction is NOT hard suspension. ISOLATED + suspended must reject,
+  // not fall back to cleartext (created-EXPIRED / expired-isolated users must not authenticate).
+  const walled = !!(opts.walledGarden || sub.walled_garden || sub.suspension_stage === 'WALLED_GARDEN');
 
   await pool.query('DELETE FROM radcheck WHERE username=$1', [username]);
   await pool.query('DELETE FROM radreply WHERE username=$1', [username]);
