@@ -97,7 +97,6 @@ async function activateCreatedExpiredTest() {
     { when: (c) => has(c, 'SELECT * FROM subscribers WHERE id=$1 FOR UPDATE'), return: { rows: [CREATED_EXPIRED_SUB] } },
     { when: (c) => has(c, 'INSERT INTO payments'), return: { rows: [{ id: 'pay-1', payment_ref: 'ADM-RECHARGE-X', amount: 500 }] } },
     { when: (c) => has(c, 'COALESCE(SUM(GREATEST(due_amount,0)),0)::numeric(12,2) as due'), return: { rows: [{ due: 0 }] } },
-    { when: (c) => has(c, 'SELECT suspension_source, suspension_reason FROM subscribers'), return: { rows: [{ suspension_source: 'CREATION', suspension_reason: null }] } },
   ]);
   try {
     const r = await billing.renewSubscriber('sub-ce', { method: 'CASH' });
@@ -149,22 +148,161 @@ async function recordPaymentGateTest() {
       { when: (c) => has(c, 'COALESCE(SUM(GREATEST(due_amount,0)),0)::numeric(12,2) as due'), return: { rows: [{ due: 0 }] } },
       { when: (c) => has(c, 'SELECT status, suspension_stage, walled_garden, suspension_source, package_name FROM subscribers'), return: { rows: [{ status: 'EXPIRED', suspension_stage: 'ISOLATED', walled_garden: false, suspension_source: 'CREATION', package_name: 'P500' }] } },
       { when: (c) => has(c, 'SELECT price FROM bandwidth_packages WHERE name=$1 LIMIT 1'), return: { rows: [{ price: 500 }] } },
-      { when: (c) => has(c, 'SELECT suspension_source, suspension_reason FROM subscribers'), return: { rows: [{ suspension_source: 'CREATION', suspension_reason: null }] } },
+      // reactivateSubscriber now selects status too; returning CREATION must block it.
+      { when: (c) => has(c, 'SELECT status, suspension_source, suspension_reason FROM subscribers'), return: { rows: [{ status: 'EXPIRED', suspension_source: 'CREATION', suspension_reason: null }] } },
       { when: (c) => has(c, 'SELECT * FROM subscribers WHERE id=$1'), return: { rows: [CREATED_EXPIRED_SUB] } },
       { when: (c) => has(c, 'FROM subscribers s LEFT JOIN bandwidth_packages bp'), return: { rows: [CREATED_EXPIRED_SUB] } },
     ]);
     try {
-      await billing.recordPaymentAndReactivate({ gateway: 'CASH', amount, subscriber_id: 'sub-ce', status: 'COMPLETED' });
-      return fake.calls.map((c) => c.sql);
+      const result = await billing.recordPaymentAndReactivate({ gateway: 'CASH', amount, subscriber_id: 'sub-ce', status: 'COMPLETED' });
+      return { calls: fake.calls.map((c) => c.sql), result };
     } finally { fake.restore(); }
   }
   // under-payment: payment recorded, but NOT reactivated
-  let calls = await run(100);
+  let { calls } = await run(100);
   check('recordPaymentAndReactivate: payment recorded', calls.some((s) => s.includes('INSERT INTO payments')));
   check('created-EXPIRED not reactivated when amount < package price', !calls.some((s) => s.includes("SET status='ACTIVE'")));
-  // full package price: reactivated
-  calls = await run(500);
-  check('created-EXPIRED reactivated when amount >= package price', calls.some((s) => s.includes("SET status='ACTIVE'")));
+  // full package price: still NOT reactivated via the loose payment path (must use recharge/reseller)
+  ({ calls } = await run(500));
+  check('created-EXPIRED not reactivated by recordPaymentAndReactivate even at full price', !calls.some((s) => s.includes("SET status='ACTIVE'")));
+}
+
+/* ---------- reactivateSubscriber refuses CREATION unless explicitly allowed ---------- */
+async function reactivateGateTest() {
+  settings.invalidateCache();
+  const fake = makeDb([
+    ...settingsHandlers,
+    { when: (c) => has(c, 'SELECT status, suspension_source, suspension_reason FROM subscribers'), return: { rows: [{ status: 'EXPIRED', suspension_source: 'CREATION', suspension_reason: null }] } },
+  ]);
+  try {
+    const blocked = await billing.reactivateSubscriber('sub-ce', 'webhook');
+    check('reactivateSubscriber blocks suspension_source=CREATION', blocked.ok === false && blocked.blocked === true);
+    check('blocked reactivation does not touch subscriber status', !fake.calls.some((c) => c.sql.includes("SET status='ACTIVE'")));
+    // the explicit admin/reseller activation paths may opt in
+    const fake2 = makeDb([
+      ...settingsHandlers,
+      { when: (c) => has(c, 'SELECT status, suspension_source, suspension_reason FROM subscribers'), return: { rows: [{ status: 'EXPIRED', suspension_source: 'CREATION', suspension_reason: null }] } },
+      { when: (c) => has(c, 'SELECT * FROM subscribers WHERE id=$1'), return: { rows: [CREATED_EXPIRED_SUB] } },
+      { when: (c) => has(c, 'FROM subscribers s LEFT JOIN bandwidth_packages bp'), return: { rows: [CREATED_EXPIRED_SUB] } },
+      { when: (c) => has(c, 'UPDATE subscribers SET status='), return: { rows: [] } },
+      { when: (c) => has(c, 'INSERT INTO billing_suspension_logs'), return: { rows: [] } },
+    ]);
+    try {
+      // provisioning is best-effort/external; the fake DB cannot satisfy it, so
+      // only the gate + state update are asserted here.
+      await billing.reactivateSubscriber('sub-ce', 'reseller wallet', { allowCreatedExpired: true }).catch(() => {});
+      check('reactivateSubscriber allowCreatedExpired proceeds', fake2.calls.some((c) => c.sql.includes("SET status='ACTIVE'")));
+    } finally { fake2.restore(); }
+  } finally { fake.restore(); }
+}
+
+/* ---------- admin renewal (non created-EXPIRED) is all-or-nothing ---------- */
+async function renewTransactionalTest() {
+  const expiredSub = {
+    id: 'sub-x', full_name: 'Normal Expired', status: 'EXPIRED', suspension_source: 'MANUAL', suspension_reason: 'Expired',
+    package_name: 'P500', monthly_bill: 500, expiry_date: '2020-01-01', price_override: null,
+    provisioning_mode: 'RADIUS', router_id: null,
+  };
+  const invoice = { id: 'inv-1', total_amount: 500, amount: 500, paid_amount: 0, due_amount: 500, status: 'UNPAID' };
+  function handlers(opts = {}) {
+    return [
+      ...settingsHandlers,
+      { when: (c) => has(c, 'SELECT * FROM subscribers WHERE id=$1 FOR UPDATE'), return: { rows: [expiredSub] } },
+      { when: (c) => has(c, 'SELECT * FROM subscribers WHERE id=$1'), return: { rows: [expiredSub] } },
+      { when: (c) => has(c, 'SELECT price, validity_value, validity_unit FROM bandwidth_packages'), return: { rows: [PKG] } },
+      { when: (c) => has(c, 'INSERT INTO payments'), return: { rows: [{ id: 'pay-r1', payment_ref: 'RENEW-X', amount: 500 }] } },
+      { when: (c) => has(c, 'FROM invoices WHERE subscriber_id=$1') && has(c, "status IN ('UNPAID','PARTIAL','OVERDUE')") && has(c, 'ORDER BY'), return: { rows: [invoice] } },
+      { when: (c) => has(c, 'UPDATE invoices SET paid_amount') && !!opts.failAllocate, return: { throw: new Error('invoice allocation failed') } },
+      { when: (c) => has(c, 'UPDATE invoices SET paid_amount'), return: { rows: [] } },
+      { when: (c) => has(c, 'COALESCE(SUM(GREATEST(due_amount,0)),0)::numeric(12,2) AS due'), return: { rows: [{ due: 0 }] } },
+      { when: (c) => has(c, 'UPDATE subscribers SET expiry_date'), return: { rows: [] } },
+      { when: (c) => has(c, 'FROM subscribers s LEFT JOIN bandwidth_packages bp'), return: { rows: [expiredSub] } },
+    ];
+  }
+
+  settings.invalidateCache();
+  let fake = makeDb(handlers());
+  try {
+    const r = await billing.renewSubscriber('sub-x', { method: 'CASH', amount: 500 });
+    const calls = fake.calls;
+    check('renewal: payment and activation commit in one transaction',
+      r.ok === true && calls.some((c) => c.sql === 'BEGIN') && calls.some((c) => c.sql === 'COMMIT'));
+    const pay = calls.find((c) => c.sql.includes('INSERT INTO payments'));
+    check('renewal: recorded amount is the requested payment', Number(pay?.params[4]) === 500);
+    const sub = calls.find((c) => c.sql.includes('UPDATE subscribers SET expiry_date'));
+    check('renewal: subscriber is activated in the same transaction', sub?.params[4] === true);
+    check('renewal: invoice is allocated and paid', calls.some((c) => c.sql.includes('UPDATE invoices SET paid_amount')));
+  } finally { fake.restore(); }
+
+  // Allocation failure must roll the payment + activation back together.
+  settings.invalidateCache();
+  fake = makeDb(handlers({ failAllocate: true }));
+  let threw = false;
+  try {
+    await billing.renewSubscriber('sub-x', { method: 'CASH', amount: 500 });
+  } catch { threw = true; }
+  try {
+    const calls = fake.calls;
+    check('renewal: allocation failure aborts the renewal', threw === true);
+    check('renewal: allocation failure rolls back', calls.some((c) => c.sql === 'ROLLBACK') && !calls.some((c) => c.sql === 'COMMIT'));
+    check('renewal: allocation failure does not activate the subscriber',
+      !calls.some((c) => c.sql.includes('UPDATE subscribers SET expiry_date')));
+  } finally { fake.restore(); }
+}
+
+/* ---------- reseller gateway recharge: payment status must never replace the ledger ---------- */
+async function gatewayRechargeLedgerTest() {
+  const paymentRow = {
+    id: 'pay-w1', payment_ref: 'REW-1', amount: 1000, status: 'COMPLETED',
+    gateway_response: { purpose: 'RESELLER_WALLET_RECHARGE', reseller_id: 'res-1' },
+  };
+  function walletHandlers(opts = {}) {
+    return [
+      ...settingsHandlers,
+      { when: (c) => has(c, "SELECT gateway_response->>'purpose' AS purpose FROM payments"), return: { rows: [{ purpose: 'RESELLER_WALLET_RECHARGE' }] } },
+      { when: (c) => has(c, 'SELECT * FROM payments WHERE payment_ref=$1 FOR UPDATE'), return: { rows: [paymentRow] } },
+      { when: (c) => has(c, 'SELECT 1 FROM reseller_wallet_transactions'), return: { rows: opts.ledgerExists ? [{ '?column?': 1 }] : [] } },
+      { when: (c) => has(c, 'SELECT * FROM resellers WHERE id=$1 FOR UPDATE'), return: { rows: [{ id: 'res-1', wallet_balance: opts.balance ?? 500, credit_limit: opts.credit_limit ?? 0 }] } },
+      { when: (c) => has(c, "UPDATE payments SET status='COMPLETED'"), return: { rows: [] } },
+      { when: (c) => has(c, 'UPDATE resellers SET wallet_balance'), return: { rows: [] } },
+      { when: (c) => has(c, 'INSERT INTO reseller_wallet_transactions'), return: { rows: [] } },
+    ];
+  }
+
+  // 1) Provider callback (payment already COMPLETED, wallet not yet credited) must credit once.
+  settings.invalidateCache();
+  let fake = makeDb(walletHandlers());
+  try {
+    const r = await billing.recordPaymentAndReactivate({ gateway: 'bkash', amount: 1000, payment_ref: 'REW-1', status: 'COMPLETED' });
+    const calls = fake.calls;
+    check('gateway recharge: payment COMPLETED without ledger still credits wallet',
+      r.ok === true && calls.some((c) => c.sql.includes('UPDATE resellers SET wallet_balance')));
+    check('gateway recharge: credit is not booked as subscriber payment', !calls.some((c) => c.sql.includes('INSERT INTO payments')));
+    const upd = calls.find((c) => c.sql.includes('UPDATE resellers SET wallet_balance'));
+    check('gateway recharge: credits the stored payment amount at face value', Number(upd?.params[1]) === 1500);
+    check('gateway recharge: writes one wallet ledger row',
+      calls.filter((c) => c.sql.includes('INSERT INTO reseller_wallet_transactions')).length === 1);
+  } finally { fake.restore(); }
+
+  // 2) A second delivery must be idempotent on the ledger, not on payment status.
+  settings.invalidateCache();
+  fake = makeDb(walletHandlers({ ledgerExists: true }));
+  try {
+    const r = await billing.creditResellerWalletFromGatewayPayment({ paymentRef: 'REW-1' });
+    check('gateway recharge: ledger row makes repeat credit a duplicate', r.ok === true && r.duplicate === true);
+    check('gateway recharge: duplicate does not move the balance',
+      !fake.calls.some((c) => c.sql.includes('UPDATE resellers SET wallet_balance')));
+  } finally { fake.restore(); }
+
+  // 3) credit_limit still rejects an over-limit credit (0 = unlimited).
+  settings.invalidateCache();
+  fake = makeDb(walletHandlers({ balance: 0, credit_limit: 500 }));
+  try {
+    const r = await billing.creditResellerWalletFromGatewayPayment({ paymentRef: 'REW-1' });
+    check('gateway recharge: credit limit rejects over-limit credit', r.ok === false && /credit limit/.test(r.reason || ''));
+    check('gateway recharge: over-limit credit leaves the balance untouched',
+      !fake.calls.some((c) => c.sql.includes('UPDATE resellers SET wallet_balance')));
+  } finally { fake.restore(); }
 }
 
 /* ---------- created-EXPIRED cannot be reactivated raw ---------- */
@@ -189,6 +327,9 @@ async function createdSourcePreservedTest() {
   await activateCreatedExpiredTest();
   await noFreeActivationTest();
   await recordPaymentGateTest();
+  await reactivateGateTest();
+  await gatewayRechargeLedgerTest();
+  await renewTransactionalTest();
   await createdSourcePreservedTest();
   console.log(`${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

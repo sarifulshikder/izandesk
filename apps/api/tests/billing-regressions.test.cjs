@@ -147,7 +147,7 @@ async function overpaymentTest() {
 
 async function manualSuspensionTest() {
   const fake = makeDb([
-    { when: (c) => has(c, 'SELECT suspension_source, suspension_reason FROM subscribers'), return: { rows: [{ suspension_source: 'MANUAL', suspension_reason: 'Manual suspension' }] } },
+    { when: (c) => has(c, 'SELECT status, suspension_source, suspension_reason FROM subscribers'), return: { rows: [{ status: 'SUSPENDED', suspension_source: 'MANUAL', suspension_reason: 'Manual suspension' }] } },
   ]);
   try {
     const result = await billing.reactivateSubscriber('s4');

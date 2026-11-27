@@ -2,7 +2,12 @@ import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { dispatchMessage, getChannel, logMessage, sendViaProvider } from '../integrations/messaging';
-import { encryptCredentialsObject, encryptSecretValue } from '../security/secret-store';
+import { encryptCredentialsObject, encryptSecretValue, decryptCredentialsObject } from '../security/secret-store';
+import {
+  getTelegramMe, getTelegramChat, getTelegramUpdates, getTelegramWebhookInfo,
+  setTelegramWebhook, deleteTelegramWebhook, sendTelegramChatAction,
+  sendTelegramPhoto, sendTelegramDocument, sendTelegramLocation,
+} from '../integrations/telegram';
 
 const router: Router = Router();
 function user(req:any){ return req.user || {}; }
@@ -99,4 +104,123 @@ router.post('/send-test', asyncHandler(async (req, res) => {
   }
 }));
 
+// ================= Full-featured Telegram =================
+// Single Telegram transport (apps/api/src/integrations/telegram.ts).
+// Webhook inbound is mounted PUBLICLY in main.ts (no JWT) and verified with
+// Telegram's secret token; these management routes require messaging RBAC.
+
+async function telegramChannel(channel_id?: string) {
+  const ch = await getChannel(channel_id ? { channel_id } : { channel_type: 'TELEGRAM' });
+  if (!ch) return null;
+  const creds = decryptCredentialsObject(ch.credentials || {});
+  const cfg = ch.config || {};
+  const token = creds.bot_token || creds.token || process.env.TELEGRAM_BOT_TOKEN || undefined;
+  const apiUrl: string | undefined = cfg.api_url || creds.api_url || undefined;
+  return { ch, creds, cfg, token, apiUrl };
+}
+
+router.get('/telegram/get-me', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
+  const t = await telegramChannel((req.query.channel_id as string) || undefined);
+  if (!t?.token) return res.status(400).json({ ok: false, message: 'Telegram bot token not configured' });
+  const r = await getTelegramMe(t.token, t.apiUrl);
+  res.json({ ok: r.ok, ...(r.ok ? { data: r.result } : { message: r.error }) });
+}));
+
+router.get('/telegram/get-chat', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
+  const t = await telegramChannel((req.query.channel_id as string) || undefined);
+  if (!t?.token) return res.status(400).json({ ok: false, message: 'Telegram bot token not configured' });
+  const chatId = String(req.query.chat_id || t.cfg.chat_id || t.creds.chat_id || '').trim();
+  if (!chatId) return res.status(400).json({ ok: false, message: 'chat_id is required' });
+  const r = await getTelegramChat(t.token, chatId, t.apiUrl);
+  res.json({ ok: r.ok, ...(r.ok ? { data: r.result } : { message: r.error }) });
+}));
+
+router.get('/telegram/get-updates', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
+  const t = await telegramChannel((req.query.channel_id as string) || undefined);
+  if (!t?.token) return res.status(400).json({ ok: false, message: 'Telegram bot token not configured' });
+  const r = await getTelegramUpdates(t.token, { offset: req.query.offset ? Number(req.query.offset) : undefined, limit: req.query.limit ? Number(req.query.limit) : 100 }, t.apiUrl);
+  res.json({ ok: r.ok, ...(r.ok ? { data: r.result } : { message: r.error }) });
+}));
+
+router.get('/telegram/webhook-info', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
+  const t = await telegramChannel((req.query.channel_id as string) || undefined);
+  if (!t?.token) return res.status(400).json({ ok: false, message: 'Telegram bot token not configured' });
+  const r = await getTelegramWebhookInfo(t.token, t.apiUrl);
+  res.json({ ok: r.ok, ...(r.ok ? { data: r.result } : { message: r.error }) });
+}));
+
+router.post('/telegram/set-webhook', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
+  const b = req.body || {};
+  const t = await telegramChannel(b.channel_id || undefined);
+  if (!t?.token) return res.status(400).json({ ok: false, message: 'Telegram bot token not configured' });
+  const url = String(b.url || '').trim();
+  if (!url) return res.status(400).json({ ok: false, message: 'url is required' });
+  const secret = b.secret_token ? String(b.secret_token) : undefined;
+  const r = await setTelegramWebhook(t.token, { url, secretToken: secret, allowedUpdates: b.allowed_updates, dropPendingUpdates: b.drop_pending_updates }, t.apiUrl);
+  // Persist the secret (encrypted) so inbound webhook can verify it.
+  if (r.ok) {
+    await pool.query(`UPDATE messaging_channels SET webhook_secret=COALESCE($2, webhook_secret), updated_at=now() WHERE id=$1`, [t.ch.id, secret ? encryptSecretValue(secret) : null]);
+  }
+  res.json({ ok: r.ok, ...(r.ok ? { message: 'Webhook set' } : { message: r.error }) });
+}));
+
+router.post('/telegram/delete-webhook', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
+  const b = req.body || {};
+  const t = await telegramChannel(b.channel_id || undefined);
+  if (!t?.token) return res.status(400).json({ ok: false, message: 'Telegram bot token not configured' });
+  const r = await deleteTelegramWebhook(t.token, !!b.drop_pending_updates, t.apiUrl);
+  res.json({ ok: r.ok, ...(r.ok ? { message: 'Webhook deleted' } : { message: r.error }) });
+}));
+
+router.post('/telegram/send-chat-action', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
+  const b = req.body || {};
+  const t = await telegramChannel(b.channel_id || undefined);
+  if (!t?.token) return res.status(400).json({ ok: false, message: 'Telegram bot token not configured' });
+  const chatId = String(b.chat_id || t.cfg.chat_id || t.creds.chat_id || '').trim();
+  if (!chatId) return res.status(400).json({ ok: false, message: 'chat_id is required' });
+  const r = await sendTelegramChatAction(t.token, chatId, String(b.action || 'typing'), t.apiUrl, b.message_thread_id);
+  res.json({ ok: r.ok, ...(r.ok ? {} : { message: r.error }) });
+}));
+
+router.post('/telegram/send-photo', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
+  const b = req.body || {};
+  const t = await telegramChannel(b.channel_id || undefined);
+  if (!t?.token) return res.status(400).json({ ok: false, message: 'Telegram bot token not configured' });
+  const chatId = String(b.chat_id || t.cfg.chat_id || t.creds.chat_id || '').trim();
+  if (!chatId || !b.photo) return res.status(400).json({ ok: false, message: 'chat_id and photo are required' });
+  const r = await sendTelegramPhoto(t.token, { chatId, photo: String(b.photo), caption: b.caption, parseMode: b.parse_mode, disableNotification: !!b.disable_notification, protectContent: !!b.protect_content, messageThreadId: b.message_thread_id, replyMarkup: b.reply_markup }, t.apiUrl);
+  res.json({ ok: r.ok, ...(r.ok ? { data: { message_id: r.message_id } } : { message: r.error }) });
+}));
+
+router.post('/telegram/send-document', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
+  const b = req.body || {};
+  const t = await telegramChannel(b.channel_id || undefined);
+  if (!t?.token) return res.status(400).json({ ok: false, message: 'Telegram bot token not configured' });
+  const chatId = String(b.chat_id || t.cfg.chat_id || t.creds.chat_id || '').trim();
+  if (!chatId || !b.document) return res.status(400).json({ ok: false, message: 'chat_id and document are required' });
+  const r = await sendTelegramDocument(t.token, { chatId, document: String(b.document), caption: b.caption, parseMode: b.parse_mode, disableNotification: !!b.disable_notification, protectContent: !!b.protect_content, messageThreadId: b.message_thread_id, replyMarkup: b.reply_markup }, t.apiUrl);
+  res.json({ ok: r.ok, ...(r.ok ? { data: { message_id: r.message_id } } : { message: r.error }) });
+}));
+
+router.post('/telegram/send-location', asyncHandler(async (req, res) => {
+  if (!requireMessagingRole(req, res)) return;
+  const b = req.body || {};
+  const t = await telegramChannel(b.channel_id || undefined);
+  if (!t?.token) return res.status(400).json({ ok: false, message: 'Telegram bot token not configured' });
+  const chatId = String(b.chat_id || t.cfg.chat_id || t.creds.chat_id || '').trim();
+  if (!chatId || b.latitude == null || b.longitude == null) return res.status(400).json({ ok: false, message: 'chat_id, latitude, longitude are required' });
+  const r = await sendTelegramLocation(t.token, { chatId, latitude: Number(b.latitude), longitude: Number(b.longitude), disableNotification: !!b.disable_notification, protectContent: !!b.protect_content, messageThreadId: b.message_thread_id }, t.apiUrl);
+  res.json({ ok: r.ok, ...(r.ok ? { data: { message_id: r.message_id } } : { message: r.error }) });
+}));
+
 export default router;
+

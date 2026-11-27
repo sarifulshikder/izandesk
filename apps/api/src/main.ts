@@ -16,7 +16,8 @@ import { logger, requestLogger } from './infra/logger';
 import { adjustStreamClients } from './infra/metrics';
 import { closeRedis, initRedis, isRedisReady, redisDel, redisGetCounter, redisIncrWindow, redisSetNxEx } from './infra/redis';
 import { closeQueues, initQueues, isQueuesActive, registerQueueHandler, scheduleRecurringJob } from './infra/queues';
-import { encryptCredentialsObject, encryptSecretValue } from './security/secret-store';
+import { encryptCredentialsObject, encryptSecretValue, decryptSecretValue } from './security/secret-store';
+import { getChannel, logMessage } from './integrations/messaging';
 import { migratePlaintextSecretsToEncrypted } from './integrations/secret-migration';
 import { getLiveSessionsSnapshot, subscribeLiveSessions } from './integrations/live-sessions';
 import { pruneTelemetryHistory } from './integrations/telemetry-history';
@@ -581,6 +582,53 @@ async function bootstrap() {
   // Phase 5: Resellers, CRM/Tickets, Messaging
   app.use('/api/resellers', authMiddleware, resellersRouter);
   app.use('/api/tickets', authMiddleware, ticketsRouter);
+  // ---- Telegram inbound webhook (PUBLIC; no JWT; verified with Telegram secret token) ----
+  app.post('/api/messaging/telegram/webhook', async (req, res) => {
+    try {
+      // Resolve the configured webhook secret. Prefer a Telegram channel that
+      // actually has one (a disabled/empty default channel must not shadow it).
+      let channel: any = null;
+      try {
+        const withSecret = await pool.query(`SELECT * FROM messaging_channels WHERE channel_type='TELEGRAM' AND webhook_secret IS NOT NULL AND webhook_secret <> '' ORDER BY enabled DESC, is_default DESC, updated_at DESC LIMIT 1`);
+        channel = withSecret.rows[0] || null;
+        if (!channel) channel = await getChannel({ channel_type: 'TELEGRAM' });
+      } catch { channel = null; }
+
+      const expectedSecret = (process.env.TELEGRAM_WEBHOOK_SECRET
+        || (channel?.webhook_secret ? decryptSecretValue(channel.webhook_secret) : null)
+        || null);
+      const providedSecret = req.header('x-telegram-bot-api-secret-token') || null;
+
+      // Fail closed: no configured secret OR mismatch -> reject.
+      if (!expectedSecret || providedSecret !== expectedSecret) return res.status(401).json({ ok: false, message: 'invalid telegram webhook secret' });
+
+      const update: any = req.body || {};
+      const msg = update.message || update.edited_message || update.channel_post || null;
+      const chatId = msg?.chat?.id != null ? String(msg.chat.id) : (update.callback_query?.message?.chat?.id != null ? String(update.callback_query.message.chat.id) : null);
+      const bodyText = msg?.text || msg?.caption || update.callback_query?.data || null;
+      try {
+        await logMessage({
+          channel_type: 'TELEGRAM',
+          provider: channel?.provider || 'TELEGRAM_BOT',
+          channel_id: channel?.id || null,
+          direction: 'INBOUND',
+          recipient: chatId,
+          body: bodyText,
+          status: 'RECEIVED',
+          provider_message_id: msg?.message_id != null ? String(msg.message_id) : (update.update_id != null ? String(update.update_id) : null),
+          related_type: 'TELEGRAM_UPDATE',
+          related_id: update.update_id != null ? String(update.update_id) : null,
+          payload: update,
+        });
+      } catch { /* logging best-effort */ }
+
+      // Always 200 so Telegram doesn't retry-storm; never echo secrets.
+      res.status(200).json({ ok: true });
+    } catch {
+      res.status(200).json({ ok: true });
+    }
+  });
+
   app.use('/api/messaging', authMiddleware, messagingRouter);
 
   // Phase 8: Subscriber Enhancement - Leads, Installation, Equipment, Communications

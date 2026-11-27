@@ -372,6 +372,11 @@ router.get('/payments/bkash/callback', asyncHandler(async (req, res) => {
     const pr = prr.rows[0];
     if (!pr) return res.redirect(`${back}?bkash=error&paymentID=${encodeURIComponent(paymentID)}&message=${encodeURIComponent('Payment record not found')}`);
     if (String(pr.status || '').toUpperCase() === 'COMPLETED') {
+      // Repair path: a legacy callback could mark a reseller wallet recharge
+      // COMPLETED before crediting the wallet. Crediting is ledger-idempotent.
+      if (String(pr.gateway_response?.purpose || '').toUpperCase() === 'RESELLER_WALLET_RECHARGE') {
+        try { await creditResellerWalletFromGatewayPayment({ paymentRef: pr.payment_ref }); } catch {}
+      }
       return res.redirect(`${back}?bkash=success&payment_ref=${encodeURIComponent(pr.payment_ref)}&message=${encodeURIComponent('Payment already completed')}`);
     }
 
@@ -403,8 +408,11 @@ router.get('/payments/bkash/callback', asyncHandler(async (req, res) => {
     await pool.query(`UPDATE payments SET gateway_response = COALESCE(gateway_response,'{}'::jsonb) || $2::jsonb, updated_at=now() WHERE id=$1`,
       [pr.id, JSON.stringify({ bkash_execute: exec, callback: { paymentID, status, at: new Date().toISOString() } })]);
 
-    const msg = result.duplicate ? 'Payment already recorded' : 'Payment completed successfully';
-    return res.redirect(`${back}?bkash=success&payment_ref=${encodeURIComponent(pr.payment_ref)}&trx=${encodeURIComponent(trxId || '')}&message=${encodeURIComponent(msg)}`);
+    const walletFailed = result.reseller_wallet && result.ok === false;
+    const msg = walletFailed
+      ? `Payment received but wallet credit was not applied: ${result.reseller_wallet.reason || 'manual review required'}`
+      : result.duplicate ? 'Payment already recorded' : 'Payment completed successfully';
+    return res.redirect(`${back}?bkash=${walletFailed ? 'error' : 'success'}&payment_ref=${encodeURIComponent(pr.payment_ref)}&trx=${encodeURIComponent(trxId || '')}&message=${encodeURIComponent(msg)}`);
   } catch (e: any) {
     return res.redirect(`${back}?bkash=error&paymentID=${encodeURIComponent(paymentID)}&message=${encodeURIComponent(e.message || 'bKash execute failed')}`);
   }
@@ -599,7 +607,10 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
   let pendingPayment: any = null;
   if (verification.verified) {
     const pref = String(verification.paymentRef || verification.payment_ref || payload.paymentRef || payload.payment_ref || '').trim();
-    const pending = pref ? (await pool.query("SELECT * FROM payments WHERE payment_ref=$1 AND status='PENDING'", [pref])).rows[0] : null;
+    // COMPLETED is allowed here only for a reseller wallet recharge so an already
+    // executed provider callback can still deliver the verified event; downstream
+    // crediting is idempotent on the wallet ledger (not on payment status).
+    const pending = pref ? (await pool.query("SELECT * FROM payments WHERE payment_ref=$1 AND (status IN ('PENDING','VERIFYING') OR (status='COMPLETED' AND COALESCE(gateway_response->>'purpose','')='RESELLER_WALLET_RECHARGE'))", [pref])).rows[0] : null;
     pendingPayment = pending;
     const amt = Number(verification.amount ?? payload.amount ?? 0);
     if (!pending || !(amt > 0) || amt > Number(pending.amount || 0) + 0.01) {

@@ -1,6 +1,7 @@
 import { pool } from '../db';
 import { sendEmail } from './mailer';
 import { decryptCredentialsObject } from '../security/secret-store';
+import { sendTelegramMessage, sendTelegramPhoto, sendTelegramDocument, sendTelegramLocation, type TelegramParseMode, type TelegramReplyMarkup } from './telegram';
 
 function renderTemplate(body: string, vars: Record<string, any> = {}) {
   return String(body || '').replace(/\{\{\s*([a-zA-Z0-9_\.]+)\s*\}\}/g, (_m, k) => {
@@ -114,12 +115,36 @@ export async function sendViaProvider(channel: any, payload: { to?: string|null;
     if (provider === 'TELEGRAM_BOT' || type === 'TELEGRAM') {
       const token = creds.bot_token || creds.token;
       const chatId = to || cfg.chat_id || creds.chat_id;
-      if (token && chatId) {
-        const url = `https://api.telegram.org/bot${token}/sendMessage`;
-        const res = await postJson(url, { chat_id: chatId, text: payload.body, parse_mode: cfg.parse_mode || 'HTML', disable_web_page_preview: !!cfg.disable_preview });
-        return { ok: res.ok && res.data?.ok !== false, status: (res.ok && res.data?.ok !== false) ? 'SENT' : 'FAILED', provider_message_id: String(res.data?.result?.message_id || nowId), mode: 'live', response: res.data, note: (res.ok && res.data?.ok !== false) ? 'Dispatched via Telegram Bot API' : 'Telegram dispatch failed' };
+      if (!token || !chatId) return { ok: true, status: 'SIMULATED', provider_message_id: nowId, mode: 'simulated', note: 'Telegram bot not configured (token/chat_id); simulated.' };
+
+      // Full-featured Telegram transport (single implementation in ./telegram).
+      const meta = payload.meta || {};
+      const parseMode: TelegramParseMode = meta.parse_mode ?? meta.parseMode ?? cfg.parse_mode ?? 'HTML';
+      const disablePreview = meta.disable_preview ?? meta.disable_web_page_preview ?? meta.disablePreview ?? cfg.disable_preview ?? cfg.disable_web_page_preview ?? true;
+      const disableNotification = meta.disable_notification ?? meta.silent ?? meta.disableNotification ?? cfg.disable_notification ?? cfg.silent ?? false;
+      const protectContent = meta.protect_content ?? meta.protectContent ?? cfg.protect_content ?? false;
+      const messageThreadId = meta.message_thread_id ?? meta.messageThreadId ?? meta.thread_id ?? cfg.message_thread_id;
+      const replyMarkup: TelegramReplyMarkup | undefined = meta.reply_markup ?? meta.replyMarkup ?? cfg.reply_markup;
+      const apiUrl: string | undefined = cfg.api_url || creds.api_url || cfg.telegram_api_url;
+      const caption: string = meta.caption ?? payload.body ?? '';
+      const common = { chatId, disableNotification, protectContent, messageThreadId, replyMarkup };
+
+      // Optional media variants (photo/document/location) carried in meta.
+      if (meta.photo) {
+        const res = await sendTelegramPhoto(token, { ...common, photo: String(meta.photo), caption, parseMode }, apiUrl);
+        return { ok: res.ok, status: res.ok ? 'SENT' : 'FAILED', provider_message_id: res.message_id != null ? String(res.message_id) : nowId, mode: 'live', response: res.raw, note: res.ok ? 'Telegram photo sent' : 'Telegram photo failed', ...(res.error ? { error: res.error } : {}) };
       }
-      return { ok: true, status: 'SIMULATED', provider_message_id: nowId, mode: 'simulated', note: 'Telegram bot not configured (token/chat_id); simulated.' };
+      if (meta.document) {
+        const res = await sendTelegramDocument(token, { ...common, document: String(meta.document), caption, parseMode }, apiUrl);
+        return { ok: res.ok, status: res.ok ? 'SENT' : 'FAILED', provider_message_id: res.message_id != null ? String(res.message_id) : nowId, mode: 'live', response: res.raw, note: res.ok ? 'Telegram document sent' : 'Telegram document failed', ...(res.error ? { error: res.error } : {}) };
+      }
+      if (meta.location && Number.isFinite(Number(meta.location.latitude)) && Number.isFinite(Number(meta.location.longitude))) {
+        const res = await sendTelegramLocation(token, { ...common, latitude: Number(meta.location.latitude), longitude: Number(meta.location.longitude) }, apiUrl);
+        return { ok: res.ok, status: res.ok ? 'SENT' : 'FAILED', provider_message_id: res.message_id != null ? String(res.message_id) : nowId, mode: 'live', response: res.raw, note: res.ok ? 'Telegram location sent' : 'Telegram location failed', ...(res.error ? { error: res.error } : {}) };
+      }
+
+      const res = await sendTelegramMessage(token, { chatId, text: payload.body, parseMode, disablePreview, disableNotification, protectContent, messageThreadId, replyMarkup }, apiUrl);
+      return { ok: res.ok, status: res.ok ? 'SENT' : 'FAILED', provider_message_id: res.message_id != null ? String(res.message_id) : nowId, mode: 'live', response: res.raw, note: res.ok ? `Dispatched via Telegram Bot API${(res.chunks && res.chunks > 1) ? ` (${res.chunks} parts)` : ''}` : 'Telegram dispatch failed', ...(res.error ? { error: res.error } : {}) };
     }
     return { ok: true, status: 'SIMULATED', provider_message_id: nowId, mode: 'simulated', note: 'Provider dispatch simulated.' };
   } catch (e: any) {

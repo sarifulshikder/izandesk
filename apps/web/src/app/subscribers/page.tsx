@@ -15,6 +15,8 @@ export default function SubscribersPage() {
   const searchParams = useSearchParams();
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
+  // MikroTik session axis (Online=connected in MikroTik /ppp/active, Offline=not connected), independent of package validity.
+  const [onlineIds, setOnlineIds] = useState<Set<string>>(new Set());
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
   const [type, setType] = useState('');
@@ -128,6 +130,15 @@ export default function SubscribersPage() {
       params.set('limit', '100');
       const res = await apiFetch<{data:any[], total:number}>(`/api/subscribers?${params.toString()}`, {}, token);
       setRows(res.data || []); setTotal(res.total || 0);
+      // Fetch live MikroTik sessions for Online/Offline (best-effort; not pure read on API side).
+      try {
+        const sess = await apiFetch<{data:any[]}>(`/api/network/sessions`, {}, token);
+        const ids = new Set<string>();
+        for (const s of (sess?.data || [])) {
+          if (String(s.status || '').toUpperCase() === 'ONLINE' && s.subscriber_id) ids.add(String(s.subscriber_id));
+        }
+        setOnlineIds(ids);
+      } catch { /* keep prior session info */ }
     } catch (e: any) { setError(e.message); }
     finally { setLoading(false); }
   }, [token, q, status, type, dueOnly, validityExpired, expiringDays, expiringTomorrow]);
@@ -678,7 +689,12 @@ export default function SubscribersPage() {
                       <div className="text-[11px] truncate max-w-[175px]" title={[r.area_name, r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ')}>{[r.area_name, r.village, r.thana || r.upazila, r.district].filter(Boolean).join(', ') || `${r.area_name_db || r.area_name || '-'}`}</div>
                       <div className="text-[9.5px] text-muted-foreground truncate max-w-[175px]">{r.distribution_box_name || r.distribution_box_code || '-'} {r.latitude ? '• 📍' : ''}</div>
                     </td>
-                    <td className="px-3 py-2.5"><div className="flex flex-col gap-1 items-start"><span className={`badge ${statusBadge(r.status)}`}>{r.status}</span>{r.fup_exceeded && <span className="badge badge-warning">FUP Throttled</span>}</div></td>
+                    <td className="px-3 py-2.5"><div className="flex flex-col gap-1 items-start">
+                      <span className={`badge ${statusBadge(r.status)}`}>{r.status}</span>
+                      {onlineIds.has(String(r.id)) ? <span className="badge badge-success" title="Connected in MikroTik (/ppp/active)">Online</span> : <span className="badge badge-secondary" title="Not connected in MikroTik">Offline</span>}
+                      {(r.walled_garden || String(r.suspension_stage || '').toUpperCase() === 'WALLED_GARDEN') && <span className="badge badge-warning" title="Restricted: portal-only; pay online to restore">Walled</span>}
+                      {r.fup_exceeded && <span className="badge badge-warning">FUP Throttled</span>}
+                    </div></td>
                     <td className="px-3 py-2.5 text-right" onClick={e=>e.stopPropagation()}>
                       <div className="inline-flex items-center gap-0.5">
                         <Link href={`/subscribers/${r.id}`} onClick={e=>e.stopPropagation()} className="topbar-icon-btn !w-7 !h-7 !rounded-lg" title="Open 360° View"><ExternalLink className="w-3.5 h-3.5"/></Link>

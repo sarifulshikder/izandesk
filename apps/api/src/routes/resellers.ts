@@ -201,7 +201,10 @@ router.post('/:id/wallet/recharge-gateway', asyncHandler(async (req, res) => {
   await pool.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, checkout_url, client_secret, gateway_response)
     VALUES($1,NULL,NULL,$2,$3,$4,'BDT','PENDING',$5,$6,$7::jsonb)`,
     [payment_ref, gateway, req.body?.method || null, amount, checkout.paymentUrl || checkout.approvalUrl || null, checkout.clientSecret || null,
-      JSON.stringify({ purpose: 'RESELLER_WALLET_RECHARGE', reseller_id: req.params.id, checkout })]);
+      // Flatten provider IDs (bKash paymentID lives under checkout.raw.create) so the
+      // provider callback can find the payment and route it to wallet crediting.
+      JSON.stringify({ purpose: 'RESELLER_WALLET_RECHARGE', reseller_id: req.params.id, checkout,
+        paymentID: checkout?.raw?.create?.paymentID || checkout?.paymentID || null })]);
   res.json({ ok: true, payment_ref, checkout, note: 'Wallet credited only after verified gateway confirmation (webhook).' });
 }));
 
@@ -335,7 +338,7 @@ router.post('/:id/renew-subscriber', asyncHandler(async (req, res) => {
   // a failing share-entry insert used to abort the transaction and turn a successful
   // renewal into a 500 (or, worse, roll back the debit and payment).
   try { await recalcSubscriberDue(subscriber_id); } catch {}
-  if (newSubDue <= 0) { try { await reactivateSubscriber(subscriber_id, `Reseller wallet renewal ${pref}`); } catch {} }
+  if (newSubDue <= 0) { try { await reactivateSubscriber(subscriber_id, `Reseller wallet renewal ${pref}`, { allowCreatedExpired: true }); } catch {} }
   const ispShare = +(retail - charge).toFixed(2);
   try {
     await pool.query(`INSERT INTO reseller_share_entries(reseller_id, subscriber_id, payment_ref, wallet_transaction_id, retail_amount, partner_share, isp_share, margin_percent, package_name, period_month, metadata)

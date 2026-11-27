@@ -451,7 +451,10 @@ export async function mikrotikSyncPppSecret(r: RouterRow, sub: any) {
   const profile = String(sub.profile_name || sub.package_name || 'default') || 'default';
   const service = 'pppoe';
   const comment = `IzanDesk:${sub.client_code || sub.full_name || ''}`;
-  const disabled = (sub.status === 'SUSPENDED' || sub.status === 'TERMINATED' || sub.status === 'EXPIRED') ? 'yes' : 'no';
+  // Walled-garden restricted users stay CONNECTED (online) to reach the portal; only hard-blocked users are disabled.
+  const hardBlocked = (sub.status === 'SUSPENDED' || sub.status === 'TERMINATED' || sub.status === 'EXPIRED');
+  const walled = !!(sub.walled_garden || sub.walled || String(sub.suspension_stage || '').toUpperCase() === 'WALLED_GARDEN');
+  const disabled = (hardBlocked && !walled) ? 'yes' : 'no';
 
   if (mode === 'REST') {
     const o = rosOpts(r, 'REST') as any;
