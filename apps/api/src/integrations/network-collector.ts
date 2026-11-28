@@ -125,7 +125,7 @@ export async function collectTelemetryOnce(): Promise<{ ok: boolean; routers: nu
       try {
         const live = await mikrotikTelemetry(row);
         const merged = { ...row, ...live, last_seen_at: new Date().toISOString() };
-        await pool.query('UPDATE network_routers SET cpu_load=$1,memory_used_mb=$2,memory_total_mb=$3,rx_bps=$4,tx_bps=$5,uptime_seconds=$6,status=$7,last_seen_at=COALESCE($8,last_seen_at),identity=COALESCE($9,identity),board_name=COALESCE($10,board_name),updated_at=now() WHERE id=$11',
+        await pool.query('UPDATE network_routers SET cpu_load=$1,memory_used_mb=$2,memory_total_mb=$3,rx_bps=$4,tx_bps=$5,uptime_seconds=$6,status=$7,last_seen_at=COALESCE($8,last_seen_at),identity=COALESCE($9,identity),board_name=COALESCE($10,board_name),last_error=NULL,updated_at=now() WHERE id=$11',
           [merged.cpu_load ?? row.cpu_load ?? null, merged.memory_used_mb ?? row.memory_used_mb ?? null, merged.memory_total_mb ?? row.memory_total_mb ?? null, merged.rx_bps ?? row.rx_bps ?? 0, merged.tx_bps ?? row.tx_bps ?? 0, merged.uptime_seconds ?? row.uptime_seconds ?? null, merged.status || row.status, merged.last_seen_at || null, merged.identity || null, merged.board_name || null, row.id]);
         const sessCnt = await pool.query(`SELECT COUNT(*)::int AS c FROM subscriber_sessions WHERE router_id=$1 AND status='ONLINE'`, [row.id]).catch(() => ({ rows: [{ c: 0 }] }));
         await recordRouterTelemetrySample({
