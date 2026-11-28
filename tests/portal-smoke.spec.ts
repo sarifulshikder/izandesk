@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 const admin = {
@@ -103,6 +104,13 @@ async function seedResellerSubscriber(request: APIRequestContext, tag: string) {
 async function removeResellerSubscriber(request: APIRequestContext, fixture: { id: string; code: string; headers: Record<string, string> }) {
   const res = await request.delete(`/api/subscribers/${fixture.id}`, { headers: fixture.headers });
   expect(res.ok(), `cleanup failed for ${fixture.code}`).toBeTruthy();
+}
+
+// The DELETE API intentionally keeps subscribers with payment history, so the
+// self-care fixture (which creates a pending checkout) needs a direct DB purge.
+// The script only accepts throwaway SC-E2E-* / SC-WH-* codes.
+function purgeDisposableSubscriber(code: string) {
+  execFileSync('bash', ['scripts/cleanup-e2e-fixtures.sh', code], { stdio: 'pipe' });
 }
 
 test.describe('reseller portal', () => {
@@ -1520,21 +1528,21 @@ test.describe('self-care package purchase smoke', () => {
     test.skip(!pkg, 'no active priced package seeded for self-care smoke');
 
     const code = `SC-E2E-${Date.now().toString().slice(-6)}`;
-    const created = await request.post('/api/subscribers', {
-      headers: adminHeaders,
-      data: {
-        full_name: 'Self-care Smoke', client_code: code, username: code,
-        password: 'PortalSmoke@123', status: 'EXPIRED', expiry_date: '2020-01-10',
-        // A package is required for the portal to classify the account as EXPIRED;
-        // without one it is normalized to PENDING.
-        package_name: pkg.name,
-      },
-    });
-    const createdBody = await created.json().catch(() => ({} as any));
-    expect(created.ok(), `create subscriber: ${JSON.stringify(createdBody).slice(0, 200)}`).toBeTruthy();
-    const subId = createdBody.id;
-    expect(subId).toBeTruthy();
     try {
+      const created = await request.post('/api/subscribers', {
+        headers: adminHeaders,
+        data: {
+          full_name: 'Self-care Smoke', client_code: code, username: code,
+          password: 'PortalSmoke@123', status: 'EXPIRED', expiry_date: '2020-01-10',
+          // A package is required for the portal to classify the account as EXPIRED;
+          // without one it is normalized to PENDING.
+          package_name: pkg.name,
+        },
+      });
+      const createdBody = await created.json().catch(() => ({} as any));
+      expect(created.ok(), `create subscriber: ${JSON.stringify(createdBody).slice(0, 200)}`).toBeTruthy();
+      expect(createdBody.id).toBeTruthy();
+
       const login = await request.post('/api/portal/login', {
         data: { client_code: code, password: 'PortalSmoke@123' },
       });
@@ -1581,7 +1589,7 @@ test.describe('self-care package purchase smoke', () => {
       expect(status.subscriber).toHaveProperty('expiry_date');
       expect(status.subscriber).toHaveProperty('days_remaining');
     } finally {
-      await request.delete(`/api/subscribers/${subId}`, { headers: adminHeaders });
+      purgeDisposableSubscriber(code);
     }
   });
 });

@@ -180,12 +180,13 @@ Earlier full runs on this slow Docker host hit UI-only timeouts on pages untouch
 - Reseller wizard and tenant-scoping checks now seed their own disposable subscriber and delete it in `finally`; they no longer depend on leftovers from opt-in mutation runs.
 - MapLibre readiness no longer misses a cached `style.load`: the GIS map checks `isStyleLoaded()` after attaching the listener and initializes once.
 - The location-picker canvas assertion is page-scoped because the picker portal renders outside the wizard DOM.
+- `pnpm test:e2e:docker` starts an isolated built web server on `:3100`; the full suite runs in ~8.4m instead of ~18m and leaves `:3000` / the public URL untouched.
 
 These were test/environment and readiness issues, not billing regressions. The self-care purchase checks, signed webhook/idempotency checks and GIS workbench checks pass.
 
 ## 10. Failure-path checks (disposable data only)
 
-These checks were verified against staging with throwaway subscribers. Each one cleans up its own subscriber, payment, webhook event, and RADIUS rows.
+These checks were verified against staging with throwaway subscribers. Each one cleans up its own subscriber, payment, webhook event, and RADIUS rows. Use `E2E_BASE_URL=http://localhost:3100 E2E_MUTATIONS=1 pnpm exec playwright test tests/portal-smoke.spec.ts -g 'self-care package purchase smoke'` for the checkout check and `BKASH_WEBHOOK_SECRET=... pnpm test:billing-webhook` for the signed webhook/idempotency check. Both call `scripts/cleanup-e2e-fixtures.sh`, which purges by the throwaway `SC-E2E-*` / `SC-WH-*` client code.
 
 1. **Webhook side-effect retry:** temporarily force the payment insert to fail for one checkout ref. The signed delivery returns 500 and leaves the webhook event `processed=false` with the payment still `PENDING`. After removing the fault, replaying the *same* event gives `processed=true`, one `COMPLETED` payment, no synthetic `ADM-RECHARGE-*`, and an `ACTIVE` subscriber.
 2. **Underpayment:** send a signed webhook for a `PACKAGE_PURCHASE` checkout with an amount below the server price. It is rejected with `verified=false, processed=false`; the checkout stays `PENDING` and the subscriber stays `EXPIRED`. A later webhook with the exact price then completes and activates. Invoice payments may still be partial, but no webhook may exceed the stored payment amount.

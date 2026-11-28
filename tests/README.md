@@ -11,9 +11,15 @@ pnpm test:e2e                 # safe, read-only smoke checks
 pnpm test:e2e:mutations       # also runs the opt-in create/edit/delete/drag flows
                               # (subscriber, GIS box, GIS area, MCP key lifecycle)
 pnpm test:mcp                 # standalone MCP JSON-RPC protocol smoke test
+BKASH_WEBHOOK_SECRET=... pnpm test:billing-webhook  # signed webhook + idempotency
 pnpm seed:e2e                 # idempotent demo fixtures for a fresh disposable stack
 node scripts/smoke-security.mjs  # guards, TOTP, secret encryption, rate limiter (after api build)
 ```
+
+The self-care checkout and webhook smoke checks create throwaway `SC-E2E-*` /
+`SC-WH-*` subscribers. Both use `scripts/cleanup-e2e-fixtures.sh` in `finally` /
+`trap EXIT` so the subscriber, pending/completed payment, webhook event and
+RADIUS rows are removed even on failure.
 
 Tests target `http://localhost:3000` by default. For a fast, deterministic run
 against the Docker stack, start the optional built web server and point the suite
@@ -54,6 +60,10 @@ real deployments must leave that flag unset.
 | `E2E_RESELLER_EMAIL` / `E2E_RESELLER_PASSWORD` | `reseller@cybernet.bd` / `reseller123` | Partner login |
 | `E2E_RESELLER_ID` | resolved from `/api/resellers` | Partner id for scoping assertions |
 | `E2E_MUTATIONS` | unset | Enables the create/delete test |
+| `BKASH_WEBHOOK_SECRET` | required for `test:billing-webhook` | bKash webhook signing secret (never commit) |
+| `E2E_API_URL` | `http://localhost:4000` | API used by the standalone billing webhook smoke |
+| `E2E_PACKAGE_ID` | `profile-v777` package id | Package used by the billing webhook smoke |
+| `E2E_POSTGRES_CONTAINER` | `izandesk-postgres` | Container used by the disposable-fixture cleanup script |
 
 ## Coverage
 
