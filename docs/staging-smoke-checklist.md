@@ -112,6 +112,18 @@ Review startup logs for:
 - [ ] Paying an auto-suspended subscriber reactivates them; a
       `suspension_source=MANUAL` subscriber stays suspended unless explicitly
       reactivated.
+- [ ] A `PACKAGE_PURCHASE` checkout records the server-side package price in
+      `payments.amount`, `purpose`, and `package_id`; a caller-supplied amount is
+      ignored.
+- [ ] A completed package purchase extends validity even when an unrelated
+      invoice is still due, without clearing that invoice or consuming
+      `excess_amount`.
+- [ ] An online payment for a created-EXPIRED subscriber produces exactly one
+      completed payment and one wallet/finance posting, then sets `ACTIVE`.
+- [ ] A webhook whose side effect fails stays `processed=false` and is retried;
+      `GET /api/system/billing-health` reports it until handled.
+- [ ] A deliberately unreachable router leaves an `enforcement_outbox` job that
+      succeeds after the router returns; the database and network state converge.
 
 ### Network integrations
 
@@ -131,6 +143,11 @@ Review startup logs for:
       fallback.
 - [ ] A customer can read only their own `/api/portal/acs/status` and can update
       Wi-Fi only on their own subscription.
+- [ ] An EXPIRED subscriber can log into `/portal`, sees the expiry banner and a
+      Buy/Renew action, and can buy an active package from `/expired`.
+- [ ] After gateway return, the portal polls `/api/portal/payments/:ref` and
+      displays the new expiry plus "Internet restored" only when the backend
+      reports `ACTIVE`; a timeout does not claim success.
 - [ ] CSV downloads require staff authentication.
 - [ ] No React "script tag while rendering" console error; light/dark theme is
       applied before first paint and survives reload.

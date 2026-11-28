@@ -1439,3 +1439,86 @@ test.describe('AI mutations (opt-in)', () => {
     }
   });
 });
+
+test.describe('self-care package purchase smoke', () => {
+  test('public captive packages are readable and payment status is never public', async ({ request }) => {
+    const packages = await request.get('/api/captive/packages');
+    expect(packages.ok(), `captive packages: ${packages.status()}`).toBeTruthy();
+    expect(Array.isArray((await packages.json()).data)).toBe(true);
+
+    expect((await request.get('/api/captive/payments/not-a-real-ref')).status()).toBe(401);
+    expect((await request.get('/api/portal/payments/not-a-real-ref')).status()).toBe(401);
+  });
+
+  test.skip(!process.env.E2E_MUTATIONS, 'set E2E_MUTATIONS=1 to run the mutating self-care smoke check');
+
+  test('portal state is normalized and package checkout ignores caller amount', async ({ request }) => {
+    const adminToken = await loginToken(request, admin);
+    const adminHeaders = { Authorization: `Bearer ${adminToken}` };
+    const publicPackages = await (await request.get('/api/captive/packages')).json();
+    const pkg = ((publicPackages.data || []) as any[]).find(p => Number(p.price) > 0);
+    test.skip(!pkg, 'no active priced package seeded for self-care smoke');
+
+    const code = `SC-E2E-${Date.now().toString().slice(-6)}`;
+    const created = await request.post('/api/subscribers', {
+      headers: adminHeaders,
+      data: {
+        full_name: 'Self-care Smoke', client_code: code, username: code,
+        password: 'PortalSmoke@123', status: 'EXPIRED', expiry_date: '2020-01-10',
+      },
+    });
+    const createdBody = await created.json().catch(() => ({} as any));
+    expect(created.ok(), `create subscriber: ${JSON.stringify(createdBody).slice(0, 200)}`).toBeTruthy();
+    const subId = createdBody.id;
+    expect(subId).toBeTruthy();
+    try {
+      const login = await request.post('/api/portal/login', {
+        data: { client_code: code, password: 'PortalSmoke@123' },
+      });
+      const loginBody = await login.json().catch(() => ({} as any));
+      expect(login.ok(), `portal login: ${JSON.stringify(loginBody).slice(0, 200)}`).toBeTruthy();
+      const headers = { Authorization: `Bearer ${loginBody.token}` };
+
+      const meRes = await request.get('/api/portal/me', { headers });
+      expect(meRes.ok()).toBeTruthy();
+      const me = await meRes.json();
+      expect(['ACTIVE', 'WARNING', 'GRACE', 'EXPIRED', 'SUSPENDED', 'PENDING']).toContain(me.normalized_state);
+      expect(me.normalized_state).toBe('EXPIRED');
+      expect(me).toHaveProperty('grace_until');
+      expect(me).toHaveProperty('days_remaining');
+      expect(me.subscriber.password).toBeUndefined();
+      expect(me.subscriber.portal_password).toBeUndefined();
+
+      const listed = await request.get('/api/portal/packages', { headers });
+      expect(listed.ok()).toBeTruthy();
+      expect(((await listed.json()).data || []).some((p: any) => p.id === pkg.id)).toBe(true);
+
+      const checkout = await request.post(`/api/portal/packages/${pkg.id}/checkout`, {
+        headers,
+        data: { gateway: 'bkash', amount: 1, price: 1, package_name: 'tampered' },
+      });
+      const checkoutBody = await checkout.json().catch(() => ({} as any));
+      if (!checkout.ok()) {
+        test.skip([403, 503].includes(checkout.status()), `no usable online gateway in this env: ${checkoutBody.message || checkout.status()}`);
+      }
+      expect(checkout.ok(), `package checkout: ${JSON.stringify(checkoutBody).slice(0, 200)}`).toBeTruthy();
+      const bought = checkoutBody;
+      expect(bought.purpose).toBe('PACKAGE_PURCHASE');
+      expect(bought.package_id).toBe(pkg.id);
+      expect(Number(bought.payment.amount)).toBe(Number(pkg.price));
+
+      const statusRes = await request.get(`/api/portal/payments/${encodeURIComponent(bought.payment_ref)}`, { headers });
+      expect(statusRes.ok()).toBeTruthy();
+      const status = await statusRes.json();
+      expect(status.payment.status).toBe('PENDING');
+      expect(status.payment.purpose).toBe('PACKAGE_PURCHASE');
+      expect(status.payment.package_id).toBe(pkg.id);
+      expect(Number(status.payment.amount)).toBe(Number(pkg.price));
+      expect(status.subscriber).toHaveProperty('normalized_state');
+      expect(status.subscriber).toHaveProperty('expiry_date');
+      expect(status.subscriber).toHaveProperty('days_remaining');
+    } finally {
+      await request.delete(`/api/subscribers/${subId}`, { headers: adminHeaders });
+    }
+  });
+});

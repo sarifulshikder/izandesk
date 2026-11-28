@@ -9,7 +9,7 @@
     "start": "node dist/main.js",
     "migrate": "node dist/db/migrate-cli.js",
     "migrate:status": "node dist/db/migrate-cli.js status",
-    "test": "node tests/ai.test.cjs && node tests/acs.test.cjs && node tests/security-regressions.test.cjs && node tests/billing-regressions.test.cjs && node tests/ops-regressions.test.cjs && node tests/platform-upgrades.test.cjs && node tests/captive-regressions.test.cjs && node tests/created-expired.test.cjs && node tests/telegram.test.cjs"
+    "test": "node tests/ai.test.cjs && node tests/acs.test.cjs && node tests/security-regressions.test.cjs && node tests/billing-regressions.test.cjs && node tests/package-purchase-regressions.test.cjs && node tests/ops-regressions.test.cjs && node tests/platform-upgrades.test.cjs && node tests/captive-regressions.test.cjs && node tests/created-expired.test.cjs && node tests/telegram.test.cjs"
   },
   "dependencies": {
     "@izandesk/shared-types": "workspace:*",

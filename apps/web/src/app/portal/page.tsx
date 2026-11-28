@@ -6,6 +6,14 @@ import { Wifi, Receipt, CreditCard, Gauge, LogOut, RefreshCw, Download, User, Li
 
 const money = (v:any) => `৳${Number(v||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 const fmtBytes = (n:any) => { const x=Number(n||0); if(x>1e9) return (x/1e9).toFixed(2)+' GB'; if(x>1e6) return (x/1e6).toFixed(2)+' MB'; if(x>1e3) return (x/1e3).toFixed(1)+' KB'; return x+' B'; };
+const fmtDate = (v:any) => { if (!v) return '—'; try { return new Date(v).toLocaleDateString('bn-BD', { year:'numeric', month:'short', day:'numeric' }); } catch { return String(v); } };
+const validityLabel = (p:any) => {
+  const unit = String(p?.validity_unit || 'CALENDAR_MONTH').toUpperCase();
+  const value = Math.max(1, Number(p?.validity_value || 1));
+  if (unit === 'DAYS') return `${value} day${value === 1 ? '' : 's'}`;
+  if (unit === 'MONTHS') return `${value} month${value === 1 ? '' : 's'}`;
+  return '1 calendar month';
+};
 async function pfetch(path: string, opts: any = {}, token?: string) {
   const base = getApiBaseUrl();
   const res = await fetch(`${base}${path}`, { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers||{}) } });
@@ -48,6 +56,9 @@ export default function CustomerPortalPage() {
   const [newMethod, setNewMethod] = useState<any>({ gateway: '', label: '', masked_identifier: '', is_default: false });
   const [menuOpen, setMenuOpen] = useState(false);
   const [advanceAmount, setAdvanceAmount] = useState('');
+  const [checkout, setCheckout] = useState<any>(null);
+  const [paymentStatus, setPaymentStatus] = useState<any>(null);
+  const [polling, setPolling] = useState(false);
 
   useEffect(() => { const t = localStorage.getItem('portal_token'); if (t) setToken(t); }, []);
 
@@ -72,8 +83,9 @@ export default function CustomerPortalPage() {
       ]);
       setMe(m); setInvoices(inv.data||[]); setPayments(pay.data||[]);
       const gwList = Array.isArray(gw?.data) ? gw.data : Array.isArray(gw) ? gw : [];
-      const g = gwList.filter((x:any)=>x && x.gateway);
-      setGateways(g.length?g:[{gateway:'bkash',mode:'SANDBOX'},{gateway:'nagad',mode:'SANDBOX'},{gateway:'stripe',mode:'SANDBOX'}]);
+      // Never invent a gateway on the client: the server's public list decides
+      // what can be used, and checkout fails closed when none is enabled.
+      setGateways(gwList.filter((x:any)=>x && x.gateway));
       setAcs(acsStatus); setTickets(tix.data||[]); setUsage(usg); setAnn(an.data||[]);
       setPackages(pkgs.data||[]); setDocuments(docs.data||[]); setNotifications(notifs||{announcements:[],messages:[]});
       setPrefs(prefRes.preferences || { auto_pay_enabled: false, preferred_gateway: '' });
@@ -92,6 +104,68 @@ export default function CustomerPortalPage() {
     return () => clearInterval(iv);
   }, [token]);
 
+  // Gateway callbacks hard-redirect to /portal. Read the reference but never
+  // trust the query string as proof of payment — poll the authenticated API.
+  useEffect(() => {
+    if (!token) return;
+    const q = new URLSearchParams(window.location.search);
+    const ref = q.get('payment_ref') || q.get('paymentRef') || q.get('ref');
+    if (!ref) return;
+    const callbackStatus = String(q.get('status') || '');
+    setCheckout({ payment_ref: ref, gateway: q.get('gateway') || 'gateway', checkout_url: null, simulated: false, fromCallback: true, trx_id: q.get('trx_id') || null });
+    if (/fail|cancel|declined|error/i.test(callbackStatus)) setErr(`Gateway returned "${callbackStatus}". Verifying the real payment status with our server.`);
+    const clean = new URL(window.location.href);
+    ['payment_ref', 'paymentRef', 'ref', 'status', 'trx_id'].forEach(k => clean.searchParams.delete(k));
+    window.history.replaceState({}, '', `${clean.pathname}${clean.search}${clean.hash}`);
+  }, [token]);
+
+  // Poll every 4s for up to 2 minutes, plus an immediate check when the tab
+  // regains focus after the customer returns from the gateway.
+  useEffect(() => {
+    const ref = checkout?.payment_ref;
+    if (!token || !ref) return;
+    let done = false;
+    let attempts = 0;
+    let timer: any = null;
+    const finish = () => { done = true; setPolling(false); if (timer) clearInterval(timer); };
+    setPolling(true);
+    setPaymentStatus(null);
+    const poll = async () => {
+      if (done) return;
+      attempts += 1;
+      try {
+        const r = await pfetch(`/api/portal/payments/${encodeURIComponent(ref)}`, {}, token);
+        if (done) return;
+        setPaymentStatus(r);
+        setErr(null);
+        const st = String(r?.payment?.status || '').toUpperCase();
+        const ns = String(r?.subscriber?.normalized_state || '').toUpperCase();
+        if (st === 'COMPLETED' || st === 'FAILED') {
+          finish();
+          await load(token);
+          if (st === 'COMPLETED') {
+            if (ns === 'ACTIVE') setMsg(`Payment confirmed. Internet restored — new expiry ${fmtDate(r?.subscriber?.expiry_date)}.`);
+            else setMsg(`Payment confirmed. Account state: ${ns || r?.subscriber?.status || 'pending activation'}. Service access is still being applied; check again shortly.`);
+          } else {
+            setErr(`Payment ${st.toLowerCase()}${r?.payment?.trx_id ? ` (${r.payment.trx_id})` : ''}. Please retry or contact support.`);
+          }
+          return;
+        }
+      } catch (e: any) {
+        if (!done) setErr(`Payment verification temporarily unavailable: ${e.message}`);
+      }
+      if (attempts >= 30) {
+        finish();
+        setErr(`Payment is still pending verification. We will keep checking your account; refresh later or contact support with reference ${ref}.`);
+      }
+    };
+    void poll();
+    timer = setInterval(poll, 4000);
+    const onFocus = () => { void poll(); };
+    window.addEventListener('focus', onFocus);
+    return () => { done = true; if (timer) clearInterval(timer); window.removeEventListener('focus', onFocus); };
+  }, [checkout?.payment_ref, token, load]);
+
   const doLogin = async () => {
     setBusy(true); setErr(null);
     try {
@@ -101,30 +175,48 @@ export default function CustomerPortalPage() {
   };
   const logout = () => { localStorage.removeItem('portal_token'); setToken(null); setMe(null); setMenuOpen(false); };
 
-  const payInvoice = async (inv: any, gateway: string) => {
-    if (!token) return; setBusy(true); setErr(null); setMsg(null);
+  const startCheckout = async (path: string, body: any, meta: any) => {
+    if (!token) return;
+    setBusy(true); setErr(null); setMsg(null); setPaymentStatus(null);
     try {
-      const r = await pfetch('/api/portal/payments/checkout', { method:'POST', body: JSON.stringify({ invoice_id: inv.id, gateway, amount: inv.due_amount || inv.total_amount, return_url: window.location.href }) }, token);
-      const url = r.checkout?.paymentUrl || r.checkout?.url || r.payment?.checkout_url;
-      if (url) { window.open(url, '_blank'); setMsg('Checkout created. Complete payment in the opened window.'); }
-      else setMsg('Checkout created (simulated if gateway not live-configured).');
+      const r = await pfetch(path, { method:'POST', body: JSON.stringify(body) }, token);
+      const url = r.checkout?.paymentUrl || r.checkout?.url || r.payment?.checkout_url || r.checkout_url || null;
+      const ref = r.payment_ref || r.payment?.payment_ref;
+      if (!ref) throw new Error('Gateway did not return a payment reference. Contact support before paying again.');
+      if (url) window.open(url, '_blank', 'noopener,noreferrer');
+      setCheckout({ ...meta, payment_ref: ref, gateway: body.gateway || meta.gateway || '', checkout_url: url, simulated: !!r.simulated });
+      setMsg(r.simulated
+        ? `SANDBOX checkout created for ${meta.label || 'payment'} (${ref}). No real payment is confirmed yet — complete the sandbox flow to test verification.`
+        : `Checkout opened for ${meta.label || 'payment'} (${ref}). Waiting for gateway confirmation...`);
       await load(token);
-    } catch(e:any){ setErr(e.message); } finally { setBusy(false); }
+    } catch(e:any) { setErr(e.message); } finally { setBusy(false); }
   };
 
+  const payInvoice = async (inv: any, gateway: string) => startCheckout(
+    '/api/portal/payments/checkout',
+    { invoice_id: inv.id, gateway, amount: inv.due_amount || inv.total_amount, return_url: window.location.href },
+    { label: `invoice ${inv.invoice_number}`, purpose: 'INVOICE_PAYMENT' },
+  );
+
   const payAdvance = async (gateway: string) => {
-    if (!token) return;
     const amount = Number(advanceAmount);
-    if (!(amount > 0)) { setErr('Enter a valid advance payment amount'); return; }
-    setBusy(true); setErr(null); setMsg(null);
-    try {
-      const r = await pfetch('/api/portal/payments/checkout', { method:'POST', body: JSON.stringify({ gateway, amount, return_url: window.location.href, metadata: { type: 'ADVANCE_PAYMENT' } }) }, token);
-      const url = r.checkout?.paymentUrl || r.checkout?.url || r.payment?.checkout_url;
-      if (url) { window.open(url, '_blank'); setMsg(`Advance payment checkout created for ${money(amount)}. Complete payment in the opened window.`); }
-      else setMsg(`Advance payment checkout created for ${money(amount)} (simulated if gateway not live-configured).`);
-      setAdvanceAmount('');
-      await load(token);
-    } catch(e:any){ setErr(e.message); } finally { setBusy(false); }
+    if (!(amount > 0)) { setErr('Enter a valid advance payment amount greater than zero'); return; }
+    await startCheckout(
+      '/api/portal/payments/checkout',
+      { gateway, amount, return_url: window.location.href, metadata: { type: 'ADVANCE_PAYMENT' } },
+      { label: `advance payment of ${money(amount)}`, purpose: 'ADVANCE_PAYMENT' },
+    );
+    setAdvanceAmount('');
+  };
+
+  const buyPackage = async (pkg: any) => {
+    const gw = prefs.preferred_gateway || gateways[0]?.gateway;
+    if (!gw) { setErr('No online payment gateway is enabled. Enable one in Settings > Payment Gateways or contact support.'); return; }
+    await startCheckout(
+      `/api/portal/packages/${encodeURIComponent(pkg.id)}/checkout`,
+      { gateway: gw, return_url: window.location.href },
+      { label: `${pkg.name} package`, purpose: 'PACKAGE_PURCHASE', package_name: pkg.name },
+    );
   };
 
   const runSpeedtest = async () => {
@@ -179,6 +271,23 @@ export default function CustomerPortalPage() {
   const sub = me.subscriber || {};
   const sess = live || me.session || null;
   const isOnline = String(sess?.status||'').toUpperCase() === 'ONLINE';
+  const normalizedState = String(me.normalized_state || sub.normalized_state || sub.status || 'PENDING').toUpperCase();
+  const expiryDate = me.expiry_date || sub.expiry_date || null;
+  const daysRemaining = me.days_remaining ?? sub.days_remaining ?? null;
+  const needsRenewal = ['EXPIRED', 'GRACE', 'SUSPENDED'].includes(normalizedState);
+  const renewSoon = normalizedState === 'WARNING' || (typeof daysRemaining === 'number' && daysRemaining <= 7);
+  const stateTone = normalizedState === 'ACTIVE' ? 'badge-success'
+    : ['EXPIRED', 'SUSPENDED'].includes(normalizedState) ? 'badge-danger'
+    : normalizedState === 'PENDING' ? 'badge-secondary' : 'badge-warning';
+  const stateAction = normalizedState === 'ACTIVE'
+    ? 'Your subscription is active. You can renew early from the Plans tab.'
+    : needsRenewal
+      ? 'Internet service is restricted. Buy or renew a package to restore service; payment is confirmed by the server, not the gateway redirect.'
+      : renewSoon
+        ? 'Your subscription is nearing expiry. Renew now to avoid interruption.'
+        : normalizedState === 'PENDING'
+          ? 'Your account is pending activation. Contact support if this does not change shortly.'
+          : 'Review your account and payment options below.';
   const monthUsage = (usage?.daily||[]).reduce((a:any,d:any)=>({rx:a.rx+Number(d.rx_bytes||0),tx:a.tx+Number(d.tx_bytes||0),sec:a.sec+Number(d.session_seconds||0)}),{rx:0,tx:0,sec:0});
   const tabs: any[] = [
     ['overview','ওভারভিউ',Wifi],
@@ -275,6 +384,34 @@ export default function CustomerPortalPage() {
             {err && <div className="alert alert-danger">{err}</div>}
             {msg && <div className="alert alert-success">{msg}</div>}
 
+            <div className={`card p-4 ${needsRenewal ? 'border-danger/40' : renewSoon ? 'border-warning/40' : 'border-success/40'}`} data-testid="portal-status-banner">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="font-bold flex items-center gap-2"><span className={`badge ${stateTone}`}>{normalizedState}</span>Subscription status</div>
+                  <div className="text-sm">Expiry: <b>{fmtDate(expiryDate)}</b>{daysRemaining !== null && <span className="text-muted-foreground"> • {daysRemaining > 0 ? `${daysRemaining} day${daysRemaining === 1 ? '' : 's'} remaining` : 'No active days remaining'}</span>}</div>
+                  <div className="text-xs text-muted-foreground">{stateAction}</div>
+                </div>
+                <button onClick={()=>selectTab('plans')} className="btn btn-primary btn-sm" data-testid="portal-buy-cta">{needsRenewal ? 'Buy / Renew Package' : 'View Plans'}</button>
+              </div>
+            </div>
+
+            {!gateways.length && <div className="alert alert-warning" data-testid="portal-no-gateway">No online payment gateway is enabled. Online invoice, advance and package payments are unavailable until a gateway is enabled in Settings &gt; Payment Gateways, or contact support.</div>}
+
+            {checkout && <div className="card p-4" data-testid="portal-payment-status">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <div className="font-bold">Payment {paymentStatus ? 'update' : 'submitted'}</div>
+                  <div className="text-sm">Reference <b>{checkout.payment_ref}</b>{checkout.package_name ? ` • ${checkout.package_name}` : ''}{checkout.gateway ? ` • ${String(checkout.gateway).toUpperCase()}` : ''}{checkout.simulated || checkout.fromCallback && /sandbox/i.test(String(checkout.gateway)) ? ' • SANDBOX' : ''}</div>
+                  {paymentStatus?.payment && <div className="text-xs text-muted-foreground">{String(paymentStatus.payment.status)} • {money(paymentStatus.payment.amount)} • {String(paymentStatus.payment.purpose || '').replaceAll('_', ' ')}{paymentStatus.payment.trx_id ? ` • ${paymentStatus.payment.trx_id}` : ''}</div>}
+                  {paymentStatus?.subscriber && <div className="text-xs text-muted-foreground">Account: {paymentStatus.subscriber.normalized_state} • Expiry {fmtDate(paymentStatus.subscriber.expiry_date)}</div>}
+                </div>
+                {polling && <span className="badge badge-info">Verifying...</span>}
+              </div>
+              {paymentStatus?.payment?.status === 'COMPLETED' && paymentStatus?.subscriber?.normalized_state === 'ACTIVE' && <div className="alert alert-success mt-3">Payment received. Internet restored. New expiry: <b>{fmtDate(paymentStatus.subscriber.expiry_date)}</b></div>}
+              {paymentStatus?.payment?.status === 'COMPLETED' && paymentStatus?.subscriber?.normalized_state !== 'ACTIVE' && <div className="alert alert-warning mt-3">Payment received, but service is not yet ACTIVE ({paymentStatus.subscriber.normalized_state || paymentStatus.subscriber.status}). We will keep checking; contact support if this persists.</div>}
+              {polling && <div className="text-xs text-muted-foreground mt-2">Checking with the server every 4 seconds and when you return to this tab. Maximum wait: 2 minutes.</div>}
+            </div>}
+
             {/* summary cards */}
             <div className="stat-grid">
               <div className={`dash-stat ${isOnline?'dash-stat-success':'dash-stat-secondary'}`}><span className="dash-stat-icon"><Wifi className="w-4 h-4"/></span><span className="dash-stat-body"><span className="dash-stat-label">কানেকশন</span><span className="dash-stat-value">{isOnline?'অনলাইন':'অফলাইন'}</span><span className="dash-stat-hint">{sess?.ip_address ? `IP ${sess.ip_address}` : 'লাইভ সেশন নেই'}{sess?.source==='radacct' ? ' • RADIUS' : ''}</span></span></div>
@@ -286,7 +423,7 @@ export default function CustomerPortalPage() {
             {!!(notifications.announcements||ann).length && <div className="card p-4 border-info/30"><div className="font-semibold flex items-center gap-2 mb-2"><Bell className="w-4 h-4 text-info"/>ঘোষণা</div><div className="space-y-2">{((notifications.announcements||ann) as any[]).slice(0,3).map((a:any,i:number)=>(<div key={a.id||i} className="text-sm"><div className="font-medium">{a.title}</div><div className="text-foreground">{a.body}</div></div>))}</div></div>}
 
             {tab==='overview' && <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="card p-4 space-y-3"><h2 className="font-bold">Subscription</h2><div className="text-sm space-y-2 text-foreground"><div><b>Account:</b> {sub.client_code} • {sub.username||'-'}</div><div><b>Status:</b> {sub.status} {sub.suspension_stage && sub.suspension_stage!=='NONE' ? `(${sub.suspension_stage})` : ''}</div><div><b>Connection:</b> {sub.connection_type} ({sub.provisioning_mode})</div><div><b>Monthly Bill:</b> {money(sub.monthly_bill)}</div><div><b>Address:</b> {sub.address||'-'}</div></div><div className="p-3 rounded-xl bg-muted/30 border border-border/60 space-y-2"><div className="text-xs text-muted-foreground">Live Traffic (auto-refresh every 15s)</div><div className="text-sm font-medium">{sess ? `${sess.status} • ${sess.ip_address||'-'}` : 'No active session'}</div><div className="text-xs text-foreground">RX {fmtBytes(sess?.rx_bytes||0)} total • TX {fmtBytes(sess?.tx_bytes||0)} total • Rate ↓{Math.round(Number(sess?.rx_bps||0)/1000)} kbps ↑{Math.round(Number(sess?.tx_bps||0)/1000)} kbps</div>{sess?.uptime_seconds!=null && <div className="text-xs text-muted-foreground">Uptime: {Math.round(Number(sess.uptime_seconds||0)/60)} min</div>}{liveHistory.length>1 && (()=>{const max=Math.max(1,...liveHistory.map(h=>Math.max(h.rx,h.tx)));return (<div><div className="text-[10px] text-muted-foreground mb-1">Live rate samples (↓ RX / ↑ TX)</div><div className="flex items-end gap-0.5 h-10">{liveHistory.slice(-24).map((h,i)=>(<div key={i} className="flex-1 flex flex-col justify-end gap-px h-full"><div className="w-full bg-info/70 rounded-sm" style={{height:`${Math.max(2,(h.rx/max)*100)}%`}} title={`RX ${Math.round(h.rx/1000)} kbps`}/><div className="w-full bg-success/70 rounded-sm" style={{height:`${Math.max(2,(h.tx/max)*100)}%`}} title={`TX ${Math.round(h.tx/1000)} kbps`}/></div>))}</div></div>);})()}</div>{me.quota ? (<div className="p-3 rounded-xl bg-muted/30 border border-border/60 space-y-2"><div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">FUP/Quota ({me.quota.period.replace('_',' ')})</span><span className={me.quota.over_cap?'text-danger font-semibold':'text-foreground'}>{me.quota.over_cap?'Over cap':'Within cap'}</span></div><div className="text-sm">{fmtBytes(me.quota.used_bytes)} used of {me.quota.cap_gb} GB {me.quota.fup_speed_mbps ? `• FUP ${me.quota.fup_speed_mbps} Mbps` : ''}{sub.fup_exceeded ? ' • throttled (FUP enforced)' : ''}</div><div className="h-2 rounded-full bg-border/60 overflow-hidden"><div className={`${me.quota.over_cap?'bg-danger':'bg-info'} h-full`} style={{width:`${Math.min(100,me.quota.percent)}%`}}/></div><div className="text-xs text-muted-foreground">Remaining: {fmtBytes(me.quota.remaining_bytes)} ({Math.max(0,100-me.quota.percent).toFixed(1)}%) • policy enforcement depends on NAS/RADIUS configuration.</div></div>) : (<div className="text-xs text-muted-foreground">Quota/FUP: no data cap configured for this package (30-day usage shown in Usage).</div>)}</div>
+              <div className="card p-4 space-y-3"><h2 className="font-bold">Subscription</h2><div className="text-sm space-y-2 text-foreground"><div><b>Account:</b> {sub.client_code} • {sub.username||'-'}</div><div><b>Status:</b> <span className={`badge ${stateTone}`}>{normalizedState}</span>{sub.status && String(sub.status).toUpperCase() !== normalizedState ? ` (account: ${sub.status})` : ''}{sub.suspension_stage && sub.suspension_stage!=='NONE' ? ` (${sub.suspension_stage})` : ''}</div><div><b>Expiry:</b> {fmtDate(expiryDate)}{daysRemaining !== null ? ` (${daysRemaining > 0 ? `${daysRemaining} days left` : 'expired'})` : ''}</div><div><b>Connection:</b> {sub.connection_type} ({sub.provisioning_mode})</div><div><b>Monthly Bill:</b> {money(sub.monthly_bill)}</div><div><b>Address:</b> {sub.address||'-'}</div></div><div className="p-3 rounded-xl bg-muted/30 border border-border/60 space-y-2"><div className="text-xs text-muted-foreground">Live Traffic (auto-refresh every 15s)</div><div className="text-sm font-medium">{sess ? `${sess.status} • ${sess.ip_address||'-'}` : 'No active session'}</div><div className="text-xs text-foreground">RX {fmtBytes(sess?.rx_bytes||0)} total • TX {fmtBytes(sess?.tx_bytes||0)} total • Rate ↓{Math.round(Number(sess?.rx_bps||0)/1000)} kbps ↑{Math.round(Number(sess?.tx_bps||0)/1000)} kbps</div>{sess?.uptime_seconds!=null && <div className="text-xs text-muted-foreground">Uptime: {Math.round(Number(sess.uptime_seconds||0)/60)} min</div>}{liveHistory.length>1 && (()=>{const max=Math.max(1,...liveHistory.map(h=>Math.max(h.rx,h.tx)));return (<div><div className="text-[10px] text-muted-foreground mb-1">Live rate samples (↓ RX / ↑ TX)</div><div className="flex items-end gap-0.5 h-10">{liveHistory.slice(-24).map((h,i)=>(<div key={i} className="flex-1 flex flex-col justify-end gap-px h-full"><div className="w-full bg-info/70 rounded-sm" style={{height:`${Math.max(2,(h.rx/max)*100)}%`}} title={`RX ${Math.round(h.rx/1000)} kbps`}/><div className="w-full bg-success/70 rounded-sm" style={{height:`${Math.max(2,(h.tx/max)*100)}%`}} title={`TX ${Math.round(h.tx/1000)} kbps`}/></div>))}</div></div>);})()}</div>{me.quota ? (<div className="p-3 rounded-xl bg-muted/30 border border-border/60 space-y-2"><div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">FUP/Quota ({me.quota.period.replace('_',' ')})</span><span className={me.quota.over_cap?'text-danger font-semibold':'text-foreground'}>{me.quota.over_cap?'Over cap':'Within cap'}</span></div><div className="text-sm">{fmtBytes(me.quota.used_bytes)} used of {me.quota.cap_gb} GB {me.quota.fup_speed_mbps ? `• FUP ${me.quota.fup_speed_mbps} Mbps` : ''}{sub.fup_exceeded ? ' • throttled (FUP enforced)' : ''}</div><div className="h-2 rounded-full bg-border/60 overflow-hidden"><div className={`${me.quota.over_cap?'bg-danger':'bg-info'} h-full`} style={{width:`${Math.min(100,me.quota.percent)}%`}}/></div><div className="text-xs text-muted-foreground">Remaining: {fmtBytes(me.quota.remaining_bytes)} ({Math.max(0,100-me.quota.percent).toFixed(1)}%) • policy enforcement depends on NAS/RADIUS configuration.</div></div>) : (<div className="text-xs text-muted-foreground">Quota/FUP: no data cap configured for this package (30-day usage shown in Usage).</div>)}</div>
               <div className="card p-4"><h2 className="font-bold mb-3">Recent Invoices</h2><div className="space-y-2">{invoices.slice(0,5).map(inv=>(<div key={inv.id} className="p-3 rounded-xl bg-muted/30 border border-border/60 flex items-center justify-between gap-3"><div><div className="font-medium text-sm">{inv.invoice_number}</div><div className="text-xs text-muted-foreground">{inv.bill_month} • Due {inv.due_date ? new Date(inv.due_date).toLocaleDateString() : '-'}</div></div><div className="text-right"><div className="font-semibold">{money(inv.due_amount || inv.total_amount)}</div><div className="text-xs text-muted-foreground">{inv.status}</div></div></div>))}{!invoices.length && <div className="empty-state">No invoices found.</div>}</div></div>
             </div>}
 
@@ -325,7 +462,18 @@ export default function CustomerPortalPage() {
               </div> : (<div className="space-y-3"><div><h2 className="font-bold">{ticketDetail.ticket_no}</h2><div className="text-sm text-foreground">{ticketDetail.subject}</div><div className="text-xs text-muted-foreground mt-1">{ticketDetail.status} • {ticketDetail.priority} • SLA due {ticketDetail.sla_due_at ? new Date(ticketDetail.sla_due_at).toLocaleString() : '-'}</div></div>{ticketDetail.description && <div className="text-sm p-3 rounded-xl bg-muted/30 border border-border/60 whitespace-pre-wrap">{ticketDetail.description}</div>}<div className="space-y-2 max-h-[320px] overflow-auto">{(ticketDetail.comments||[]).map((c:any)=>(<div key={c.id} className="p-2.5 rounded-xl bg-muted/30 border border-border/60 text-sm"><div className="flex items-center justify-between text-xs text-muted-foreground mb-1"><span>{c.author_name} ({c.author_role||'USER'})</span><span>{c.created_at ? new Date(c.created_at).toLocaleString() : ''}</span></div><div className="whitespace-pre-wrap">{c.body}</div></div>))}{!(ticketDetail.comments||[]).length && <div className="empty-state">No replies yet.</div>}</div><div className="flex gap-2"><input className="form-control flex-1" placeholder="Write a reply..." value={comment} onChange={e=>setComment(e.target.value)} /><button onClick={addComment} disabled={busy || !comment.trim()} className="btn btn-primary btn-icon"><Send className="w-4 h-4"/></button></div></div>)}</div>
             </div>}
 
-            {tab==='plans' && <div className="card p-4 space-y-3"><h2 className="font-bold flex items-center gap-2"><Package className="w-4 h-4 text-info"/>Available Plans & Upgrade Requests</h2><p className="text-sm text-muted-foreground">Current: <b>{sub.package_name||'-'}</b> ({sub.bandwidth_mbps||'-'} Mbps). Request a plan change and our team will process it.</p><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">{packages.map(p=>(<div key={p.id} className="card card-body-sm space-y-2"><div className="font-semibold">{p.name}</div><div className="text-sm text-foreground">{p.download_mbps}/{p.upload_mbps} Mbps</div><div className="text-xs text-muted-foreground">{p.data_cap_gb ? `${Number(p.data_cap_gb)} GB/mo cap` : 'Unlimited data'}{p.fup_speed_mbps ? ` • FUP ${p.fup_speed_mbps} Mbps` : ''}</div><div className="text-lg font-bold text-info">{money(p.price)}</div>{p.description && <div className="text-xs text-muted-foreground">{p.description}</div>}<button onClick={()=>requestPlan(p)} disabled={busy || sub.package_name===p.name} className="btn btn-primary btn-sm w-full mt-1">{sub.package_name===p.name?'Current Plan':'Request This Plan'}</button></div>))}{!packages.length && <div className="empty-state">No plans available.</div>}</div></div>}
+            {tab==='plans' && <div className="card p-4 space-y-3">
+              <h2 className="font-bold flex items-center gap-2"><Package className="w-4 h-4 text-info"/>Buy or Renew a Plan</h2>
+              <p className="text-sm text-muted-foreground">Current: <b>{sub.package_name||'-'}</b> ({sub.bandwidth_mbps||'-'} Mbps). Buy/renew online with a configured gateway; service is restored only after the server confirms the payment. Support plan-change requests are still available below.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">{packages.map(p=>(<div key={p.id} className="card card-body-sm space-y-2" data-testid={`portal-plan-${p.id}`}>
+                <div className="font-semibold">{p.name}</div>
+                <div className="text-sm text-foreground">{p.download_mbps}/{p.upload_mbps} Mbps • <b>{money(p.price)}</b> • {validityLabel(p)}</div>
+                <div className="text-xs text-muted-foreground">{p.data_cap_gb ? `${Number(p.data_cap_gb)} GB/mo cap` : 'Unlimited data'}{p.fup_speed_mbps ? ` • FUP ${p.fup_speed_mbps} Mbps` : ''}</div>
+                {p.description && <div className="text-xs text-muted-foreground">{p.description}</div>}
+                <button onClick={()=>buyPackage(p)} disabled={busy || polling || !gateways.length} className="btn btn-primary btn-sm w-full mt-1" data-testid={`portal-buy-package-${p.id}`}>{sub.package_name===p.name?'Renew Now':'Buy This Plan'}</button>
+                <button onClick={()=>requestPlan(p)} disabled={busy || sub.package_name===p.name} className="btn btn-outline btn-sm w-full">{sub.package_name===p.name?'Current Plan':'Request Plan Change'}</button>
+              </div>))}{!packages.length && <div className="empty-state">No plans available.</div>}</div>
+            </div>}
 
             {tab==='documents' && <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="card p-4 space-y-3"><h2 className="font-bold flex items-center gap-2"><FileText className="w-4 h-4 text-info"/>My Documents (KYC)</h2><div className="space-y-2">{documents.map(d=>{

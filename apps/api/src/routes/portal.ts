@@ -17,7 +17,7 @@ import { createKycDocument, normalizeDocType, readKycDocument } from '../integra
 import { assertAllowedKycFileBuffer, sha256Buffer } from '../security/file-validation';
 import { encryptKycBuffer, secureUnlinkKycFile } from '../security/file-encryption';
 import { getPortalAcsStatus, updatePortalSubscriberWifi } from './acs';
-import { createCheckoutForSubscriber, listEnabledGateways } from '../integrations/portal-payments';
+import { createCheckoutForSubscriber, describePortalState, getPaymentStatusForSubscriber, listActivePackages, listEnabledGateways } from '../integrations/portal-payments';
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'izandesk-dev-secret-change-me';
@@ -77,7 +77,7 @@ const PORTAL_MAX_ATTEMPTS = 5;
 const PORTAL_LOCK_MINUTES = 15;
 
 async function getSubscriber(id: string) {
-  const r = await pool.query(`SELECT id, client_code, full_name, username, phone, email, status, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, address, connection_type, provisioning_mode, suspension_stage, walled_garden, created_at, nid_number, auto_pay_enabled, preferred_gateway, fup_exceeded, fup_applied_at, fup_exempt
+  const r = await pool.query(`SELECT id, client_code, full_name, username, phone, email, status, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, grace_until, address, connection_type, provisioning_mode, suspension_stage, walled_garden, created_at, nid_number, auto_pay_enabled, preferred_gateway, fup_exceeded, fup_applied_at, fup_exempt
     FROM subscribers WHERE id=$1`, [id]);
   return r.rows[0] || null;
 }
@@ -163,7 +163,16 @@ router.get('/me', portalAuth, asyncHandler(async (req, res) => {
       quota = { period: 'current_month', cap_gb: Number(pkg.data_cap_gb), fup_speed_mbps: pkg.fup_speed_mbps, used_bytes: used, remaining_bytes: Math.max(0, capBytes - used), over_cap: used > capBytes, percent: capBytes > 0 ? Math.min(999, (used / capBytes) * 100) : 0 };
     }
   } catch {}
-  res.json({ ok: true, subscriber: sub, session, package: pkg, quota });
+  // A single normalized state (plus the underlying expiry/grace dates) is what
+  // self-care clients use for banners and purchase CTAs — no RADIUS secret is
+  // ever part of this payload, and the portal token is independent of PPPoE.
+  const state = await describePortalState(sub);
+  res.json({
+    ok: true,
+    subscriber: { ...sub, ...state },
+    session, package: pkg, quota,
+    ...state,
+  });
 }));
 
 router.put('/profile', portalAuth, asyncHandler(async (req, res) => {
@@ -213,7 +222,7 @@ router.get('/invoices/:id/pdf', portalAuth, asyncHandler(async (req, res) => {
 
 router.get('/payments', portalAuth, asyncHandler(async (req, res) => {
   const id = (req as any).portal.sub;
-  const r = await pool.query(`SELECT id, payment_ref, invoice_id, gateway, method, amount, currency, status, trx_id, created_at, verified_at FROM payments WHERE subscriber_id=$1 ORDER BY created_at DESC LIMIT 100`, [id]);
+  const r = await pool.query(`SELECT id, payment_ref, invoice_id, gateway, method, amount, currency, status, trx_id, purpose, package_id, created_at, verified_at FROM payments WHERE subscriber_id=$1 ORDER BY created_at DESC LIMIT 100`, [id]);
   res.json({ ok: true, data: r.rows });
 }));
 
@@ -225,6 +234,31 @@ router.get('/gateways', asyncHandler(async (_req, res) => {
 router.post('/payments/checkout', portalAuth, asyncHandler(async (req, res) => {
   const subId = (req as any).portal.sub;
   const result = await createCheckoutForSubscriber(subId, req.body || {});
+  res.json(result);
+}));
+
+/** Poll a single payment for this subscriber only. The gateway callback may
+ *  redirect back with extra query params; the server is the source of truth. */
+router.get('/payments/:ref', portalAuth, asyncHandler(async (req, res) => {
+  const status = await getPaymentStatusForSubscriber((req as any).portal.sub, String(req.params.ref || ''));
+  if (!status) return res.status(404).json({ message: 'Payment not found' });
+  res.json(status);
+}));
+
+/** Self-service package purchase: price and validity always come from the
+ *  server-side package row; the caller cannot choose the amount. */
+router.post('/packages/:id/checkout', portalAuth, asyncHandler(async (req, res) => {
+  const subId = (req as any).portal.sub;
+  const b = req.body || {};
+  const result = await createCheckoutForSubscriber(subId, {
+    ...b,
+    purpose: 'PACKAGE_PURCHASE',
+    package_id: String(req.params.id || ''),
+    method: b.method || 'portal',
+    return_url: b.return_url || (process.env.PORTAL_URL || process.env.PUBLIC_BASE_URL
+      ? `${(process.env.PORTAL_URL || process.env.PUBLIC_BASE_URL).replace(/\/$/, '')}/portal`
+      : undefined),
+  });
   res.json(result);
 }));
 
@@ -314,8 +348,7 @@ router.get('/announcements', asyncHandler(async (_req, res) => {
 
 
 router.get('/packages', portalAuth, asyncHandler(async (_req, res) => {
-  const r = await pool.query(`SELECT id, name, download_mbps, upload_mbps, price, description, is_active, data_cap_gb, fup_speed_mbps FROM bandwidth_packages WHERE is_active=true ORDER BY download_mbps ASC`);
-  res.json({ ok: true, data: r.rows });
+  res.json({ ok: true, data: await listActivePackages() });
 }));
 
 router.post('/package-request', portalAuth, asyncHandler(async (req, res) => {

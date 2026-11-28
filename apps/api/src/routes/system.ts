@@ -7,6 +7,7 @@ import { pool } from '../db';
 import { asyncHandler } from './helpers';
 import { LITE_MODE } from '../config/runtime';
 import { emitNocAlert } from '../integrations/noc-alerts';
+import { getBillingHealth } from '../integrations/billing-health';
 import { withSchedulerRun, getSchedulerStatus, getSchedulerMetrics } from '../integrations/scheduler-observability';
 import { getMigrationStatus } from '../db/migrator';
 import { getQueuesOverview, isQueuesActive, registerQueueHandler, retryFailedJobs, scheduleRecurringJob, type QueueName } from '../infra/queues';
@@ -239,6 +240,11 @@ router.post('/alerts/:id/ack', asyncHandler(async (req, res) => {
   ).catch(()=>({rows:[]}));
   if (!r.rows[0]) return res.status(404).json({ ok: false, message: 'Alert not found' });
   res.json({ ok: true, data: r.rows[0] });
+}));
+
+router.get('/billing-health', asyncHandler(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json(await getBillingHealth());
 }));
 
 router.get('/schedulers', asyncHandler(async (req, res) => {

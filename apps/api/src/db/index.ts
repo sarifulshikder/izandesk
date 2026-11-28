@@ -831,6 +831,8 @@ export async function initDb() {
     ALTER TABLE payments ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'APPROVED';
     ALTER TABLE payments ADD COLUMN IF NOT EXISTS approval_note TEXT;
     ALTER TABLE payments ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ;
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'INVOICE_PAYMENT';
+    ALTER TABLE payments ADD COLUMN IF NOT EXISTS package_id UUID REFERENCES bandwidth_packages(id) ON DELETE SET NULL;
 
     CREATE TABLE IF NOT EXISTS payment_sms_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -914,6 +916,25 @@ export async function initDb() {
   ]) {
     await pool.query(statement).catch((e: any) => console.warn('[DB] payment idempotency index skipped:', e.message));
   }
+
+  // Durable enforcement outbox: entitlement changes and the work required to
+  // project them to RADIUS/MikroTik commit together. A worker retries failures
+  // so a router/CoA outage cannot leave the database ACTIVE but the network blocked.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS enforcement_outbox (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      subscriber_id UUID NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+      action TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_enforcement_outbox_due ON enforcement_outbox(status, next_attempt_at);
+  `).catch((e: any) => console.warn('[DB] enforcement outbox skipped:', e.message));
 
   await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS data_cap_gb NUMERIC(12,2)`).catch(()=>{});
   await pool.query(`ALTER TABLE bandwidth_packages ADD COLUMN IF NOT EXISTS fup_speed_mbps INTEGER`).catch(()=>{});

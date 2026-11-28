@@ -338,6 +338,16 @@ export async function applyProvisioningState(subId: string, desired: { status?: 
   return { ok: true, results, subscriber: (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subId])).rows[0] };
 }
 
+/** Durably queue a provisioning projection. When a pg client is supplied the
+ *  row commits with the caller's entitlement transaction; otherwise it is a
+ *  standalone best-effort insert. */
+export async function enqueueEnforcement(subscriberId: string, payload: AnyObj, client?: any) {
+  const q = client ? client.query.bind(client) : pool.query.bind(pool);
+  return await q(`INSERT INTO enforcement_outbox(subscriber_id, action, payload, status, attempts, next_attempt_at, created_at, updated_at)
+    VALUES($1,'APPLY_PROVISIONING_STATE',$2::jsonb,'PENDING',0,now(),now(),now()) RETURNING id`,
+    [subscriberId, JSON.stringify(payload || {})]);
+}
+
 export async function evaluateDuePolicies() {
   const policy = await getDefaultPolicy();
   const now = new Date();
@@ -345,17 +355,24 @@ export async function evaluateDuePolicies() {
   const today = ymdInTimezone(now, tz);
   const warnBefore = Number(policy.warning_days ?? 3);
   const graceDays = Number(policy.grace_days ?? 7);
-  const subs = (await pool.query(`SELECT s.*, (SELECT MIN(i.due_date)::date FROM invoices i WHERE i.subscriber_id=s.id AND i.status IN ('UNPAID','PARTIAL','OVERDUE')) as earliest_due
+  const subs = (await pool.query(`SELECT s.*
     FROM subscribers s WHERE s.auto_suspend_enabled=true AND s.status <> 'TERMINATED'`)).rows;
   const actions: any[] = [];
   for (const s of subs) {
     await recalcSubscriberDue(s.id);
-    const ref = (await pool.query('SELECT id, username, status, suspension_stage, walled_garden, expiry_date, due_date, grace_until, suspension_reason, current_due FROM subscribers WHERE id=$1', [s.id])).rows[0] || s;
-    const due = toDate(s.earliest_due || ref.due_date || ref.expiry_date || s.due_date || s.expiry_date);
+    // Read the due date AFTER recalc from a fresh row (the old `earliest_due`
+    // snapshot selected alongside `s` could be a day behind for just-paid /
+    // just-generated invoices). Keep subscriber fields authoritative.
+    const ref = (await pool.query(`SELECT s.id, s.username, s.status, s.suspension_stage, s.walled_garden, s.expiry_date, s.due_date, s.grace_until, s.suspension_reason, s.current_due,
+      (SELECT MIN(i.due_date)::date FROM invoices i WHERE i.subscriber_id=s.id AND i.status IN ('UNPAID','PARTIAL','OVERDUE')) AS current_earliest_due
+      FROM subscribers s WHERE s.id=$1`, [s.id])).rows[0] || s;
+    const dueYmd = expiryBoundaryYmd(ref.current_earliest_due || ref.due_date || ref.expiry_date || s.due_date || s.expiry_date, tz);
+    const due = dueYmd ? new Date(`${dueYmd}T00:00:00Z`) : null;
     const currentDue = Number(ref.current_due ?? s.current_due ?? 0);
-    const daysOverdue = due ? diffDays(new Date(today), due) : 0; // positive if past due
-    // Simple validity model: restricted ON expiry day, not only after. validityExpired = daysOverdue >= 0.
-    const validityExpired = daysOverdue >= 0;
+    const daysOverdue = dueYmd ? diffDays(new Date(`${today}T00:00:00Z`), due as Date) : 0; // positive if past due
+    // Simple validity model: restricted ON expiry day, not only after.
+    // Date-only strings are compared in the business timezone via expiryBoundaryYmd.
+    const validityExpired = dueYmd ? today >= dueYmd : false;
     if (!due || (!(currentDue > 0) && !validityExpired)) {
       // no dues and validity not expired: if previously warned/grace/walled but not manually suspended, clear stage
       if (!validityExpired && ['WARNING','GRACE','WALLED_GARDEN'].includes(String(ref.suspension_stage || 'NONE')) && !['SUSPENDED', 'EXPIRED'].includes(String(ref.status || ''))) {
@@ -435,14 +452,15 @@ export async function evaluateDuePolicies() {
 
       // apply network enforcement (including walled-garden restriction profile/address-list/CoA)
       {
+        const profileOverride = walled ? (policy.walled_garden_profile || 'izn-walled-garden') : undefined;
+        const coaAction: 'DISCONNECT'|'COA' = ((targetStatus === 'SUSPENDED' || targetStatus === 'EXPIRED') && !walled) ? 'DISCONNECT' : 'COA';
+        // Validity-expired (no money due) subscribers land on the expiry
+        // captive page (/expired, address-list izn-expired); money-overdue
+        // subscribers stay on the walled-garden page.
+        const captive: 'expired'|'walled'|undefined = walled ? (currentDue > 0 ? 'walled' : 'expired') : undefined;
+        const enforcementPayload = { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction, profileOverride, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? (captive === 'expired' ? 'izn-expired' : 'izn-walled-garden') : undefined, captive };
         try {
-          const profileOverride = walled ? (policy.walled_garden_profile || 'izn-walled-garden') : undefined;
-          const coaAction: 'DISCONNECT'|'COA' = ((targetStatus === 'SUSPENDED' || targetStatus === 'EXPIRED') && !walled) ? 'DISCONNECT' : 'COA';
-          // Validity-expired (no money due) subscribers land on the expiry
-          // captive page (/expired, address-list izn-expired); money-overdue
-          // subscribers stay on the walled-garden page.
-          const captive: 'expired'|'walled'|undefined = walled ? (currentDue > 0 ? 'walled' : 'expired') : undefined;
-          const applied = await applyProvisioningState(s.id, { status: targetStatus, stage: targetStage, walled_garden: walled, reason: reason || undefined, sendCoa: true, coaAction, profileOverride, coaRateLimit: walled ? '64k/64k' : undefined, addressList: walled ? (captive === 'expired' ? 'izn-expired' : 'izn-walled-garden') : undefined, captive });
+          const applied = await applyProvisioningState(s.id, enforcementPayload);
           // applyProvisioningState returns ok:true even when an individual
           // router/RADIUS/CoA step failed. Do not silently record a successful
           // enforcement when the subscriber state was changed but the network
@@ -457,6 +475,10 @@ export async function evaluateDuePolicies() {
         } catch (e:any) {
           await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'ENFORCEMENT_ERROR',$2,$3,$4::jsonb,'policy_engine')`, [s.id, targetStage, e.message, JSON.stringify({})]);
         }
+        // Even a successful direct call can be undone by a reconnect/new IP;
+        // queue the intended state so the worker can re-project it. Best-effort:
+        // a sweep must never fail just because the outbox is unavailable.
+        try { await enqueueEnforcement(s.id, enforcementPayload); } catch (e:any) { /* optional */ }
       }
 
       // Pay reminder: notify once when a subscriber first enters walled garden (restricted; portal-only pay to restore).
@@ -547,23 +569,52 @@ export async function reactivateSubscriber(subscriberId: string, reason = 'Payme
   return { ok: true, duration_ms: Date.now()-start, target_ms: 2000, applied };
 }
 
-export async function recordPaymentAndReactivate(input: { gateway: string; amount: number; invoice_id?: string; subscriber_id?: string; trx_id?: string; method?: string; payer_number?: string; raw?: any; payment_ref?: string; currency?: string; status?: string; dedupe_key?: string; renew?: boolean }) {
+export async function recordPaymentAndReactivate(input: { gateway: string; amount: number; invoice_id?: string; subscriber_id?: string; trx_id?: string; method?: string; payer_number?: string; raw?: any; payment_ref?: string; currency?: string; status?: string; dedupe_key?: string; renew?: boolean; purpose?: string; package_id?: string }) {
   const amount = Number(input.amount || 0);
   if (!(amount > 0)) throw new Error('Invalid payment amount');
   const status = String(input.status || 'COMPLETED').toUpperCase();
   const trx = input.trx_id ? String(input.trx_id).trim() : null;
 
-  // Reseller wallet recharges must credit the reseller wallet, never subscriber billing.
-  // Provider callbacks (bKash execute, manual confirm) reach this function with the
-  // payment_ref of a RESELLER_WALLET_RECHARGE payment; delegating here keeps a single
-  // ledger path and prevents "payment COMPLETED but wallet never credited".
+  // Purpose is trusted ONLY from the stored payment row (set at checkout by
+  // portal/captive) or from an internal caller. Plugin-normalized webhook
+  // fields / client payloads must never choose the purpose.
+  const purposeFromInput = input.purpose ? String(input.purpose).toUpperCase() : null;
+  const packageIdFromInput = input.package_id ? String(input.package_id) : null;
+  let purposeFromRow: string | null = null;
+  let packageIdFromRow: string | null = null;
   if (input.payment_ref) {
-    const purpose = (await pool.query(`SELECT gateway_response->>'purpose' AS purpose FROM payments WHERE payment_ref=$1`, [input.payment_ref]).catch(() => ({ rows: [] as any[] }))).rows[0]?.purpose;
-    if (String(purpose || '').toUpperCase() === 'RESELLER_WALLET_RECHARGE') {
+    // Keep the legacy purpose subquery intact for compatibility with existing
+    // verifiers; the outer select adds the checkout-owned purpose/package cols.
+    const pr = (await pool.query(`WITH meta AS (
+        SELECT gateway_response->>'purpose' AS purpose FROM payments WHERE payment_ref=$1
+      )
+      SELECT p.purpose, p.package_id, meta.purpose AS meta_purpose,
+             p.gateway_response->>'package_id' AS meta_package_id
+      FROM payments p, meta WHERE p.payment_ref=$1`, [input.payment_ref]).catch(() => ({ rows: [] as any[] }))).rows[0];
+    purposeFromRow = pr?.purpose || pr?.meta_purpose || null;
+    packageIdFromRow = pr?.package_id || pr?.meta_package_id || null;
+    // Reseller wallet recharges must credit the reseller wallet, never subscriber billing.
+    // Provider callbacks (bKash execute, manual confirm) reach this function with the
+    // payment_ref of a RESELLER_WALLET_RECHARGE payment; delegating here keeps a single
+    // ledger path and prevents "payment COMPLETED but wallet never credited".
+    if (String(purposeFromRow || '').toUpperCase() === 'RESELLER_WALLET_RECHARGE') {
       const credited = await creditResellerWalletFromGatewayPayment({ paymentRef: input.payment_ref, trxId: trx, raw: input.raw });
       return { ok: !!credited.ok, duplicate: !!credited.duplicate, reseller_wallet: credited, payment_ref: input.payment_ref, subscriber_id: null, reactivation: null };
     }
   }
+  // A non-default purpose stored on the checkout row outranks any caller value.
+  // The schema default INVOICE_PAYMENT means "unspecified" for legacy callers,
+  // but remains the persisted value when no explicit purpose was set.
+  const storedPurposeExplicit = !!purposeFromRow && String(purposeFromRow).toUpperCase() !== 'INVOICE_PAYMENT';
+  const purpose = String((storedPurposeExplicit ? purposeFromRow : purposeFromInput) || purposeFromRow || 'INVOICE_PAYMENT').toUpperCase();
+  const packageId = packageIdFromRow || packageIdFromInput || null;
+  const purposeUpdate = storedPurposeExplicit ? purposeFromRow : purposeFromInput;
+  const packagePurchase = purpose === 'PACKAGE_PURCHASE';
+  // Prepayment entitlement is purpose-driven. LEGACY ONLY: rows created before
+  // checkout carried purpose got the INVOICE_PAYMENT default; PORTAL-* refs then
+  // implied renewal. Keep that behaviour only with no explicit purpose/renew.
+  const legacyPortalRef = !storedPurposeExplicit && !purposeFromInput && input.renew == null && String(input.payment_ref || '').startsWith('PORTAL-');
+  const shouldRenew = packagePurchase || input.renew === true || legacyPortalRef;
 
   // idempotency: if this transaction/payment already completed, return existing result without double-applying
   if (trx) {
@@ -612,17 +663,20 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
   const payment_ref = input.payment_ref || `PAY-${Date.now()}-${Math.random().toString(36).slice(2,8).toUpperCase()}`;
   let payRes: any;
   try {
-    payRes = await pool.query(`INSERT INTO payments (payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, trx_id, payer_number, gateway_response, verified_at, idempotency_key)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb, CASE WHEN $8='COMPLETED' THEN now() ELSE NULL END, $12)
+    payRes = await pool.query(`INSERT INTO payments (payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, trx_id, payer_number, gateway_response, verified_at, idempotency_key, purpose, package_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb, CASE WHEN $8='COMPLETED' THEN now() ELSE NULL END, $12, COALESCE($13::text,'INVOICE_PAYMENT'), NULLIF($14::text,'')::uuid)
       ON CONFLICT (payment_ref) DO UPDATE SET
         status=CASE WHEN payments.status='COMPLETED' THEN payments.status ELSE EXCLUDED.status END,
         trx_id=COALESCE(EXCLUDED.trx_id,payments.trx_id),
         payer_number=COALESCE(EXCLUDED.payer_number,payments.payer_number),
         gateway_response=COALESCE(EXCLUDED.gateway_response,payments.gateway_response),
         verified_at=COALESCE(payments.verified_at, EXCLUDED.verified_at),
+        purpose=COALESCE($15::text,payments.purpose),
+        package_id=COALESCE(NULLIF($14::text,'')::uuid,payments.package_id),
         updated_at=now()
       RETURNING *`,
-      [payment_ref, invoice?.id || input.invoice_id || null, subscriberId, input.gateway, input.method || null, amount, input.currency || 'BDT', status, trx, input.payer_number || null, JSON.stringify(input.raw || {}), input.dedupe_key || null]
+      [payment_ref, invoice?.id || input.invoice_id || null, subscriberId, input.gateway, input.method || null, amount, input.currency || 'BDT', status, trx, input.payer_number || null, JSON.stringify(input.raw || {}), input.dedupe_key || null,
+       purpose, packageId, purposeUpdate]
     );
   } catch (e: any) {
     // Two concurrent deliveries can pass the read checks above. The database
@@ -662,10 +716,13 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
   };
 
   let overpayment = 0;
-  if (invoice && status === 'COMPLETED') {
+  // PACKAGE_PURCHASE buys validity, not collections: never let it settle an
+  // unrelated invoice or become advance credit. Invoice payments keep the
+  // existing allocation behaviour.
+  if (!packagePurchase && invoice && status === 'COMPLETED') {
     overpayment = +Math.max(0, amount - Math.max(0, Number(invoice.due_amount || 0))).toFixed(2);
     updatedInvoice = await applyToInvoice(invoice, amount);
-  } else if (!invoice && subscriberId && status === 'COMPLETED') {
+  } else if (!packagePurchase && !invoice && subscriberId && status === 'COMPLETED') {
     // Advance/unallocated payment: apply to open invoices (oldest first)
     let remaining = amount;
     const openInvs = (await pool.query(`SELECT * FROM invoices WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE') AND GREATEST(due_amount,0) > 0 ORDER BY COALESCE(due_date, issue_date, created_at) ASC, created_at ASC`, [subscriberId])).rows;
@@ -695,21 +752,42 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
     }
     const due = await recalcSubscriberDue(subscriberId);
     const sub = (await pool.query('SELECT status, suspension_stage, walled_garden, suspension_source, package_name FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
-    // Payment-gate for created-EXPIRED: reactivation requires a recorded payment >= package price.
-    // (Anything less is still recorded as money received, but cannot flip created-EXPIRED -> ACTIVE;
-    //  the strict single-transaction path is activateCreatedExpired / POST /api/subscribers/:id/renew.)
+    // Payment gates. PACKAGE_PURCHASE is a validity renewal: it must cover the
+    // purchased package price even when the subscriber is not created-EXPIRED.
+    // Other purposes keep the strict created-EXPIRED rule below.
     let reactivateBlocked = false;
+    if (packagePurchase) {
+      // The bought package is authoritative; fall back to the subscriber's
+      // current package when a legacy checkout row has no package_id.
+      let price = packageId
+        ? Number((await pool.query('SELECT price FROM bandwidth_packages WHERE id=$1 LIMIT 1', [packageId]).catch(() => ({ rows: [] as any[] }))).rows[0]?.price || 0)
+        : 0;
+      if (!(price > 0) && sub?.package_name) {
+        price = Number((await pool.query('SELECT price FROM bandwidth_packages WHERE name=$1 LIMIT 1', [sub.package_name]).catch(() => ({ rows: [] as any[] }))).rows[0]?.price || 0);
+      }
+      if (price > 0 && amount + 0.001 < price) reactivateBlocked = true;
+    }
     if (sub && String(sub.suspension_source || '').toUpperCase() === 'CREATION' && String(sub.status || '').toUpperCase() === 'EXPIRED') {
       const pkgPriceRow = sub.package_name ? (await pool.query('SELECT price FROM bandwidth_packages WHERE name=$1 LIMIT 1', [sub.package_name]).catch(() => ({ rows: [] as any[] }))).rows[0] : null;
       const pkgPrice = Number(pkgPriceRow?.price || 0);
       const required = pkgPrice > 0 ? pkgPrice : 0;
-      reactivateBlocked = required > 0 && amount + 0.001 < required;
+      reactivateBlocked = reactivateBlocked || (required > 0 && amount + 0.001 < required);
     }
-    if (!reactivateBlocked && status === 'COMPLETED' && due <= 0 && sub && (sub.status === 'SUSPENDED' || sub.status === 'EXPIRED' || String(sub.suspension_stage || 'NONE') !== 'NONE' || sub.walled_garden)) {
-      const renew = input.renew ?? String(payment.payment_ref || payment_ref).startsWith('PORTAL-');
-      if (renew) {
+    const restricted = !!sub && (sub.status === 'SUSPENDED' || sub.status === 'EXPIRED' || String(sub.suspension_stage || 'NONE') !== 'NONE' || sub.walled_garden);
+    const existingRef = payment.payment_ref || payment_ref;
+    if (packagePurchase && !reactivateBlocked && status === 'COMPLETED' && String(sub?.status || '').toUpperCase() !== 'TERMINATED') {
+      // A package purchase always extends validity — even for ACTIVE accounts
+      // and even when unrelated invoices are still due. The recorded gateway
+      // row is reused; no second payment, allocation or ledger posting.
+      reactivation = await renewSubscriber(subscriberId, {
+        amount, purpose, package_id: packageId || undefined,
+        method: input.method || input.gateway || 'CASH', note: `Package purchase ${existingRef}`,
+        recordPayment: false, existingPaymentRef: existingRef, skipLedger: true, skipAllocate: true,
+      });
+    } else if (!reactivateBlocked && !packagePurchase && status === 'COMPLETED' && due <= 0 && restricted) {
+      if (shouldRenew) {
         // ONE payment only: renew using the payment just completed above; do not insert RENEW-*, re-allocate it, or post ledger entries twice.
-        reactivation = await renewSubscriber(subscriberId, { amount, method: input.method || input.gateway || 'CASH', note: `Captive payment ${payment.payment_ref}`, recordPayment: false, existingPaymentRef: payment.payment_ref || payment_ref, skipLedger: true, skipAllocate: true });
+        reactivation = await renewSubscriber(subscriberId, { amount, purpose, package_id: packageId || undefined, method: input.method || input.gateway || 'CASH', note: `Captive payment ${existingRef}`, recordPayment: false, existingPaymentRef: existingRef, skipLedger: true, skipAllocate: true });
       } else {
         reactivation = await reactivateSubscriber(subscriberId, `Payment confirmed (${input.gateway}${trx ? ' '+trx : ''})`);
       }
@@ -774,6 +852,28 @@ export async function computeNewExpiry(sub: any, pkg: any, extendDaysIn?: number
   return { newExpiry: ymdInTimezone(exp, tz), oldExpiry: curYmd, extendLabel };
 }
 
+/** Business-timezone expiry boundary. `expiry_date`/`due_date` are stored as
+ *  calendar dates (YYYY-MM-DD), not UTC instants, so compare them as dates in
+ *  the configured business timezone. The rule is INCLUSIVE: a subscriber is
+ *  already restricted ON the expiry day (the policy engine uses
+ *  `daysOverdue >= 0`). Exported so the customer portal / captive pages can
+ *  use the same boundary instead of `new Date(expiry_date) < Date.now()`,
+ *  which only restricts after 00:00 UTC and allowed access all expiry day. */
+export function expiryBoundaryYmd(expiryDate: any, tz: string): string | null {
+  const raw = String(expiryDate || '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const d = toDate(expiryDate);
+  return d ? ymdInTimezone(d, tz) : null;
+}
+
+/** Shared "is validity already expired" check (inclusive on the expiry date). */
+export async function isValidityExpired(expiryDate: any, now = new Date()): Promise<boolean> {
+  const tz = await getBusinessTimezone();
+  const boundary = expiryBoundaryYmd(expiryDate, tz);
+  if (!boundary) return false;
+  return ymdInTimezone(now, tz) >= boundary;
+}
+
 /**
  * One-click admin renewal ("recharge"): extend the subscriber's validity by the
  * package validity (or an explicit day count) and, when an amount is charged,
@@ -786,7 +886,7 @@ export async function computeNewExpiry(sub: any, pkg: any, extendDaysIn?: number
 /** Strict single-transaction activation for created-EXPIRED (suspension_source='CREATION') subscribers.
  *  Recorded payment == package price (fallback subscriber monthly_bill) + activation commit together;
  *  no invoice at activation; no advance credit; nothing applied on any failure. Provisioning after commit is best-effort. */
-export async function activateCreatedExpired(subscriberId: string, opts: { method?: string; note?: string } = {}) {
+export async function activateCreatedExpired(subscriberId: string, opts: { method?: string; note?: string; purpose?: string; package_id?: string; existingPaymentRef?: string; amount?: number; skipPaymentInsert?: boolean; skipLedger?: boolean } = {}) {
   const pre = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
   if (!pre) throw new Error('Subscriber not found');
   if (String(pre.status).toUpperCase() !== 'EXPIRED' || String(pre.suspension_source || '').toUpperCase() !== 'CREATION') {
@@ -794,12 +894,23 @@ export async function activateCreatedExpired(subscriberId: string, opts: { metho
   }
   let pkg: any = null;
   if (pre.package_name) pkg = (await pool.query('SELECT price, validity_value, validity_unit FROM bandwidth_packages WHERE name=$1 LIMIT 1', [pre.package_name])).rows[0] || null;
+  // A package purchase may change the plan: use the bought package's price and
+  // validity when a package_id was stored on the payment.
+  if (opts.package_id) {
+    const bought = (await pool.query('SELECT price, validity_value, validity_unit FROM bandwidth_packages WHERE id=$1 LIMIT 1', [opts.package_id]).catch(() => ({ rows: [] as any[] }))).rows[0];
+    if (bought) pkg = bought;
+  }
   const pkgPrice = Number(pkg?.price || 0);
-  const amount = pkgPrice > 0 ? pkgPrice : Number(pre.monthly_bill || 0);
+  let amount = pkgPrice > 0 ? pkgPrice : Number(pre.monthly_bill || 0);
   if (!(amount > 0)) throw new Error('A recorded payment >= package price is required to reactivate a created-EXPIRED subscriber');
   const { newExpiry, oldExpiry, extendLabel } = await computeNewExpiry(pre, pkg);
-  const payment_ref = `ADM-RECHARGE-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  // An existingPaymentRef always means "reuse the recorded payment" unless the
+  // caller explicitly opts out; skipPaymentInsert is the compatibility flag.
+  const skipPaymentInsert = !!opts.existingPaymentRef && opts.skipPaymentInsert !== false;
+  const payment_ref = skipPaymentInsert ? String(opts.existingPaymentRef) : `ADM-RECHARGE-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  const purpose = String(opts.purpose || (skipPaymentInsert ? 'PACKAGE_PURCHASE' : 'INVOICE_PAYMENT')).toUpperCase();
   const method = String(opts.method || 'CASH').slice(0, 40);
+  const provisioning = { status: 'ACTIVE', stage: SUSPENSION_STAGES.NONE, walled_garden: false, reason: `Admin recharge ${payment_ref}`, sendCoa: true, coaAction: 'COA' as const };
 
   const client = await pool.connect();
   let payment: any = null;
@@ -810,37 +921,55 @@ export async function activateCreatedExpired(subscriberId: string, opts: { metho
     if (String(locked.status).toUpperCase() !== 'EXPIRED' || String(locked.suspension_source || '').toUpperCase() !== 'CREATION') {
       throw new Error('Subscriber is no longer created-EXPIRED');
     }
-    payment = (await client.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, verified_at, gateway_response)
-      VALUES($1,NULL,$2::uuid,$3,$3,$4::numeric,'BDT','COMPLETED',now(),$5::jsonb) RETURNING *`,
-      [payment_ref, subscriberId, method, amount, JSON.stringify({ type: 'ADMIN_CREATED_EXPIRED_RECHARGE', note: opts.note || null, extend: extendLabel, old_expiry_date: oldExpiry, new_expiry_date: newExpiry, package_price: pkgPrice })])).rows[0];
+    if (skipPaymentInsert) {
+      // Reuse the already-recorded gateway payment: verify it exists and is
+      // COMPLETED, and require its recorded amount to cover the package price.
+      // No synthetic ADM-RECHARGE row or second ledger posting is created.
+      payment = (await client.query('SELECT * FROM payments WHERE payment_ref=$1 FOR UPDATE', [payment_ref])).rows[0];
+      if (!payment || String(payment.status || '').toUpperCase() !== 'COMPLETED') throw new Error('Recorded payment not found or not COMPLETED');
+      const recorded = Number(payment.amount || 0);
+      if (recorded + 0.001 < amount) throw new Error('A recorded payment >= package price is required to reactivate a created-EXPIRED subscriber');
+      amount = recorded;
+    } else {
+      payment = (await client.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, verified_at, gateway_response, purpose, package_id)
+        VALUES($1,NULL,$2::uuid,$3,$3,$4::numeric,'BDT','COMPLETED',now(),$5::jsonb,$6,$7::uuid) RETURNING *`,
+        [payment_ref, subscriberId, method, amount, JSON.stringify({ type: 'ADMIN_CREATED_EXPIRED_RECHARGE', note: opts.note || null, extend: extendLabel, old_expiry_date: oldExpiry, new_expiry_date: newExpiry, package_price: pkgPrice }), purpose, opts.package_id || null])).rows[0];
+    }
     await client.query(`UPDATE subscribers SET status='ACTIVE', suspension_stage='NONE', walled_garden=false, suspension_source='NONE', suspension_reason=NULL, grace_until=NULL,
        expiry_date=$2, old_expiry_date=$3, due_date=$2, next_bill_date=$2, excess_amount=GREATEST(0, COALESCE(excess_amount,0)-$4), updated_at=now() WHERE id=$1`,
       [subscriberId, newExpiry, oldExpiry, amount]);
+    await enqueueEnforcement(subscriberId, provisioning, client);
     await client.query('COMMIT');
   } catch (e) { await client.query('ROLLBACK').catch(() => {}); throw e; } finally { client.release(); }
 
   // post-commit best-effort (mirrors recordPaymentAndReactivate extras; NOT inside the money transaction)
   try { await recalcSubscriberDue(subscriberId); } catch {}
   let reactivation: any = null;
-  try { reactivation = await applyProvisioningState(subscriberId, { status: 'ACTIVE', stage: SUSPENSION_STAGES.NONE, walled_garden: false, reason: `Admin recharge ${payment_ref}`, sendCoa: true, coaAction: 'COA' }); } catch (e: any) { reactivation = { ok: false, error: e.message }; }
-  try { await pool.query(`INSERT INTO wallet_transactions(subscriber_id, type, amount, reference_id, reference_type, description, metadata) VALUES($1,'CREDIT',$2,$3,'PAYMENT',$4,$5::jsonb)`,
-    [subscriberId, amount, payment_ref, 'PAYMENT', `Admin recharge via ${method}`, JSON.stringify({ payment_ref })]); } catch {}
+  try { reactivation = await applyProvisioningState(subscriberId, provisioning); } catch (e: any) { reactivation = { ok: false, error: e.message }; }
+  // When an existing gateway payment was reused, recordPaymentAndReactivate has
+  // already posted the wallet/finance/audit entries. Do not post them twice.
+  if (!opts.skipLedger) {
+    try { await pool.query(`INSERT INTO wallet_transactions(subscriber_id, type, amount, reference_id, reference_type, description, metadata) VALUES($1,'CREDIT',$2,$3,'PAYMENT',$4,$5::jsonb)`,
+      [subscriberId, amount, payment_ref, 'PAYMENT', `Admin recharge via ${method}`, JSON.stringify({ payment_ref })]); } catch {}
+  }
   try { await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'REACTIVATED','NONE',$2,$3::jsonb,'admin')`,
     [subscriberId, `Admin recharge ${payment_ref}`, JSON.stringify({ amount, payment_ref, expiry: newExpiry })]); } catch {}
-  try {
-    const cashAccR = await pool.query("SELECT id FROM finance_accounts WHERE code='1000' LIMIT 1").catch(() => ({ rows: [] as any[] }));
-    const revAccR = await pool.query("SELECT id FROM finance_accounts WHERE code='4000' LIMIT 1").catch(() => ({ rows: [] as any[] }));
-    const cashAcc = (cashAccR as any).rows[0]?.id, revAcc = (revAccR as any).rows[0]?.id;
-    if (cashAcc && revAcc) {
-      const je = await pool.query(`INSERT INTO finance_journal_entries(entry_no,entry_date,description,source_type,source_id,posted,created_by) VALUES($1,CURRENT_DATE,$2,'PAYMENT',$3,true,'system') RETURNING id`,
-        [`JE-PAY-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`, `Payment ${payment_ref}`, payment_ref]).catch(() => ({ rows: [] as any[] }));
-      const jid = (je as any).rows[0]?.id;
-      if (jid) await pool.query(`INSERT INTO finance_journal_lines(entry_id,account_id,debit,credit,memo) VALUES($1,$2,$3,0,'cash/mfs'),($1,$4,0,$3,'revenue')`, [jid, cashAcc, amount, revAcc]).catch(() => {});
-      await pool.query(`INSERT INTO finance_transactions(txn_date,txn_type,method,amount,currency,reference_type,reference_id,subscriber_id,description,created_by) VALUES(CURRENT_DATE,'COLLECTION',$1,$2,'BDT','PAYMENT',$3,$4::uuid,$5,'system')`,
-        [method, amount, payment_ref, subscriberId, `Payment ${payment_ref}`]).catch(() => {});
-    }
-  } catch {}
-  try { await auditLog({ action: 'PAYMENT_COMPLETED', entity_type: 'payment', entity_id: payment?.id || payment_ref, details: { gateway: method, amount, subscriber_id: subscriberId, admin_recharge: true, created_expired_activation: true } }); } catch {}
+  if (!opts.skipLedger) {
+    try {
+      const cashAccR = await pool.query("SELECT id FROM finance_accounts WHERE code='1000' LIMIT 1").catch(() => ({ rows: [] as any[] }));
+      const revAccR = await pool.query("SELECT id FROM finance_accounts WHERE code='4000' LIMIT 1").catch(() => ({ rows: [] as any[] }));
+      const cashAcc = (cashAccR as any).rows[0]?.id, revAcc = (revAccR as any).rows[0]?.id;
+      if (cashAcc && revAcc) {
+        const je = await pool.query(`INSERT INTO finance_journal_entries(entry_no,entry_date,description,source_type,source_id,posted,created_by) VALUES($1,CURRENT_DATE,$2,'PAYMENT',$3,true,'system') RETURNING id`,
+          [`JE-PAY-${Date.now()}-${Math.random().toString(36).slice(2, 5).toUpperCase()}`, `Payment ${payment_ref}`, payment_ref]).catch(() => ({ rows: [] as any[] }));
+        const jid = (je as any).rows[0]?.id;
+        if (jid) await pool.query(`INSERT INTO finance_journal_lines(entry_id,account_id,debit,credit,memo) VALUES($1,$2,$3,0,'cash/mfs'),($1,$4,0,$3,'revenue')`, [jid, cashAcc, amount, revAcc]).catch(() => {});
+        await pool.query(`INSERT INTO finance_transactions(txn_date,txn_type,method,amount,currency,reference_type,reference_id,subscriber_id,description,created_by) VALUES(CURRENT_DATE,'COLLECTION',$1,$2,'BDT','PAYMENT',$3,$4::uuid,$5,'system')`,
+          [method, amount, payment_ref, subscriberId, `Payment ${payment_ref}`]).catch(() => {});
+      }
+    } catch {}
+    try { await auditLog({ action: 'PAYMENT_COMPLETED', entity_type: 'payment', entity_id: payment?.id || payment_ref, details: { gateway: method, amount, subscriber_id: subscriberId, admin_recharge: true, created_expired_activation: true } }); } catch {}
+  }
 
   const fresh = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
   return { ok: true, payment, reactivation, due: 0, extend: extendLabel, old_expiry_date: oldExpiry, expiry_date: newExpiry, amount, method, subscriber: fresh };
@@ -867,7 +996,7 @@ async function allocatePaymentToOpenInvoicesTx(client: any, subscriberId: string
   return { due: Number(dueRes.rows[0]?.due || 0), remaining: +Math.max(0, remaining).toFixed(2) };
 }
 
-export async function renewSubscriber(subscriberId: string, opts: { amount?: number; method?: string; extendDays?: number; note?: string; recordPayment?: boolean; existingPaymentRef?: string; skipLedger?: boolean; skipAllocate?: boolean } = {}) {
+export async function renewSubscriber(subscriberId: string, opts: { amount?: number; method?: string; extendDays?: number; note?: string; recordPayment?: boolean; existingPaymentRef?: string; skipLedger?: boolean; skipAllocate?: boolean; purpose?: string; package_id?: string } = {}) {
   const sub = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
   if (!sub) throw new Error('Subscriber not found');
   if (String(sub.status).toUpperCase() === 'TERMINATED') throw new Error('Cannot renew a terminated subscriber');
@@ -879,12 +1008,26 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
   if (sub.package_name) {
     pkg = (await pool.query('SELECT price, validity_value, validity_unit FROM bandwidth_packages WHERE name=$1 LIMIT 1', [sub.package_name])).rows[0] || null;
   }
+  // Package purchases carry the bought package on the payment row. Use its
+  // validity (and price for the strict gate) when available, falling back to
+  // the subscriber's current package as before.
+  if (opts.package_id) {
+    const bought = (await pool.query('SELECT price, validity_value, validity_unit FROM bandwidth_packages WHERE id=$1 LIMIT 1', [opts.package_id]).catch(() => ({ rows: [] as any[] }))).rows[0];
+    if (bought) pkg = bought;
+  }
   const { newExpiry, oldExpiry, extendLabel } = await computeNewExpiry(sub, pkg, opts.extendDays);
+  const packagePurchase = String(opts.purpose || '').toUpperCase() === 'PACKAGE_PURCHASE';
+  // A reused gateway payment already exists; activateCreatedExpired must verify
+  // and reuse it instead of inserting a second synthetic COMPLETED payment.
+  const createdExpiredOpts = {
+    method: opts.method, note: opts.note, purpose: opts.purpose, package_id: opts.package_id,
+    ...(opts.existingPaymentRef ? { existingPaymentRef: opts.existingPaymentRef, amount: opts.amount, skipPaymentInsert: true, skipLedger: opts.skipLedger !== false } : {}),
+  };
 
   // Payment-gated activation for created-EXPIRED subscribers: recorded payment == package price
   // (fallback: subscriber monthly_bill when no package row exists). No amount=0 free activation.
   if (String(sub.suspension_source || '').toUpperCase() === 'CREATION') {
-    return await activateCreatedExpired(subscriberId, { method: opts.method, note: opts.note });
+    return await activateCreatedExpired(subscriberId, createdExpiredOpts);
   }
   let amount: number;
   if (opts.amount == null) {
@@ -893,6 +1036,10 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
     amount = Number(opts.amount);
   }
   if (!Number.isFinite(amount) || amount < 0) throw new Error('amount must be a non-negative number');
+  if (packagePurchase && !(amount > 0)) throw new Error('PACKAGE_PURCHASE renewal requires a recorded payment');
+  if (packagePurchase && Number(pkg?.price || 0) > 0 && amount + 0.001 < Number(pkg.price)) {
+    throw new Error('PACKAGE_PURCHASE amount must cover the purchased package price');
+  }
   if (!(amount > 0) && wasExpired) throw new Error('A recorded payment >= package price is required to reactivate an EXPIRED subscriber');
   const charged = amount > 0;
   const method = String(opts.method || 'CASH').slice(0, 40);
@@ -919,9 +1066,9 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
     } else {
       if (charged) {
         if (recordPayment) {
-          payment = (await client.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, verified_at, gateway_response)
-            VALUES($1,NULL,$2::uuid,$3,$4,$5::numeric,'BDT','COMPLETED',now(),$6::jsonb) RETURNING *`,
-            [payment_ref, subscriberId, method, method, amount, JSON.stringify({ type: 'MANUAL_RENEW', note: opts.note || null, extend: extendLabel, old_expiry_date: oldExpiry, new_expiry_date: newExpiry })]))
+          payment = (await client.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, verified_at, gateway_response, purpose, package_id)
+            VALUES($1,NULL,$2::uuid,$3,$4,$5::numeric,'BDT','COMPLETED',now(),$6::jsonb,$7,$8::uuid) RETURNING *`,
+            [payment_ref, subscriberId, method, method, amount, JSON.stringify({ type: 'MANUAL_RENEW', note: opts.note || null, extend: extendLabel, old_expiry_date: oldExpiry, new_expiry_date: newExpiry }), String(opts.purpose || 'INVOICE_PAYMENT').toUpperCase(), opts.package_id || null]))
             .rows[0];
         } else {
           payment = (await client.query(`SELECT * FROM payments WHERE payment_ref=$1`, [payment_ref])).rows[0] || null;
@@ -939,20 +1086,28 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
       }
       // A charge that clears the due (or a validity renewal of an EXPIRED subscriber)
       // restores ACTIVE; a manual suspension on a due-free subscriber is preserved.
-      activated = due <= 0 && (charged || String(locked.status).toUpperCase() === 'EXPIRED');
+      // PACKAGE_PURCHASE is prepaid entitlement: it may activate even when
+      // unrelated invoice dues remain (collections behaviour is unchanged).
+      // A paid validity purchase restores expired/blocked access, but it must
+      // not silently undo an explicit staff/manual suspension.
+      const manuallySuspended = String(locked.suspension_source || '').toUpperCase() === 'MANUAL'
+        || /^manual/i.test(String(locked.suspension_reason || ''));
+      activated = (due <= 0 || packagePurchase) && (charged || String(locked.status).toUpperCase() === 'EXPIRED') && !manuallySuspended;
+      const provisioning = { status: 'ACTIVE', stage: SUSPENSION_STAGES.NONE, walled_garden: false, reason: `Admin renewal ${payment_ref}`, sendCoa: true, coaAction: 'COA' as const };
       await client.query(
         `UPDATE subscribers SET expiry_date=$2, old_expiry_date=$3, current_due=$4::numeric,
-           due_date=CASE WHEN $5::boolean THEN $2::date ELSE due_date END,
+           due_date=CASE WHEN $5::boolean AND NOT $6::boolean THEN $2::date ELSE due_date END,
            status=CASE WHEN $5::boolean THEN 'ACTIVE' ELSE status END,
            suspension_stage=CASE WHEN $5::boolean THEN 'NONE' ELSE suspension_stage END,
            walled_garden=CASE WHEN $5::boolean THEN false ELSE walled_garden END,
            suspension_source=CASE WHEN $5::boolean THEN 'NONE' ELSE suspension_source END,
            suspension_reason=CASE WHEN $5::boolean THEN NULL ELSE suspension_reason END,
            grace_until=CASE WHEN $5::boolean THEN NULL ELSE grace_until END,
-           excess_amount=CASE WHEN $5::boolean THEN 0 ELSE excess_amount END,
+           excess_amount=CASE WHEN $5::boolean AND NOT $6::boolean THEN 0 ELSE excess_amount END,
            updated_at=now() WHERE id=$1`,
-        [subscriberId, newExpiry, oldExpiry, due, activated],
+        [subscriberId, newExpiry, oldExpiry, due, activated, packagePurchase],
       );
+      if (activated) await enqueueEnforcement(subscriberId, provisioning, client);
       await client.query('COMMIT');
     }
   } catch (e) {
@@ -961,7 +1116,7 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
   } finally {
     client.release();
   }
-  if (raceCreatedExpired) return await activateCreatedExpired(subscriberId, { method: opts.method, note: opts.note });
+  if (raceCreatedExpired) return await activateCreatedExpired(subscriberId, createdExpiredOpts);
 
   // Post-commit provisioning (external calls; never inside the money transaction).
   let reactivation: any = null;
@@ -1256,6 +1411,67 @@ async function runFup() {
   } catch (e:any) { console.error('[FUP] sweep failed', e.message); }
 }
 
+/** Retry durable provisioning work after router/RADIUS/CoA outages. A worker
+ *  crash mid-flight leaves a PROCESSING row; the recovery query puts stale
+ *  claims back into the retry queue. Never throws to the scheduler. */
+export async function processEnforcementOutbox() {
+  const summary = { ok: true, claimed: 0, done: 0, retried: 0, failed: 0 };
+  try {
+    // A worker crash must consume an attempt too, otherwise a repeatedly
+    // re-claimed PROCESSING row would bypass the 8-attempt terminal limit.
+    await pool.query(`UPDATE enforcement_outbox SET status='FAILED', attempts=LEAST(attempts+1,8),
+      last_error=COALESCE(last_error,'worker restarted before completion'),
+      next_attempt_at=now() + interval '30 seconds', updated_at=now()
+      WHERE status='PROCESSING' AND updated_at < now() - interval '2 minutes' AND attempts < 8`).catch(() => {});
+    let rows: any[] = [];
+    try {
+      const claimed = await pool.query(`WITH due AS (
+          SELECT id FROM enforcement_outbox
+          WHERE status IN ('PENDING','FAILED') AND attempts < 8 AND next_attempt_at <= now()
+          ORDER BY created_at ASC LIMIT 25 FOR UPDATE SKIP LOCKED
+        )
+        UPDATE enforcement_outbox o SET status='PROCESSING', updated_at=now()
+        FROM due WHERE o.id=due.id
+        RETURNING o.id, o.subscriber_id, o.payload, o.attempts`);
+      rows = claimed.rows || [];
+    } catch {
+      // Older PostgreSQL/compatible pools without SKIP LOCKED: still make progress.
+      const claimed = await pool.query(`UPDATE enforcement_outbox SET status='PROCESSING', updated_at=now()
+        WHERE id IN (SELECT id FROM enforcement_outbox
+          WHERE status IN ('PENDING','FAILED') AND attempts < 8 AND next_attempt_at <= now()
+          ORDER BY created_at ASC LIMIT 25)
+        RETURNING id, subscriber_id, payload, attempts`);
+      rows = claimed.rows || [];
+    }
+    summary.claimed = rows.length;
+    for (const row of rows) {
+      try {
+        const applied = await applyProvisioningState(String(row.subscriber_id), (row.payload && typeof row.payload === 'object' ? row.payload : {}) as AnyObj);
+        // applyProvisioningState reports ok:true even when a nested router/RADIUS
+        // step failed; treat those as retryable instead of marking DONE.
+        const failed = Object.entries(applied?.results || {})
+          .filter(([, v]: any) => v && v.ok === false && !v.skipped)
+          .map(([k]) => k);
+        if (failed.length) throw new Error(`Enforcement failed: ${failed.join(', ')}`);
+        await pool.query(`UPDATE enforcement_outbox SET status='DONE', last_error=NULL, updated_at=now() WHERE id=$1`, [row.id]);
+        summary.done++;
+      } catch (e: any) {
+        const attempts = Number(row.attempts || 0) + 1;
+        const terminal = attempts >= 8;
+        const backoff = Math.min(30 * Math.pow(2, attempts - 1), 1800); // 30s .. 30m
+        const error = `${terminal ? '[terminal] ' : ''}${String(e?.message || e).slice(0, 2000)}`;
+        await pool.query(`UPDATE enforcement_outbox SET status='FAILED', attempts=$2, last_error=$3,
+          next_attempt_at=now()+($4::int * interval '1 second'), updated_at=now() WHERE id=$1`,
+          [row.id, attempts, error, backoff]).catch(() => {});
+        if (terminal) summary.failed++; else summary.retried++;
+      }
+    }
+    return summary;
+  } catch (e: any) {
+    return { ...summary, ok: false, error: String(e?.message || e) };
+  }
+}
+
 export function startBillingScheduler() {
   // BullMQ-backed recurring jobs when Redis is available, with DB-locked setInterval fallback.
   const run = async () => {
@@ -1280,7 +1496,18 @@ export function startBillingScheduler() {
     } catch (e:any) { console.error('[MessagingScheduler] error', e.message); }
   };
 
+  const runOutbox = async () => {
+    try {
+      await withSchedulerRun('enforcement-outbox-worker', async () => {
+        const got = await tryAcquireSchedulerLock('enforcement-outbox-worker', 55_000).catch(() => false);
+        if (!got) return { skipped: 'lock' };
+        return await processEnforcementOutbox();
+      });
+    } catch (e:any) { console.error('[EnforcementOutbox] worker failed', e.message); }
+  };
+
   registerQueueHandler('billing', 'due-policy-sweep', run);
+  registerQueueHandler('billing', 'enforcement-outbox', runOutbox);
   registerQueueHandler('billing', 'fup-enforcement-sweep', runFup);
   registerQueueHandler('billing', 'reactivate-subscriber', async (job) => {
     const subId = String(job.data?.subscriberId || '');
@@ -1300,12 +1527,15 @@ export function startBillingScheduler() {
   registerQueueHandler('messaging', 'messaging-sweep', runMsg);
 
   if (isQueuesActive()) {
+    void scheduleRecurringJob('billing', 'sched:enforcement-outbox', 'enforcement-outbox', 30 * 1000);
     void scheduleRecurringJob('billing', 'sched:due-policy-sweep', 'due-policy-sweep', 60 * 1000);
     void scheduleRecurringJob('billing', 'sched:fup-sweep', 'fup-enforcement-sweep', 30 * 60 * 1000);
     void scheduleRecurringJob('messaging', 'sched:messaging-sweep', 'messaging-sweep', 10 * 60 * 1000);
     return;
   }
 
+  setTimeout(runOutbox, 10000);
+  setInterval(runOutbox, 30 * 1000); // retry failed provisioning quickly
   setTimeout(run, 5000);
   setInterval(run, 60 * 1000); // every minute for timely grace/suspension evaluation
   setTimeout(runMsg, 15000);
@@ -1372,6 +1602,9 @@ export async function ingestMfsSmsEvent(input: { gateway?: string; sender?: stri
           payer_number: ev.payer_number || undefined,
           raw: { sms_event_id: ev.id, message },
           status: 'COMPLETED',
+          // Trust the stored checkout row, not the SMS text.
+          purpose: pending.purpose || pending.gateway_response?.purpose || undefined,
+          package_id: pending.package_id || pending.gateway_response?.package_id || undefined,
         });
       }
     } else {

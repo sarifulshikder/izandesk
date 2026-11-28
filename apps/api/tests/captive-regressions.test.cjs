@@ -127,10 +127,14 @@ async function ticketTests() {
 }
 
 async function checkoutTests() {
+  const previousSandboxFlag = process.env.PORTAL_SANDBOX_CHECKOUT;
+  process.env.PORTAL_SANDBOX_CHECKOUT = '1';
   const fake = makeDb([
     { when: (c) => has(c, 'FROM invoices WHERE id=$1 AND subscriber_id=$2'), return: (c) => c.params[0] === 'inv-1' ? { rows: [{ id: 'inv-1', subscriber_id: 'sub-1', due_amount: '500.00', total_amount: '500.00' }] } : { rows: [] } },
     { when: (c) => has(c, 'FROM subscribers WHERE id=$1'), return: { rows: [SUB_ROW] } },
-    { when: (c) => has(c, 'FROM payment_gateway_configs'), return: { rows: [] } },
+    // Public checkout fails closed unless the gateway is explicitly enabled;
+    // SANDBOX mode is what makes the simulated URL available in this regression.
+    { when: (c) => has(c, 'FROM payment_gateway_configs'), return: { rows: [{ gateway: 'bkash', enabled: true, mode: 'SANDBOX', config: {}, credentials: {} }] } },
     { when: (c) => has(c, 'INSERT INTO payments'), return: (c) => ({ rows: [{ id: 'pay-1', payment_ref: c.params[0], amount: c.params[5], status: 'PENDING' }] }) },
   ]);
   try {
@@ -144,7 +148,11 @@ async function checkoutTests() {
     let notFound = false;
     try { await portalPayments.createCheckoutForSubscriber('sub-1', { gateway: 'bkash', invoice_id: 'inv-other' }); } catch (e) { notFound = e.status === 404; }
     check('captive: invoice of another subscriber rejected with 404', notFound);
-  } finally { fake.restore(); }
+  } finally {
+    fake.restore();
+    if (previousSandboxFlag === undefined) delete process.env.PORTAL_SANDBOX_CHECKOUT;
+    else process.env.PORTAL_SANDBOX_CHECKOUT = previousSandboxFlag;
+  }
 }
 
 (async () => {

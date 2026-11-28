@@ -71,6 +71,7 @@ import { verifyPurposeToken, verifyStaffToken } from './security/staff-tokens';
 import { hasNetworkRead } from './routes/helpers';
 import { createAuthSecurityRouter } from './routes/auth-security';
 import { startBillingScheduler } from './integrations/billing';
+import { startBillingHealthMonitor } from './integrations/billing-health';
 import { startBackupScheduler } from './routes/system';
 import { startReportScheduler } from './integrations/report-scheduler';
 import { startNetworkCollector } from './integrations/network-collector';
@@ -743,6 +744,7 @@ async function bootstrap() {
 
     await initQueues();
     startBillingScheduler();
+    startBillingHealthMonitor();
     startBackupScheduler();
     startReportScheduler();
     startNetworkCollector();

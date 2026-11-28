@@ -199,7 +199,7 @@ async function reactivateGateTest() {
 /* ---------- admin renewal (non created-EXPIRED) is all-or-nothing ---------- */
 async function renewTransactionalTest() {
   const expiredSub = {
-    id: 'sub-x', full_name: 'Normal Expired', status: 'EXPIRED', suspension_source: 'MANUAL', suspension_reason: 'Expired',
+    id: 'sub-x', full_name: 'Normal Expired', status: 'EXPIRED', suspension_source: 'POLICY', suspension_reason: 'Expired',
     package_name: 'P500', monthly_bill: 500, expiry_date: '2020-01-01', price_override: null,
     provisioning_mode: 'RADIUS', router_id: null,
   };

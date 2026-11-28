@@ -3,7 +3,7 @@ import { pool } from '../db';
 import { getSetting } from './settings';
 import { nextTicketNo } from '../utils/ticket-no';
 import { auditLog } from './audit';
-import { createCheckoutForSubscriber, listEnabledGateways } from './portal-payments';
+import { createCheckoutForSubscriber, describePortalState, getPaymentStatusForSubscriber, listActivePackages, listEnabledGateways } from './portal-payments';
 import { ValidationError } from '../routes/helpers';
 
 /**
@@ -54,7 +54,7 @@ export function callerIp(req: any): string {
   return socket || fwd;
 }
 
-const PUBLIC_SUB = `id, client_code, full_name, username, phone, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, status, suspension_stage, walled_garden, address, provisioning_mode`;
+const PUBLIC_SUB = `id, client_code, full_name, username, phone, package_name, bandwidth_mbps, monthly_bill, current_due, expiry_date, due_date, grace_until, status, suspension_stage, walled_garden, address, provisioning_mode`;
 
 /** Find the subscriber whose live session carries this IP (framed IP as seen
  *  by the router after masquerade, or the LAN/session IP we recorded). */
@@ -100,13 +100,15 @@ export async function buildCaptiveView(sub: any) {
     `SELECT id, invoice_number, total_amount, paid_amount, due_amount, status, due_date, issue_date FROM invoices
      WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE')
      ORDER BY due_date ASC NULLS LAST, issue_date ASC LIMIT 1`, [sub.id])).rows[0] || null;
-  const expired = String(sub.status || '').toUpperCase() === 'EXPIRED'
-    || (sub.expiry_date && new Date(sub.expiry_date).getTime() < Date.now());
+  const state = await describePortalState(sub);
+  const expired = state.normalized_state === 'EXPIRED' || state.normalized_state === 'GRACE' || state.normalized_state === 'SUSPENDED';
   return {
-    subscriber: { ...sub, password: undefined, portal_password: undefined },
+    subscriber: { ...sub, ...state, password: undefined, portal_password: undefined },
     package: pkg,
     due_invoice: inv,
     expired: !!expired,
+    normalized_state: state.normalized_state,
+    days_remaining: state.days_remaining,
     restricted: expired || String(sub.suspension_stage || '') === 'WALLED_GARDEN' || Number(sub.current_due || 0) > 0,
   };
 }
@@ -136,6 +138,16 @@ export async function getGateways() {
   return listEnabledGateways();
 }
 
+/** Active plans for the expiry notice page (public, no credentials/secrets). */
+export async function listPackages() {
+  return listActivePackages();
+}
+
+/** Status of one payment, scoped to the short-lived captive token holder. */
+export async function captivePaymentStatus(subId: string, ref: string) {
+  return getPaymentStatusForSubscriber(subId, ref);
+}
+
 /** Create a support ticket from the captive page (no portal login needed). */
 export async function createCaptiveTicket(input: { subscriberId: string; subject: string; description?: string; priority?: string; category?: string; phone?: string; ip?: string }) {
   const sub = (await pool.query('SELECT id, client_code, full_name, username, phone, address, latitude, longitude, reseller_id FROM subscribers WHERE id=$1', [input.subscriberId])).rows[0];
@@ -160,4 +172,15 @@ export async function createCaptiveTicket(input: { subscriberId: string; subject
 /** Checkout from the captive page, authorized by a captive token. */
 export async function captiveCheckout(subId: string, b: any) {
   return createCheckoutForSubscriber(subId, b);
+}
+
+/** Package purchase from the expiry page. The package id comes from the URL;
+ *  amount/validity are resolved server-side from the active package row. */
+export async function captivePackageCheckout(subId: string, packageId: string, b: any) {
+  return createCheckoutForSubscriber(subId, {
+    ...b,
+    purpose: 'PACKAGE_PURCHASE',
+    package_id: packageId,
+    method: b.method || 'captive',
+  });
 }

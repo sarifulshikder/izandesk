@@ -402,7 +402,10 @@ router.get('/payments/bkash/callback', asyncHandler(async (req, res) => {
       raw: { bkash_execute: exec, callback_query: req.query },
       payment_ref: pr.payment_ref,
       currency: exec.currency || pr.currency || 'BDT',
-      status: 'COMPLETED'
+      status: 'COMPLETED',
+      // Purpose/package_id come from the checkout row, never the provider payload.
+      purpose: pr.purpose || pr.gateway_response?.purpose || undefined,
+      package_id: pr.package_id || pr.gateway_response?.package_id || undefined
     });
 
     await pool.query(`UPDATE payments SET gateway_response = COALESCE(gateway_response,'{}'::jsonb) || $2::jsonb, updated_at=now() WHERE id=$1`,
@@ -446,7 +449,9 @@ router.post('/payments/bkash/execute', asyncHandler(async (req, res) => {
     const result = await recordPaymentAndReactivate({
       gateway: 'bkash', amount, invoice_id: pr.invoice_id || undefined, subscriber_id: pr.subscriber_id,
       trx_id: trxId || undefined, method: pr.method || 'portal', payer_number: exec.customerMsisdn || exec.payerAccount || undefined,
-      raw: { bkash_execute: exec, manual: true }, payment_ref: pr.payment_ref, currency: exec.currency || pr.currency || 'BDT', status: 'COMPLETED'
+      raw: { bkash_execute: exec, manual: true }, payment_ref: pr.payment_ref, currency: exec.currency || pr.currency || 'BDT', status: 'COMPLETED',
+      purpose: pr.purpose || pr.gateway_response?.purpose || undefined,
+      package_id: pr.package_id || pr.gateway_response?.package_id || undefined
     });
     await pool.query(`UPDATE payments SET gateway_response = COALESCE(gateway_response,'{}'::jsonb) || $2::jsonb, updated_at=now() WHERE id=$1`, [pr.id, JSON.stringify({ bkash_execute: exec })]);
     return res.json({ ok: true, executed: true, paymentID, trxId, exec, result });
@@ -516,9 +521,10 @@ router.post('/payments/checkout', asyncHandler(async (req, res) => {
     checkout = { ok: true, gateway, paymentUrl: `https://sandbox-payments.izandesk.local/${gateway}/checkout?payment_ref=${encodeURIComponent(payment_ref)}&amount=${amount}`, simulated: true };
   }
 
-  const p = await pool.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, checkout_url, client_secret, gateway_response)
-    VALUES($1,$2,$3,$4,$5,$6,$7,'PENDING',$8,$9,$10::jsonb) RETURNING *`,
-    [payment_ref, invoice?.id || null, subscriber?.id || null, gateway, b.method || null, amount, b.currency || 'BDT', checkout.paymentUrl || checkout.approvalUrl || null, checkout.clientSecret || null, JSON.stringify(checkout)]);
+  const p = await pool.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, checkout_url, client_secret, gateway_response, purpose, package_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'PENDING',$8,$9,$10::jsonb,COALESCE($11::text,'INVOICE_PAYMENT'),NULLIF($12::text,'')::uuid) RETURNING *`,
+    [payment_ref, invoice?.id || null, subscriber?.id || null, gateway, b.method || null, amount, b.currency || 'BDT', checkout.paymentUrl || checkout.approvalUrl || null, checkout.clientSecret || null, JSON.stringify(checkout),
+     b.purpose || null, b.package_id || null]);
 
   res.json({ ok: true, payment: p.rows[0], checkout });
 }));
@@ -532,7 +538,7 @@ router.post('/payments/:paymentRef/confirm', asyncHandler(async (req, res) => {
   // A client-supplied amount here used to be a money-minting primitive.
   const amount = Number(pr.amount || 0);
   if (!(amount > 0)) return res.status(400).json({ message: 'Payment has no valid amount' });
-  const result = await recordPaymentAndReactivate({ gateway: pr.gateway, amount, invoice_id: pr.invoice_id, subscriber_id: pr.subscriber_id, trx_id: b.trx_id || `SIM-${Date.now()}`, method: b.method || pr.method || 'manual', payer_number: b.payer_number, raw: b, payment_ref: pr.payment_ref, currency: pr.currency, status: 'COMPLETED' });
+  const result = await recordPaymentAndReactivate({ gateway: pr.gateway, amount, invoice_id: pr.invoice_id, subscriber_id: pr.subscriber_id, trx_id: b.trx_id || `SIM-${Date.now()}`, method: b.method || pr.method || 'manual', payer_number: b.payer_number, raw: b, payment_ref: pr.payment_ref, currency: pr.currency, status: 'COMPLETED', purpose: pr.purpose || pr.gateway_response?.purpose || undefined, package_id: pr.package_id || pr.gateway_response?.package_id || undefined });
   await auditLog({ ...reqActor(req), action: 'PAYMENT_MANUAL_CONFIRM', entity_type: 'payment', entity_id: String(pr.id), details: { payment_ref: pr.payment_ref, amount, gateway: pr.gateway } });
   res.json(result);
 }));
@@ -561,13 +567,22 @@ function verifyWebhookSignature(gateway: string, req: any, cfg: any) {
   const h = crypto.createHmac('sha256', String(secret)).update(raw).digest('hex');
   const candidate = sigHeader.replace(/^sha256=/i, '').trim();
   if (timingSafeEq(candidate, h)) return { ok: true, mode: 'hmac-sha256' };
-  // Stripe-like t=,v1= support best-effort
-  const m = sigHeader.match(/v1=([a-f0-9]+)/i);
-  if (m) {
-    const t = (sigHeader.match(/t=([0-9]+)/i) || [])[1] || '';
-    const signed = `${t}.${raw}`;
-    const h2 = crypto.createHmac('sha256', String(secret)).update(signed).digest('hex');
-    if (timingSafeEq(m[1], h2)) return { ok: true, mode: 'stripe-v1' };
+  // Stripe-style t=,v1= signatures must carry a fresh timestamp: without a
+  // tolerance a captured webhook could be replayed forever. Multiple v1 values
+  // are supported for key rotation; any valid signature is enough.
+  const v1s: string[] = [];
+  const v1Re = /(?:^|,\s*)v1=([a-f0-9]+)/gi;
+  let v1m: RegExpExecArray | null;
+  while ((v1m = v1Re.exec(sigHeader))) v1s.push(v1m[1]);
+  if (v1s.length) {
+    const t = (sigHeader.match(/(?:^|,\s*)t=([0-9]+)/i) || [])[1] || '';
+    if (!t) return { ok: false, error: 'missing webhook timestamp' };
+    const ts = Number(t);
+    if (!Number.isFinite(ts) || Math.abs(Math.floor(Date.now() / 1000) - ts) > 300) {
+      return { ok: false, error: 'stale webhook timestamp' };
+    }
+    const h2 = crypto.createHmac('sha256', String(secret)).update(`${t}.${raw}`).digest('hex');
+    if (v1s.some(v => timingSafeEq(v.toLowerCase(), h2))) return { ok: true, mode: 'stripe-v1' };
   }
   return { ok: false, error: 'invalid webhook signature' };
 }
@@ -582,7 +597,7 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
 
   const sig = verifyWebhookSignature(gateway, req, cfg);
   if (!sig.ok) {
-    await pool.query(`INSERT INTO payment_webhook_events(gateway,event_id,payload,processed,processed_at,result) VALUES($1,$2,$3::jsonb,false,now(),$4::jsonb)`,
+    await pool.query(`INSERT INTO payment_webhook_events(gateway,event_id,payload,processed,processed_at,result) VALUES($1,$2,$3::jsonb,false,NULL,$4::jsonb)`,
       [gateway, payload.event_id || payload.id || null, JSON.stringify(payload), JSON.stringify({ ok: false, verified: false, reason: 'signature_verification_failed', sig })]);
     return res.status(401).json({ ok: false, verified: false, message: sig.error || 'Invalid webhook signature' });
   }
@@ -603,14 +618,13 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
   }
 
   // A valid HMAC/provider parse is not enough: bind every accepted event to a
-  // PENDING payment created by this system and cap the amount at checkout.
+  // payment created by this system and cap the amount at checkout. COMPLETED
+  // rows are also accepted so a retry after a partial failure (money recorded,
+  // event not marked processed) can finish; all side effects are idempotent.
   let pendingPayment: any = null;
   if (verification.verified) {
     const pref = String(verification.paymentRef || verification.payment_ref || payload.paymentRef || payload.payment_ref || '').trim();
-    // COMPLETED is allowed here only for a reseller wallet recharge so an already
-    // executed provider callback can still deliver the verified event; downstream
-    // crediting is idempotent on the wallet ledger (not on payment status).
-    const pending = pref ? (await pool.query("SELECT * FROM payments WHERE payment_ref=$1 AND (status IN ('PENDING','VERIFYING') OR (status='COMPLETED' AND COALESCE(gateway_response->>'purpose','')='RESELLER_WALLET_RECHARGE'))", [pref])).rows[0] : null;
+    const pending = pref ? (await pool.query('SELECT * FROM payments WHERE payment_ref=$1 AND status IN (\'PENDING\',\'VERIFYING\',\'COMPLETED\')', [pref])).rows[0] : null;
     pendingPayment = pending;
     const amt = Number(verification.amount ?? payload.amount ?? 0);
     if (!pending || !(amt > 0) || amt > Number(pending.amount || 0) + 0.01) {
@@ -629,41 +643,70 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
     }
   }
 
+  // Purpose/package_id are read ONLY from the bound checkout row below. A
+  // differing value in the provider payload/plugin output is deliberately
+  // ignored so clients cannot turn an invoice payment into a package purchase.
+  const trustedPurpose = pendingPayment ? String(pendingPayment.purpose || pendingPayment.gateway_response?.purpose || 'INVOICE_PAYMENT').toUpperCase() : 'INVOICE_PAYMENT';
+  const trustedPackageId = pendingPayment ? (pendingPayment.package_id || pendingPayment.gateway_response?.package_id || null) : null;
+
   const eventId = verification.eventId || payload.event_id || payload.id || verification.trxId || payload.trxId || payload.trx_id || null;
   const paymentRef = verification.paymentRef || payload.paymentRef || payload.payment_ref || null;
   const trxId = verification.trxId || payload.trxId || payload.trx_id || null;
   const dedupeKey = [gateway, eventId || '', trxId || '', paymentRef || ''].join('|');
-  if (dedupeKey.replace(/\|/g, '').length > gateway.length) {
-    const dup = await pool.query('SELECT id, result, processed FROM payment_webhook_events WHERE dedupe_key=$1 LIMIT 1', [dedupeKey]);
-    if (dup.rows[0]) {
-      return res.json({ ok: true, verified: !!verification.verified, processed: !!dup.rows[0].processed, duplicate: true, event: dup.rows[0] });
+  const hasDedupeKey = dedupeKey.replace(/\|/g, '').length > gateway.length;
+  let eventRow: any = null;
+  if (hasDedupeKey) {
+    const dup = await pool.query('SELECT * FROM payment_webhook_events WHERE dedupe_key=$1 LIMIT 1', [dedupeKey]);
+    if (dup.rows[0]?.processed) {
+      return res.json({ ok: true, verified: !!verification.verified, processed: true, duplicate: true, event: dup.rows[0] });
     }
+    // An unprocessed event is a retried/failed delivery: reuse it and try again.
+    if (dup.rows[0]) eventRow = dup.rows[0];
   }
 
-  let eventRow: any = null;
-  try {
-    const ins = await pool.query(`INSERT INTO payment_webhook_events(gateway,event_id,dedupe_key,payload,processed,processed_at,result) VALUES($1,$2,$3,$4::jsonb,$5,now(),$6::jsonb) RETURNING *`,
-      [gateway, eventId, (dedupeKey.replace(/\|/g,'').length > gateway.length ? dedupeKey : null), JSON.stringify(payload), verification.verified === true, JSON.stringify(verification)]);
-    eventRow = ins.rows[0];
-  } catch (e:any) {
-    // unique constraint race -> treat as duplicate
-    return res.json({ ok: true, verified: !!verification.verified, processed: false, duplicate: true });
+  if (!eventRow) {
+    try {
+      const ins = await pool.query(`INSERT INTO payment_webhook_events(gateway,event_id,dedupe_key,payload,processed,processed_at,result) VALUES($1,$2,$3,$4::jsonb,false,NULL,$5::jsonb) RETURNING *`,
+        [gateway, eventId, (hasDedupeKey ? dedupeKey : null), JSON.stringify(payload), JSON.stringify(verification)]);
+      eventRow = ins.rows[0];
+    } catch (e:any) {
+      // unique constraint race -> re-read; only a processed row is a duplicate.
+      const raced = hasDedupeKey ? (await pool.query('SELECT * FROM payment_webhook_events WHERE dedupe_key=$1 LIMIT 1', [dedupeKey])).rows[0] : null;
+      if (!raced || raced.processed) return res.json({ ok: true, verified: !!verification.verified, processed: !!raced?.processed, duplicate: true });
+      eventRow = raced;
+    }
   }
 
   if (verification.verified && (String(verification.status).toUpperCase() === 'COMPLETED' || String(verification.status).toUpperCase() === 'PAID' || String(verification.status).toUpperCase() === 'SUCCESS')) {
     const amount = Number(verification.amount || payload.amount || 0);
-    // Reseller self-service wallet recharge: credit reseller, NOT subscriber billing.
-    if (pendingPayment && pendingPayment.gateway_response?.purpose === 'RESELLER_WALLET_RECHARGE') {
-      const result = amount > 0
-        ? await creditResellerWalletFromGatewayPayment({ paymentRef: pendingPayment.payment_ref, trxId: trxId || undefined, raw: payload })
-        : { ok: false, message: 'No amount in webhook' };
+    let result: any = null;
+    try {
+      // Reseller self-service wallet recharge: credit reseller, NOT subscriber billing.
+      if (trustedPurpose === 'RESELLER_WALLET_RECHARGE') {
+        result = amount > 0
+          ? await creditResellerWalletFromGatewayPayment({ paymentRef: pendingPayment.payment_ref, trxId: trxId || undefined, raw: payload })
+          : { ok: false, message: 'No amount in webhook' };
+      } else {
+        const invoiceId = verification.invoiceId || payload.invoiceId || payload.invoice_id;
+        result = amount > 0 ? await recordPaymentAndReactivate({
+          gateway, amount, invoice_id: invoiceId, subscriber_id: verification.subscriber_id || payload.subscriber_id,
+          trx_id: trxId || undefined, method: payload.method || 'webhook',
+          payer_number: payload.payer || payload.msisdn || verification.payer?.msisdn,
+          raw: payload, payment_ref: paymentRef || undefined, currency: verification.currency || payload.currency || 'BDT',
+          status: 'COMPLETED', dedupe_key: dedupeKey || undefined,
+          purpose: trustedPurpose, package_id: trustedPackageId || undefined,
+        }) : { ok: false, message: 'No amount in webhook' };
+      }
+      if (!result?.ok) throw new Error(result?.message || result?.reason || 'Payment processing failed');
       await pool.query('UPDATE payment_webhook_events SET processed=true, processed_at=now(), result=$2::jsonb WHERE id=$1', [eventRow?.id, JSON.stringify({ verification, result })]);
       return res.json({ ok: true, verified: true, processed: true, result });
+    } catch (e: any) {
+      // Keep processed=false and persist the error, then return 500 so the
+      // provider retries. asyncHandler forwards the thrown status to Express.
+      await pool.query('UPDATE payment_webhook_events SET processed=false, processed_at=NULL, result=$2::jsonb WHERE id=$1',
+        [eventRow?.id, JSON.stringify({ verification, result, error: String(e?.message || e) })]).catch(() => {});
+      throw Object.assign(new Error('Webhook processing failed'), { status: 500 });
     }
-    const invoiceId = verification.invoiceId || payload.invoiceId || payload.invoice_id;
-    const result = amount > 0 ? await recordPaymentAndReactivate({ gateway, amount, invoice_id: invoiceId, subscriber_id: verification.subscriber_id || payload.subscriber_id, trx_id: trxId || undefined, method: payload.method || 'webhook', payer_number: payload.payer || payload.msisdn || verification.payer?.msisdn, raw: payload, payment_ref: paymentRef || undefined, currency: verification.currency || payload.currency || 'BDT', status: 'COMPLETED', dedupe_key: dedupeKey }) : { ok:false, message:'No amount in webhook' };
-    await pool.query('UPDATE payment_webhook_events SET processed=true, processed_at=now(), result=$2::jsonb WHERE id=$1', [eventRow?.id, JSON.stringify({ verification, result })]);
-    return res.json({ ok: true, verified: true, processed: true, result });
   }
   res.json({ ok: true, verified: !!verification.verified, processed: false, verification });
 }));

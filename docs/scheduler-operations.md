@@ -6,7 +6,9 @@ IzanDesk schedulers run **inside the API process** (no OS cron). Keep the API su
 
 | Job | Default | Lock/claim | Notes |
 |---|---:|---|---|
-| `billing-due-policy-sweep` | 60s | DB lock `billing-due-policy-sweep` | Overdue invoices + due policies |
+| `billing-due-policy-sweep` | 60s | DB lock `billing-due-policy-sweep` | Overdue invoices + due policies; also queues enforcement retries in `enforcement_outbox` |
+| `billing-health-sweep` | 2 min | `withSchedulerRun` + NOC alert dedupe | Detects stuck payments, unprocessed verified webhooks, enforcement-outbox backlog, and paid-but-not-active subscribers |
+| `enforcement-outbox-worker` | 30s | DB lock `enforcement-outbox-worker` + `FOR UPDATE SKIP LOCKED` | Retries RADIUS/PPP/CoA provisioning committed with entitlement changes; 8 attempts, 30s→30m backoff, terminal `FAILED` state |
 | `messaging-sweep` | 10 min | DB lock `messaging-sweep` | Messaging summaries/reminders |
 | `fup-enforcement-sweep` | 30 min | DB lock `fup-enforcement-sweep` | FUP apply/clear |
 | `report-scheduler` | 10 min tick | Atomic `last_run_at` claim per schedule | Uses `report_schedules.interval_minutes`, legacy cron fallback |
@@ -20,6 +22,7 @@ IzanDesk schedulers run **inside the API process** (no OS cron). Keep the API su
 - `GET /api/metrics`: includes `izandesk_scheduler_runs_24h`, `izandesk_scheduler_errors_24h`, `izandesk_scheduler_last_success_timestamp_seconds{job,status}`.
 - `scheduler_job_runs` table stores run history (`status`, `duration_ms`, `details`, `error`).
 - System Health UI shows scheduler status card.
+- `GET /api/system/billing-health` (admin): counts and samples for stuck payments, unprocessed verified webhooks, enforcement backlog, and paid-but-not-active subscribers.
 
 ## Reliability recommendations
 
