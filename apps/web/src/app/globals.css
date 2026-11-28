@@ -2656,7 +2656,7 @@ h1.text-2xl.font-black svg, h1.text-2xl.font-bold svg {
   .page-title-icon { width: 34px; height: 34px; border-radius: 9px; }
   .page-actions { width: 100%; }
   .page-actions .btn { flex: 1 1 auto; }
-  .page-body { padding: .85rem !important; }
+  .page-body { padding: .85rem !important; padding-bottom: calc(6rem + env(safe-area-inset-bottom)) !important; }
   .card-body, .card-header, .card-footer { padding: .85rem !important; }
   .card { max-width: 100%; min-width: 0; }
   .card-body, .table td { overflow-wrap: anywhere; }
