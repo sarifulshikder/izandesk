@@ -73,6 +73,10 @@ services:
       GENIEACS_URL: ${GENIEACS_URL:-}
       GENIEACS_USER: ${GENIEACS_USER:-}
       GENIEACS_PASS: ${GENIEACS_PASS:-}
+    # Lets the container reach host-published services (e.g. a standalone
+    # GenieACS on 7557) when they are not on this compose project's network.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ..:/app
       - api_node_modules:/app/node_modules

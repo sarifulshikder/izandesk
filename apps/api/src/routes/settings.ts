@@ -73,7 +73,15 @@ router.put('/:category', asyncHandler(async (req, res) => {
   for (const k of Object.keys(values)) if (!allowed.has(k)) throw new ValidationError(`Unknown field for ${cat}: ${k}`);
   try {
     const result = await setCategory(cat, values, reqActor(req));
-    res.json({ ok: true, ...result });
+    // setCategory returns decrypted values; never echo secrets back to the client.
+    // Match GET /settings and AI settings: secret fields become { masked, has_value }.
+    const masked = maskedView(await getAllSettings());
+    const safeValues: Record<string, any> = {};
+    for (const def of SETTINGS_SCHEMA.filter((d) => d.category === cat)) {
+      const field = def.key.slice(cat.length + 1);
+      if (field in values) safeValues[field] = masked[def.key];
+    }
+    res.json({ ok: true, category: cat, updated: result.updated, values: safeValues });
   } catch (e: any) {
     throw new ValidationError(e.message || 'Invalid setting value');
   }
