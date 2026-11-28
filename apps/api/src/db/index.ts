@@ -1133,7 +1133,7 @@ export async function initDb() {
         ('invoice_due_reminder_sms', 'SMS', 'INVOICE_REMINDER', NULL, 'Dear {{name}}, your invoice {{invoice_no}} amount {{amount}} is due on {{due_date}}. Please pay to avoid service interruption. - {{brand}}', '["name","invoice_no","amount","due_date","brand"]'::jsonb),
         ('payment_received_sms', 'SMS', 'PAYMENT_RECEIVED', NULL, 'Payment received: {{amount}} for {{invoice_no}} ({{trx_id}}). Thank you. - {{brand}}', '["amount","invoice_no","trx_id","brand"]'::jsonb),
         ('invoice_delivery_whatsapp', 'WHATSAPP', 'INVOICE_DELIVERY', 'Invoice {{invoice_no}}', 'Hello {{name}}, your invoice {{invoice_no}} ({{amount}}) is ready. Due date: {{due_date}}. Invoice PDF: {{pdf_url}}', '["name","invoice_no","amount","due_date","pdf_url"]'::jsonb),
-        ('noc_alert_telegram', 'TELEGRAM', 'NOC_ALERT', NULL, '🚨 NOC Alert: {{title}}\n{{details}}\nTime: {{time}}', '["title","details","time"]'::jsonb),
+        ('noc_alert_telegram', 'TELEGRAM', 'NOC_ALERT', NULL, '🚨 {{severity}} · {{source}}\n{{title}}\n{{details}}\nTime: {{time}}', '["severity","source","title","details","time"]'::jsonb),
         ('daily_revenue_summary_telegram', 'TELEGRAM', 'DAILY_REVENUE_SUMMARY', NULL, '📊 Daily Revenue Summary ({{date}})\nCollections: {{collections}}\nInvoices: {{invoices}}\nDue Outstanding: {{outstanding}}', '["date","collections","invoices","outstanding"]'::jsonb)
       ON CONFLICT DO NOTHING;
   `).catch(e => console.error('[DB] Phase 5 schema extension error', e.message));

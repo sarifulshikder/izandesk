@@ -1,6 +1,7 @@
 import crypto = require('crypto');
 import { pool } from '../db';
 import { withSchedulerRun } from './scheduler-observability';
+import { emitNocAlert } from './noc-alerts';
 import { mikrotikSyncPppSecret, mikrotikRemovePppSecret, mikrotikPurgePppUser, mikrotikEnsureWalledGarden, mikrotikEnsureFupProfile, mikrotikEnsureParentalProfile, mikrotikDisconnectPppUser, mikrotikProvisionWalledGardenRedirect, mikrotikAddressListAdd, mikrotikAddressListRemove, mikrotikActiveAddressForUser, PARENTAL_CONTROL_PROFILE } from './mikrotik';
 import { syncSubscriberToRadiusDb, sendCoaPacket } from './radius';
 import { runMessagingSchedulerSweep, trySendTemplateToSubscriber } from './messaging';
@@ -456,6 +457,21 @@ export async function evaluateDuePolicies() {
         } catch (e:any) {
           await pool.query(`INSERT INTO billing_suspension_logs(subscriber_id, action, stage, reason, details, triggered_by) VALUES($1,'ENFORCEMENT_ERROR',$2,$3,$4::jsonb,'policy_engine')`, [s.id, targetStage, e.message, JSON.stringify({})]);
         }
+      }
+
+      // Pay reminder: notify once when a subscriber first enters walled garden (restricted; portal-only pay to restore).
+      // Best-effort; goes to noc_alerts + configured Telegram channel; never fails the sweep. (`walledChanged && walled`.)
+      if (walled && walledChanged && targetStage === SUSPENSION_STAGES.WALLED_GARDEN) {
+        try {
+          await emitNocAlert({
+            severity: currentDue > 0 ? 'WARNING' : 'INFO',
+            source: 'BILLING',
+            title: `Pay reminder: ${s.username}`,
+            message: `${s.full_name || s.username} (${s.username}) ${currentDue > 0 ? `has ৳${currentDue} due` : 'validity expired'}; restricted portal-only — pay online to restore.`,
+            details: { subscriber_id: s.id, username: s.username, client_code: s.client_code, current_due: currentDue, expiry_date: ref.expiry_date || s.expiry_date || null, due_date: due ? ymd(due) : null, reason: reason || null, captive: currentDue > 0 ? 'walled' : 'expired' },
+            dedupeMinutes: 60,
+          });
+        } catch { /* optional */ }
       }
       actions.push({ subscriber_id: s.id, username: s.username, targetStage, targetStatus, walled_garden: walled, daysOverdue, daysToDue, reason });
     } else if (reason !== oldReason && ['WARNING', 'GRACE', 'WALLED_GARDEN', 'ISOLATED', 'SUSPENDED'].includes(targetStage)) {
