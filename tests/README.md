@@ -15,11 +15,24 @@ pnpm seed:e2e                 # idempotent demo fixtures for a fresh disposable 
 node scripts/smoke-security.mjs  # guards, TOTP, secret encryption, rate limiter (after api build)
 ```
 
-Tests target `http://localhost:3000` by default. Point at another host explicitly
-with `E2E_BASE_URL=https://your-host` (only do this for a disposable environment
-when running `test:e2e:mutations`). The smoke suite itself is read-only, but a
-fresh database lacks the reseller-owned and geocoded subscribers it asserts on;
-run `pnpm seed:e2e` once against the disposable stack first. CI does this
+Tests target `http://localhost:3000` by default. For a fast, deterministic run
+against the Docker stack, start the optional built web server and point the suite
+at it (first start builds once, subsequent runs are fast):
+
+```bash
+pnpm test:e2e:docker
+```
+
+That script starts the `web-e2e` profile container and points Playwright at
+`http://localhost:3100`. `web-e2e` builds from an isolated copy of the source
+with its own node_modules volume, so the hot-reloading `web` service on `:3000`,
+the public URL and generated files in the working tree are unaffected.
+
+Point at another host explicitly with `E2E_BASE_URL=https://your-host` (only do
+this for a disposable environment when running `test:e2e:mutations`). The smoke
+suite itself is read-only; the reseller wizard and tenant-scoping checks seed
+their own disposable subscriber. GIS checks still expect seeded topology, so run
+`pnpm seed:e2e` once against a fresh disposable stack first. CI does this
 automatically.
 
 CI (`.github/workflows/e2e-smoke.yml`) boots `postgres`, `redis`, `api` and `web`
@@ -35,7 +48,8 @@ real deployments must leave that flag unset.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `E2E_BASE_URL` | `http://localhost:3000` | App under test |
+| `E2E_BASE_URL` | `http://localhost:3000` | App under test (`http://localhost:3100` for the built `web-e2e` container) |
+| `E2E_WEB_PORT` | `3100` | Host port for the optional `e2e` profile service |
 | `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` | `admin@izandesk.com` / `admin123` | Admin login |
 | `E2E_RESELLER_EMAIL` / `E2E_RESELLER_PASSWORD` | `reseller@cybernet.bd` / `reseller123` | Partner login |
 | `E2E_RESELLER_ID` | resolved from `/api/resellers` | Partner id for scoping assertions |

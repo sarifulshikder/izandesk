@@ -166,7 +166,10 @@ E2E_MUTATIONS=1 \
 pnpm test:e2e
 ```
 
-Run mutations only in staging/test data.
+Run mutations only in staging/test data. For a faster local run, use
+`pnpm test:e2e:docker`; it starts the optional `web-e2e` container on `:3100`
+with a prebuilt copy of the app, leaving `:3000` and the public URL on the
+hot-reloading dev server.
 
 ## 9. Resolved staging E2E flakiness
 
