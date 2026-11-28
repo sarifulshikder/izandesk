@@ -651,7 +651,9 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
 
   const eventId = verification.eventId || payload.event_id || payload.id || verification.trxId || payload.trxId || payload.trx_id || null;
   const paymentRef = verification.paymentRef || payload.paymentRef || payload.payment_ref || null;
-  const trxId = verification.trxId || payload.trxId || payload.trx_id || null;
+  // Prefer an explicit provider transaction ID over a plugin-generated random
+  // fallback so replays of the same event produce the same dedupe key.
+  const trxId = payload.trxId || payload.trxID || payload.transactionId || payload.transaction_id || payload.trx_id || verification.trxId || null;
   const dedupeKey = [gateway, eventId || '', trxId || '', paymentRef || ''].join('|');
   const hasDedupeKey = dedupeKey.replace(/\|/g, '').length > gateway.length;
   let eventRow: any = null;
@@ -670,10 +672,14 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
         [gateway, eventId, (hasDedupeKey ? dedupeKey : null), JSON.stringify(payload), JSON.stringify(verification)]);
       eventRow = ins.rows[0];
     } catch (e:any) {
-      // unique constraint race -> re-read; only a processed row is a duplicate.
-      const raced = hasDedupeKey ? (await pool.query('SELECT * FROM payment_webhook_events WHERE dedupe_key=$1 LIMIT 1', [dedupeKey])).rows[0] : null;
-      if (!raced || raced.processed) return res.json({ ok: true, verified: !!verification.verified, processed: !!raced?.processed, duplicate: true });
-      eventRow = raced;
+      // Unique constraint race -> re-read by dedupe key, and also by event ID
+      // because a plugin may generate a different trxId on each parse. Only a
+      // processed row is a terminal duplicate; an unprocessed row is retried.
+      const byKey = hasDedupeKey ? (await pool.query('SELECT * FROM payment_webhook_events WHERE dedupe_key=$1 LIMIT 1', [dedupeKey])).rows[0] : null;
+      const byEvent = eventId ? (await pool.query('SELECT * FROM payment_webhook_events WHERE gateway=$1 AND event_id=$2 LIMIT 1', [gateway, eventId])).rows[0] : null;
+      const existing = byKey || byEvent;
+      if (!existing || existing.processed) return res.json({ ok: true, verified: !!verification.verified, processed: !!existing?.processed, duplicate: true });
+      eventRow = existing;
     }
   }
 
