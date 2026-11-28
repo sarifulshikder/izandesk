@@ -157,11 +157,67 @@ async function enforcementOutboxRetriesProvisioning() {
   } finally { fake.restore(); }
 }
 
+async function outboxKeepsFailedProvisioningRetryable() {
+  const sub = { ...EXPIRED_SUB, id: 'sub-outbox-fail', status: 'ACTIVE', suspension_stage: 'NONE', suspension_source: 'NONE', walled_garden: false, provisioning_mode: 'RADIUS', router_id: null };
+  const fake = makeDb([
+    ...settingsHandlers,
+    { when: (c) => has(c, "UPDATE enforcement_outbox SET status='FAILED', attempts=LEAST"), return: { rows: [] } },
+    { when: (c) => has(c, 'FOR UPDATE SKIP LOCKED'), return: { rows: [{ id: 'job-2', subscriber_id: sub.id, payload: { status: 'ACTIVE', stage: 'NONE', walled_garden: false, reason: 'test', sendCoa: false }, attempts: 0 }] } },
+    { when: (c) => has(c, 'INSERT INTO radius_users'), return: { throw: new Error('simulated RADIUS outage') } },
+    { when: (c) => has(c, "UPDATE enforcement_outbox SET status='FAILED', attempts=$2"), return: { rows: [] } },
+    { when: (c) => has(c, "UPDATE enforcement_outbox SET status='DONE'"), return: { rows: [] } },
+    { when: (c) => has(c, 'SELECT * FROM subscribers WHERE id=$1 FOR UPDATE'), return: { rows: [sub] } },
+    { when: (c) => has(c, 'SELECT * FROM subscribers WHERE id=$1'), return: { rows: [sub] } },
+    { when: (c) => has(c, 'FROM subscribers s LEFT JOIN bandwidth_packages bp'), return: { rows: [sub] } },
+  ]);
+  try {
+    const result = await billing.processEnforcementOutbox();
+    const failed = fake.calls.find((c) => has(c, "UPDATE enforcement_outbox SET status='FAILED', attempts=$2"));
+    const done = fake.calls.find((c) => has(c, "UPDATE enforcement_outbox SET status='DONE'"));
+    check('outbox does not mark failed provisioning DONE', result.done === 0 && !done);
+    check('outbox retries failed provisioning with backoff', result.retried === 1 && !!failed && failed.params[3] === 30);
+    check('outbox records the failed projection', !!failed && String(failed.params[2]).includes('radius_sync'));
+  } finally { fake.restore(); }
+}
+
+async function outboxTerminalizesAfterEightAttempts() {
+  const sub = { ...EXPIRED_SUB, id: 'sub-outbox-terminal', status: 'ACTIVE', suspension_stage: 'NONE', suspension_source: 'NONE', walled_garden: false, provisioning_mode: 'RADIUS', router_id: null };
+  const fake = makeDb([
+    ...settingsHandlers,
+    { when: (c) => has(c, "UPDATE enforcement_outbox SET status='FAILED', attempts=LEAST"), return: { rows: [] } },
+    { when: (c) => has(c, 'FOR UPDATE SKIP LOCKED'), return: { rows: [{ id: 'job-3', subscriber_id: sub.id, payload: { status: 'ACTIVE', stage: 'NONE', walled_garden: false, reason: 'test', sendCoa: false }, attempts: 7 }] } },
+    { when: (c) => has(c, 'INSERT INTO radius_users'), return: { throw: new Error('simulated RADIUS outage') } },
+    { when: (c) => has(c, "UPDATE enforcement_outbox SET status='FAILED', attempts=$2"), return: { rows: [] } },
+    { when: (c) => has(c, 'SELECT * FROM subscribers WHERE id=$1 FOR UPDATE'), return: { rows: [sub] } },
+    { when: (c) => has(c, 'SELECT * FROM subscribers WHERE id=$1'), return: { rows: [sub] } },
+    { when: (c) => has(c, 'FROM subscribers s LEFT JOIN bandwidth_packages bp'), return: { rows: [sub] } },
+  ]);
+  try {
+    const result = await billing.processEnforcementOutbox();
+    const failed = fake.calls.find((c) => has(c, "UPDATE enforcement_outbox SET status='FAILED', attempts=$2"));
+    check('outbox stops retrying after eight attempts', result.failed === 1 && result.retried === 0);
+    check('outbox marks the terminal attempt explicitly', !!failed && failed.params[1] === 8 && String(failed.params[2]).startsWith('[terminal]'));
+  } finally { fake.restore(); }
+}
+
+async function webhookAmountBindingRejectsShortPackagePayment() {
+  const packageRow = { amount: 500, purpose: 'PACKAGE_PURCHASE', gateway_response: null };
+  const invoiceRow = { amount: 500, purpose: 'INVOICE_PAYMENT', gateway_response: null };
+  check('package webhook rejects underpayment', billing.webhookAmountMatchesPayment(packageRow, 100) === false);
+  check('package webhook accepts exact price', billing.webhookAmountMatchesPayment(packageRow, 500) === true);
+  check('package webhook rejects overpayment', billing.webhookAmountMatchesPayment(packageRow, 501) === false);
+  check('invoice webhook still accepts partial payment', billing.webhookAmountMatchesPayment(invoiceRow, 100) === true);
+  check('webhook amount binding rejects missing payment row', billing.webhookAmountMatchesPayment(null, 500) === false);
+}
+
 (async () => {
   await createdExpiredGatewayPaymentIsReused();
   await packagePurchaseIgnoresUnrelatedDues();
   await portalStateUsesBusinessExpiryDay();
   await enforcementOutboxRetriesProvisioning();
+  await outboxKeepsFailedProvisioningRetryable();
+  await outboxTerminalizesAfterEightAttempts();
+  await webhookAmountBindingRejectsShortPackagePayment();
   console.log(`package-purchase regressions: ${pass} passed, ${fail} failed`);
   if (fail) process.exitCode = 1;
 })().catch((e) => { console.error(e); process.exitCode = 1; });

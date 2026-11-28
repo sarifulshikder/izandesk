@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { pool } from '../db';
 import { asyncHandler } from './helpers';
-import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses, ingestMfsSmsEvent, runFupEnforcementSweep, evaluateFupForSubscriber, signInvoiceToken, verifyInvoiceToken, creditResellerWalletFromGatewayPayment } from '../integrations/billing';
+import { runBatchInvoicing, generateInvoiceForSubscriber, listInvoices, getInvoiceWithItems, evaluateDuePolicies, getBillingMetrics, recordPaymentAndReactivate, webhookAmountMatchesPayment, applyProvisioningState, recalcSubscriberDue, reactivateSubscriber, ensureOverdueInvoiceStatuses, ingestMfsSmsEvent, runFupEnforcementSweep, evaluateFupForSubscriber, signInvoiceToken, verifyInvoiceToken, creditResellerWalletFromGatewayPayment } from '../integrations/billing';
 import { getKernel } from '../kernel/kernel-instance';
 import { mikrotikProvisionWalledGardenRedirect } from '../integrations/mikrotik';
 import crypto = require('crypto');
@@ -627,7 +627,7 @@ router.post('/webhooks/:gateway', asyncHandler(async (req, res) => {
     const pending = pref ? (await pool.query('SELECT * FROM payments WHERE payment_ref=$1 AND status IN (\'PENDING\',\'VERIFYING\',\'COMPLETED\')', [pref])).rows[0] : null;
     pendingPayment = pending;
     const amt = Number(verification.amount ?? payload.amount ?? 0);
-    if (!pending || !(amt > 0) || amt > Number(pending.amount || 0) + 0.01) {
+    if (!webhookAmountMatchesPayment(pending, amt)) {
       verification = { ...verification, ok: false, verified: false, status: 'FAILED', message: 'Webhook does not match a pending payment', raw: payload };
     } else {
       verification = {

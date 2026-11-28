@@ -180,6 +180,16 @@ The full Playwright run on this slow staging host still reports intermittent UI-
 
 These are Playwright actionability/timeouts, not billing regressions. The self-care purchase checks, signed webhook/idempotency checks, and the GIS workbench test pass. Re-running with `--last-failed` often clears several of them.
 
-## 10. Rollback note
+## 10. Failure-path checks (disposable data only)
+
+These checks were verified against staging with throwaway subscribers. Each one cleans up its own subscriber, payment, webhook event, and RADIUS rows.
+
+1. **Webhook side-effect retry:** temporarily force the payment insert to fail for one checkout ref. The signed delivery returns 500 and leaves the webhook event `processed=false` with the payment still `PENDING`. After removing the fault, replaying the *same* event gives `processed=true`, one `COMPLETED` payment, no synthetic `ADM-RECHARGE-*`, and an `ACTIVE` subscriber.
+2. **Underpayment:** send a signed webhook for a `PACKAGE_PURCHASE` checkout with an amount below the server price. It is rejected with `verified=false, processed=false`; the checkout stays `PENDING` and the subscriber stays `EXPIRED`. A later webhook with the exact price then completes and activates. Invoice payments may still be partial, but no webhook may exceed the stored payment amount.
+3. **Router/RADIUS outage:** block the provisioning write to `radius_users` for one subscriber. The entitlement commits (`ACTIVE`, renewed expiry) but the outbox job moves to `FAILED` with `last_error=Enforcement failed: radius_sync` and an exponential backoff. After the write is restored, the worker moves the job to `DONE` and the RADIUS projection becomes `SYNCED`. A job that reaches 8 attempts is marked terminal instead of retried forever.
+
+After each check, `GET /api/system/billing-health` must return `healthy: true` with all counts zero.
+
+## 11. Rollback note
 
 Rolling back code does not remove the new schema columns or `enforcement_outbox`; they are additive and safe to leave. Disable `PORTAL_SANDBOX_CHECKOUT` first if it was enabled for staging.

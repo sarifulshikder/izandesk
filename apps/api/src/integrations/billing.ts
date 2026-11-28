@@ -569,6 +569,23 @@ export async function reactivateSubscriber(subscriberId: string, reason = 'Payme
   return { ok: true, duration_ms: Date.now()-start, target_ms: 2000, applied };
 }
 
+/**
+ * A signed webhook may only complete a checkout row at the amount that row was
+ * created for. Package purchases must match the server price exactly (1-cent
+ * tolerance); other purposes may still be partial payments but never exceed
+ * the stored amount. Rejecting a short payment here keeps the checkout row
+ * PENDING so a later correct payment can still activate the subscriber.
+ */
+export function webhookAmountMatchesPayment(pending: any, amt: number) {
+  if (!pending || !Number.isFinite(amt) || amt <= 0) return false;
+  const expected = Number(pending.amount || 0);
+  if (!Number.isFinite(expected) || expected <= 0) return false;
+  if (amt > expected + 0.01) return false;
+  const purpose = String(pending.purpose || pending.gateway_response?.purpose || 'INVOICE_PAYMENT').toUpperCase();
+  if (purpose === 'PACKAGE_PURCHASE' && amt < expected - 0.01) return false;
+  return true;
+}
+
 export async function recordPaymentAndReactivate(input: { gateway: string; amount: number; invoice_id?: string; subscriber_id?: string; trx_id?: string; method?: string; payer_number?: string; raw?: any; payment_ref?: string; currency?: string; status?: string; dedupe_key?: string; renew?: boolean; purpose?: string; package_id?: string }) {
   const amount = Number(input.amount || 0);
   if (!(amount > 0)) throw new Error('Invalid payment amount');
