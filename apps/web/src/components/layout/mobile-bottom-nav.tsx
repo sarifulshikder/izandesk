@@ -19,7 +19,7 @@ type NavItem = { name: string; href: string; icon: any; tab?: string };
 export function MobileBottomNav() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { user } = useAuth();
+  const { user, isMobileMenuOpen } = useAuth();
   const isReseller = user?.role === 'RESELLER';
   const activeTab = searchParams?.get('tab') || 'dashboard';
 
@@ -48,7 +48,12 @@ export function MobileBottomNav() {
   };
 
   return (
-    <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 px-2 pb-[max(0.4rem,env(safe-area-inset-bottom))] pt-1.5">
+    <nav
+      aria-hidden={isMobileMenuOpen}
+      className={`lg:hidden fixed bottom-0 left-0 right-0 z-40 px-2 pb-[max(0.4rem,env(safe-area-inset-bottom))] pt-1.5 ${
+        isMobileMenuOpen ? 'hidden' : ''
+      }`}
+    >
       <div className="mx-auto max-w-md rounded-2xl border border-border bg-[color-mix(in_srgb,var(--card)_90%,transparent)] backdrop-blur-xl shadow-lg px-1.5 py-1.5 flex items-center justify-around">
         {navs.map((item) => {
           const active = isActive(item);

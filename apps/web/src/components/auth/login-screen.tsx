@@ -60,19 +60,19 @@ export function LoginScreen() {
         <div className="flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/izan-logo.svg" alt="Izan" className="w-10 h-10 rounded-xl shadow-[0_0_0_1px_rgba(255,255,255,.1),0_12px_30px_-12px_rgba(74,227,172,.55)]" />
+            <img src="/izan-logo.svg" alt="Izan" className="w-10 h-10 rounded-xl shadow-[var(--auth-logo-shadow)]" />
             <div className="leading-none">
-              <div className="text-[17px] font-extrabold tracking-tight text-white">Izan<span className="text-[#8ff3c9]">Desk</span></div>
-              <div className="text-[9px] font-semibold uppercase tracking-[0.2em] text-[#7f9c90] mt-1">ISP Operations Suite</div>
+              <div className="text-[17px] font-extrabold tracking-tight text-[var(--auth-title)]">Izan<span className="text-[var(--auth-accent)]">Desk</span></div>
+              <div className="text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--auth-muted)] mt-1">ISP Operations Suite</div>
             </div>
           </Link>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold uppercase tracking-[0.12em] text-[#a4bdb3]">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[var(--auth-border)] bg-[var(--auth-chip-bg)] text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--auth-muted)]">
             <span className="status-dot online" /> Enterprise
           </span>
         </div>
 
         <div className="max-w-xl py-10">
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold uppercase tracking-[0.16em] text-[#8ff3c9] mb-6">
+          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-[var(--auth-border)] bg-[var(--auth-chip-bg)] text-[9px] font-bold uppercase tracking-[0.16em] text-[var(--auth-accent)] mb-6">
             <Sparkles className="w-3 h-3" /> Built for modern fiber operators
           </div>
           <h1 className="auth-title">The <em>calm</em> control room for modern ISPs.</h1>
@@ -101,17 +101,17 @@ export function LoginScreen() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-end justify-between gap-4 border-t border-white/10 pt-5">
+        <div className="flex flex-wrap items-end justify-between gap-4 border-t border-[var(--auth-border)] pt-5">
           <div className="flex items-center gap-7">
             {[['565+', 'Built-in capabilities'], ['18', 'Telecom domains'], ['<2s', 'Auto-reactivation']].map(([v, l]) => (
               <div key={l}>
-                <div className="text-lg font-bold tracking-tight text-white tabular-nums">{v}</div>
-                <div className="text-[9px] uppercase tracking-[0.12em] text-[#7f9c90] font-semibold mt-0.5">{l}</div>
+                <div className="text-lg font-bold tracking-tight text-[var(--auth-title)] tabular-nums">{v}</div>
+                <div className="text-[9px] uppercase tracking-[0.12em] text-[var(--auth-muted)] font-semibold mt-0.5">{l}</div>
               </div>
             ))}
           </div>
-          <span className="inline-flex items-center gap-1.5 text-[10px] text-[#7f9c90]">
-            <CheckCircle2 className="w-3.5 h-3.5 text-[#4ae3ac]" /> All systems operational
+          <span className="inline-flex items-center gap-1.5 text-[10px] text-[var(--auth-muted)]">
+            <CheckCircle2 className="w-3.5 h-3.5 text-[var(--auth-accent-2)]" /> All systems operational
           </span>
         </div>
       </aside>

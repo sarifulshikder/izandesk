@@ -297,7 +297,7 @@ export function Sidebar() {
               <span className="brand-sub">ISP Operations Suite</span>
             </span>
           </Link>
-          <button onClick={() => setMobileMenuOpen(false)} className="w-8 h-8 rounded-lg text-white/50 hover:text-white hover:bg-white/10 lg:hidden flex items-center justify-center" aria-label="Close menu"><X className="w-4 h-4" /></button>
+          <button onClick={() => setMobileMenuOpen(false)} className="w-8 h-8 rounded-lg text-[var(--rail-muted)] hover:text-[var(--rail-hover-text)] hover:bg-[var(--rail-hover)] lg:hidden flex items-center justify-center" aria-label="Close menu"><X className="w-4 h-4" /></button>
         </div>
 
         <div className="sidebar-scroll">
@@ -351,24 +351,24 @@ export function Sidebar() {
 
         <div className="sidebar-footer">
           <div className="rail-status">
-            <span className="flex items-center gap-1.5 text-[#9db3aa]">
+            <span className="flex items-center gap-1.5 text-[var(--rail-muted)]">
               <span className="status-dot online" /> System status
             </span>
-            <span className="font-semibold text-[#8ff3c9]">Operational</span>
+            <span className="font-semibold text-[var(--rail-active-text)]">Operational</span>
           </div>
           <div className="flex items-center gap-2 mt-2.5 px-0.5">
-            <span className="w-6 h-6 rounded-full bg-white/[0.07] border border-white/10 text-[#cfe1d9] text-[10px] font-bold flex items-center justify-center shrink-0">
+            <span className="w-6 h-6 rounded-full bg-[var(--rail-chip-bg)] border border-[var(--rail-chip-border)] text-[var(--rail-text)] text-[10px] font-bold flex items-center justify-center shrink-0">
               {user.name.charAt(0)}
             </span>
             <div className="min-w-0 leading-tight">
-              <div className="text-[10px] text-[#7f958d]">Signed in as</div>
-              <div className="text-[11px] font-semibold text-[#e3f0ea] truncate">{user.name}</div>
+              <div className="text-[10px] text-[var(--rail-muted)]">Signed in as</div>
+              <div className="text-[11px] font-semibold text-[var(--rail-text-strong)] truncate">{user.name}</div>
             </div>
           </div>
         </div>
       </aside>
 
-      {isMobileMenuOpen && <div className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={() => setMobileMenuOpen(false)} aria-hidden="true" />}
+      {isMobileMenuOpen && <div className="fixed inset-0 z-30 bg-[var(--overlay)] lg:hidden" onClick={() => setMobileMenuOpen(false)} aria-hidden="true" />}
     </>
   );
 }

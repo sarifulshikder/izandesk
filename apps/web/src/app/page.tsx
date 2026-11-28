@@ -120,8 +120,8 @@ export default function DashboardPage() {
               <span className="hero-eyebrow">
                 <span className="status-dot online" />
                 {dateLabel}
-                <span className="text-white/15">/</span>
-                <span className="text-[#7f9c90]">{d?.company || 'IzanDesk'}</span>
+                <span className="text-[var(--hero-faint)]">/</span>
+                <span className="text-[var(--hero-muted)]">{d?.company || 'IzanDesk'}</span>
               </span>
               <h1 className="hero-title !text-[1.7rem] sm:!text-[2rem] !mb-1">{greeting}, <em>{firstName}</em>.</h1>
               <p className="hero-copy !max-w-none">One place for subscribers, revenue, network, and system health.</p>
@@ -134,22 +134,22 @@ export default function DashboardPage() {
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 xl:w-[520px] shrink-0">
-              <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2.5">
+              <div className="hero-stat-card rounded-xl">
                 <div className="hero-stat-label"><Activity className="w-3 h-3" /> Online</div>
                 <div className="hero-stat-value !text-lg">{Number(s.online || 0)}</div>
                 <div className="hero-stat-hint">{onlinePct}% of {Number(sum.total || 0)} clients</div>
               </div>
-              <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2.5">
+              <div className="hero-stat-card rounded-xl">
                 <div className="hero-stat-label"><AlertTriangle className="w-3 h-3" /> With Due</div>
                 <div className="hero-stat-value !text-lg">{Number(sum.overdue || 0)}</div>
                 <div className="hero-stat-hint">Subscribers owing balance</div>
               </div>
-              <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2.5">
+              <div className="hero-stat-card rounded-xl">
                 <div className="hero-stat-label"><BellRing className="w-3 h-3" /> Expiring 7d</div>
                 <div className="hero-stat-value !text-lg">{Number(sum.expiring_soon || 0)}</div>
                 <div className="hero-stat-hint">Renewal window</div>
               </div>
-              <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2.5">
+              <div className="hero-stat-card rounded-xl">
                 <div className="hero-stat-label"><Radio className="w-3 h-3" /> Critical ONUs</div>
                 <div className="hero-stat-value !text-lg">{onuCriticalCount}</div>
                 <div className="hero-stat-hint">{routersOnline + oltsOnline}/{routers.length + olts.length} devices online</div>
