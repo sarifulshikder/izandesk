@@ -343,8 +343,8 @@ export async function evaluateDuePolicies() {
   const now = new Date();
   const tz = await getBusinessTimezone();
   const today = ymdInTimezone(now, tz);
-  const warnBefore = Number(policy.warning_days || 3);
-  const graceDays = Number(policy.grace_days || 7);
+  const warnBefore = Number(policy.warning_days ?? 3);
+  const graceDays = Number(policy.grace_days ?? 7);
   const subs = (await pool.query(`SELECT s.*, (SELECT MIN(i.due_date)::date FROM invoices i WHERE i.subscriber_id=s.id AND i.status IN ('UNPAID','PARTIAL','OVERDUE')) as earliest_due
     FROM subscribers s WHERE s.auto_suspend_enabled=true AND s.status <> 'TERMINATED'`)).rows;
   const actions: any[] = [];
