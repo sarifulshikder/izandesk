@@ -166,9 +166,14 @@ export default function GisMap(props: GisMapProps) {
 
       // The local style is ready well before remote tiles finish loading.
       // Gate topology layers and UI readiness on style.load so map controls
-      // stay actionable even when tile requests are slow or blocked.
-      map.on('style.load', () => {
-        const m = map!;
+      // stay actionable even when tile requests are slow or blocked. A cached
+      // style object can finish loading before the listener is attached, so
+      // also check isStyleLoaded(); the guard prevents double initialization.
+      let initialized = false;
+      const initialize = () => {
+        if (cancelled || initialized || !map) return;
+        initialized = true;
+        const m = map;
         addTopologyLayers(m);
 
         m.on('moveend', () => {
@@ -220,7 +225,9 @@ export default function GisMap(props: GisMapProps) {
           m.on('mouseleave', layer, () => { m.getCanvas().style.cursor = ''; });
         }
         setReady(true);
-      });
+      };
+      map.on('style.load', initialize);
+      if (map.isStyleLoaded()) initialize();
     })();
     return () => {
       cancelled = true;

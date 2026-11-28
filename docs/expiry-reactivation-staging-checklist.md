@@ -168,17 +168,17 @@ pnpm test:e2e
 
 Run mutations only in staging/test data.
 
-## 9. Known staging E2E flakiness
+## 9. Resolved staging E2E flakiness
 
-The full Playwright run on this slow staging host still reports intermittent UI-only failures on pages untouched by the expiry/reactivation work:
+Earlier full runs on this slow Docker host hit UI-only timeouts on pages untouched by the expiry/reactivation work. These are now addressed:
 
-- reseller portal tab sweep (slow/empty ONU List content)
-- reseller and admin “Add Subscriber” wizard button clicks
-- reseller dashboard KPI tab click
-- location-picker basemap visibility check
-- AI Copilot settings sidebar link click
+- Playwright ceilings raised for on-demand Next dev compiles (`180s` test, `30s` action, `15s` expect).
+- Reseller tab sweep, wizard buttons, dashboard KPI click and AI sidebar link pass with those ceilings.
+- Reseller wizard and tenant-scoping checks now seed their own disposable subscriber and delete it in `finally`; they no longer depend on leftovers from opt-in mutation runs.
+- MapLibre readiness no longer misses a cached `style.load`: the GIS map checks `isStyleLoaded()` after attaching the listener and initializes once.
+- The location-picker canvas assertion is page-scoped because the picker portal renders outside the wizard DOM.
 
-These are Playwright actionability/timeouts, not billing regressions. The self-care purchase checks, signed webhook/idempotency checks, and the GIS workbench test pass. Re-running with `--last-failed` often clears several of them.
+These were test/environment and readiness issues, not billing regressions. The self-care purchase checks, signed webhook/idempotency checks and GIS workbench checks pass.
 
 ## 10. Failure-path checks (disposable data only)
 

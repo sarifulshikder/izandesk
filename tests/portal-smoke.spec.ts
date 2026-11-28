@@ -68,6 +68,43 @@ function watchErrors(page: Page) {
   return errors;
 }
 
+// Some RBAC checks need a subscriber owned by the reseller fixture. Never rely
+// on leftovers from an opt-in mutation run: seed a throwaway row and delete it
+// in `finally` so the suite is repeatable against a clean database.
+async function seedResellerSubscriber(request: APIRequestContext, tag: string) {
+  const headers = { Authorization: `Bearer ${await loginToken(request, reseller)}` };
+  const catalog = await request.get('/api/subscribers/packages/catalog', { headers });
+  expect(catalog.ok()).toBeTruthy();
+  const body = await catalog.json();
+  const list = Array.isArray(body?.data) ? body.data : (Array.isArray(body) ? body : []);
+  const pkgName = (list.find((x: any) => Number(x.price) > 0) || list[0] || {}).name;
+  expect(pkgName, 'need a package to seed a reseller subscriber').toBeTruthy();
+
+  const stamp = Date.now().toString().slice(-8);
+  const code = `SC-E2E-${stamp}${tag}`;
+  const created = await request.post('/api/subscribers', {
+    headers,
+    data: {
+      full_name: 'E2E Reseller Fixture',
+      client_code: code,
+      username: `e2ers${stamp}${tag}`,
+      password: 'Fixture@123',
+      package_name: String(pkgName),
+    },
+  });
+  const text = await created.text();
+  expect(created.ok(), `fixture create failed: ${text}`).toBeTruthy();
+  const data = JSON.parse(text);
+  const id = data.id || data.subscriber?.id || data.data?.id;
+  expect(id, `fixture response should carry an id: ${text}`).toBeTruthy();
+  return { id: String(id), code, headers };
+}
+
+async function removeResellerSubscriber(request: APIRequestContext, fixture: { id: string; code: string; headers: Record<string, string> }) {
+  const res = await request.delete(`/api/subscribers/${fixture.id}`, { headers: fixture.headers });
+  expect(res.ok(), `cleanup failed for ${fixture.code}`).toBeTruthy();
+}
+
 test.describe('reseller portal', () => {
   test('all 17 portal tabs render without console or API errors', async ({ page }) => {
     const errors = watchErrors(page);
@@ -88,21 +125,29 @@ test.describe('reseller portal', () => {
     expect(errors, errors.join('\n')).toEqual([]);
   });
 
-  test('Add and Edit both open the shared subscriber wizard', async ({ page }) => {
-    await login(page, reseller);
-    await gotoStable(page, '/resellers?tab=users');
+  test('Add and Edit both open the shared subscriber wizard', async ({ page, request }) => {
+    let fixture: Awaited<ReturnType<typeof seedResellerSubscriber>> | undefined;
+    try {
+      fixture = await seedResellerSubscriber(request, 'wiz');
+      await login(page, reseller);
+      await gotoStable(page, '/resellers?tab=users');
 
-    await page.getByRole('button', { name: /Add Subscriber/ }).first().click();
-    let modal = page.locator('div.fixed.inset-0.z-50').last();
-    await expect(modal).toContainText('Add Subscriber — Wizard');
-    await expect(modal).toContainText('Step 1 of 4'); // same as admin panel
-    await modal.getByRole('button', { name: /Cancel/ }).click();
+      await page.getByRole('button', { name: /Add Subscriber/ }).first().click();
+      let modal = page.locator('div.fixed.inset-0.z-50').last();
+      await expect(modal).toContainText('Add Subscriber — Wizard');
+      await expect(modal).toContainText('Step 1 of 4'); // same as admin panel
+      await modal.getByRole('button', { name: /Cancel/ }).click();
 
-    await page.locator('main tr').filter({ hasText: /.+/ }).getByRole('button', { name: /^Edit$/ }).first().click();
-    modal = page.locator('div.fixed.inset-0.z-50').last();
-    await expect(modal).toContainText('Edit Subscriber — Wizard');
-    await expect(modal).toContainText('Step 1 of 5');
-    await expect(modal).toContainText('Additional Details');
+      const row = page.locator('main tr').filter({ hasText: fixture.code });
+      await expect(row).toBeVisible();
+      await row.getByRole('button', { name: /^Edit$/ }).click();
+      modal = page.locator('div.fixed.inset-0.z-50').last();
+      await expect(modal).toContainText('Edit Subscriber — Wizard');
+      await expect(modal).toContainText('Step 1 of 5');
+      await expect(modal).toContainText('Additional Details');
+    } finally {
+      if (fixture) await removeResellerSubscriber(request, fixture);
+    }
   });
 
   test('dashboard KPI cards open their scoped modules', async ({ page }) => {
@@ -413,72 +458,79 @@ test.describe('GIS authorization', () => {
 
 test.describe('subscriber scoping', () => {
   test('reseller cannot cross tenant boundaries and live payload hides credentials', async ({ request }) => {
-    const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
-    const adminToken = await loginToken(request, admin);
-    const resellerToken = await loginToken(request, reseller);
+    let fixture: Awaited<ReturnType<typeof seedResellerSubscriber>> | undefined;
+    try {
+      fixture = await seedResellerSubscriber(request, 'scope');
+      const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
+      const adminToken = await loginToken(request, admin);
+      const resellerToken = await loginToken(request, reseller);
 
-    const allRes = await request.get('/api/subscribers?limit=200', { headers: auth(adminToken) });
-    const ownRes = await request.get('/api/subscribers?limit=200', { headers: auth(resellerToken) });
-    expect(allRes.ok()).toBeTruthy();
-    expect(ownRes.ok()).toBeTruthy();
-    const all = (await allRes.json()).data || [];
-    const own = (await ownRes.json()).data || [];
-    expect(own.length, 'reseller fixture should own at least one subscriber').toBeGreaterThan(0);
+      const allRes = await request.get('/api/subscribers?limit=200', { headers: auth(adminToken) });
+      const ownRes = await request.get('/api/subscribers?limit=200', { headers: auth(resellerToken) });
+      expect(allRes.ok()).toBeTruthy();
+      expect(ownRes.ok()).toBeTruthy();
+      const all = (await allRes.json()).data || [];
+      const own = (await ownRes.json()).data || [];
+      expect(own.length, 'reseller fixture should own at least one subscriber').toBeGreaterThan(0);
 
-    const ownIds = new Set(own.map((s: any) => s.id));
-    // Prefer an unassigned subscriber: it exercises the null-uuid IDOR fallback.
-    const target = all.find((s: any) => !ownIds.has(s.id) && !s.reseller_id) || all.find((s: any) => !ownIds.has(s.id));
-    expect(target, 'need a subscriber outside this reseller scope').toBeTruthy();
+      const ownIds = new Set(own.map((s: any) => s.id));
+      // Prefer an unassigned subscriber: it exercises the null-uuid IDOR fallback.
+      const target = all.find((s: any) => !ownIds.has(s.id) && !s.reseller_id) || all.find((s: any) => !ownIds.has(s.id));
+      expect(target, 'need a subscriber outside this reseller scope').toBeTruthy();
 
-    // H2: by-id read must fail closed even when reseller_id is NULL.
-    const detail = await request.get(`/api/subscribers/${target.id}`, { headers: auth(resellerToken) });
-    expect(detail.status(), 'reseller must not read a foreign/unassigned subscriber').toBe(404);
+      // H2: by-id read must fail closed even when reseller_id is NULL.
+      const detail = await request.get(`/api/subscribers/${target.id}`, { headers: auth(resellerToken) });
+      expect(detail.status(), 'reseller must not read a foreign/unassigned subscriber').toBe(404);
 
-    // H1: the enhancement routers must be tenant-scoped for reads.
-    const comm = await request.get(`/api/subscriber-communications/subscriber/${target.id}`, { headers: auth(resellerToken) });
-    expect(comm.status()).toBe(404);
-    const equip = await request.get(`/api/subscriber-equipment/subscriber/${target.id}`, { headers: auth(resellerToken) });
-    expect(equip.status()).toBe(404);
+      // H1: the enhancement routers must be tenant-scoped for reads.
+      const comm = await request.get(`/api/subscriber-communications/subscriber/${target.id}`, { headers: auth(resellerToken) });
+      expect(comm.status()).toBe(404);
+      const equip = await request.get(`/api/subscriber-equipment/subscriber/${target.id}`, { headers: auth(resellerToken) });
+      expect(equip.status()).toBe(404);
 
-    const commList = await request.get(`/api/subscriber-communications?subscriber_id=${target.id}`, { headers: auth(resellerToken) });
-    expect(commList.ok()).toBeTruthy();
-    expect((await commList.json()).data.every((c: any) => c.subscriber_id !== target.id)).toBe(true);
-    const equipList = await request.get(`/api/subscriber-equipment?subscriber_id=${target.id}`, { headers: auth(resellerToken) });
-    expect(equipList.ok()).toBeTruthy();
-    expect((await equipList.json()).data.every((e: any) => e.subscriber_id !== target.id)).toBe(true);
+      const commList = await request.get(`/api/subscriber-communications?subscriber_id=${target.id}`, { headers: auth(resellerToken) });
+      expect(commList.ok()).toBeTruthy();
+      expect((await commList.json()).data.every((c: any) => c.subscriber_id !== target.id)).toBe(true);
+      const equipList = await request.get(`/api/subscriber-equipment?subscriber_id=${target.id}`, { headers: auth(resellerToken) });
+      expect(equipList.ok()).toBeTruthy();
+      expect((await equipList.json()).data.every((e: any) => e.subscriber_id !== target.id)).toBe(true);
 
-    // H3 + M1: own live payload carries no credentials, and own history is reachable.
-    const mine = own[0];
-    const live = await request.get(`/api/subscribers/${mine.id}/live`, { headers: auth(resellerToken) });
-    expect(live.ok()).toBeTruthy();
-    expect(Object.prototype.hasOwnProperty.call((await live.json()).subscriber, 'password')).toBe(false);
-    const history = await request.get(`/api/subscribers/${mine.id}/history`, { headers: auth(resellerToken) });
-    expect(history.status(), 'reseller should see their own subscriber history').toBe(200);
+      // H3 + M1: own live payload carries no credentials, and own history is reachable.
+      const mine = own.find((s: any) => s.id === fixture!.id);
+      expect(mine, 'seeded fixture should appear in the reseller scope').toBeTruthy();
+      const live = await request.get(`/api/subscribers/${mine.id}/live`, { headers: auth(resellerToken) });
+      expect(live.ok()).toBeTruthy();
+      expect(Object.prototype.hasOwnProperty.call((await live.json()).subscriber, 'password')).toBe(false);
+      const history = await request.get(`/api/subscribers/${mine.id}/history`, { headers: auth(resellerToken) });
+      expect(history.status(), 'reseller should see their own subscriber history').toBe(200);
 
-    // M2: a reseller cannot reassign their subscriber to another partner via PUT.
-    const reassigned = await request.put(`/api/subscribers/${mine.id}`, {
-      headers: auth(resellerToken),
-      data: { reseller_id: '00000000-0000-0000-0000-000000000000' },
-    });
-    expect(reassigned.ok(), 'PUT with a foreign reseller_id must be rejected or overridden').toBeTruthy();
-    const after = await request.get(`/api/subscribers/${mine.id}`, { headers: auth(resellerToken) });
-    expect((await after.json()).reseller_id).toBe(mine.reseller_id);
+      // M2: a reseller cannot reassign their subscriber to another partner via PUT.
+      const reassigned = await request.put(`/api/subscribers/${mine.id}`, {
+        headers: auth(resellerToken),
+        data: { reseller_id: '00000000-0000-0000-0000-000000000000' },
+      });
+      expect(reassigned.ok(), 'PUT with a foreign reseller_id must be rejected or overridden').toBeTruthy();
+      const after = await request.get(`/api/subscribers/${mine.id}`, { headers: auth(resellerToken) });
+      expect((await after.json()).reseller_id).toBe(mine.reseller_id);
 
-    // L1: KYC files are no longer publicly served; the checked route denies foreign subscribers.
-    const oldKyc = await request.get('/uploads/kyc/nonexistent.pdf', { headers: auth(resellerToken) });
-    expect(oldKyc.status()).toBe(404);
-    const kycFile = await request.get(`/api/subscribers/${target.id}/kyc/00000000-0000-0000-0000-000000000000/file`, { headers: auth(resellerToken) });
-    expect(kycFile.status()).toBe(404);
+      // L1: KYC files are no longer publicly served; the checked route denies foreign subscribers.
+      const oldKyc = await request.get('/uploads/kyc/nonexistent.pdf', { headers: auth(resellerToken) });
+      expect(oldKyc.status()).toBe(404);
+      const kycFile = await request.get(`/api/subscribers/${target.id}/kyc/00000000-0000-0000-0000-000000000000/file`, { headers: auth(resellerToken) });
+      expect(kycFile.status()).toBe(404);
 
-    // M3: raw provision is admin-only, and packages must exist in the catalog.
-    const provision = await request.post('/api/subscribers/batch', {
-      headers: auth(resellerToken), data: { action: 'provision', ids: [mine.id], params: { status: 'ACTIVE' } },
-    });
-    expect(provision.status()).toBe(400);
-    const badPackage = await request.post('/api/subscribers/batch', {
-      headers: auth(resellerToken), data: { action: 'set_package', ids: [mine.id], params: { package_name: 'no-such-package' } },
-    });
-    expect(badPackage.status()).toBe(400);
+      // M3: raw provision is admin-only, and packages must exist in the catalog.
+      const provision = await request.post('/api/subscribers/batch', {
+        headers: auth(resellerToken), data: { action: 'provision', ids: [mine.id], params: { status: 'ACTIVE' } },
+      });
+      expect(provision.status()).toBe(400);
+      const badPackage = await request.post('/api/subscribers/batch', {
+        headers: auth(resellerToken), data: { action: 'set_package', ids: [mine.id], params: { package_name: 'no-such-package' } },
+      });
+      expect(badPackage.status()).toBe(400);
+    } finally {
+      if (fixture) await removeResellerSubscriber(request, fixture);
+    }
   });
 
   test('location picker uses MapLibre with no CDN marker icons', async ({ page }) => {
@@ -504,7 +556,8 @@ test.describe('subscriber scoping', () => {
     await leadModal.locator('input').first().fill('Picker Test Lead');
     await leadModal.getByRole('button', { name: 'Next' }).click();
     await expect(leadModal.getByText('Map Pin Picker')).toBeVisible();
-    await expect(leadModal.locator('canvas.maplibregl-canvas').first()).toBeVisible({ timeout: 20000 });
+    // The picker portal renders the canvas outside the wizard's DOM subtree.
+    await expect(page.locator('canvas.maplibregl-canvas').first()).toBeVisible({ timeout: 20000 });
     expect(await page.locator('img[src*="unpkg.com"], img.leaflet-tile').count()).toBe(0);
     expect(errors, `page errors: ${errors.join('; ')}`).toEqual([]);
   });

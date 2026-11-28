@@ -117,6 +117,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-izandesk_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-izandesk_secret_password}
       POSTGRES_DB: ${POSTGRES_DB:-izandesk}
+      # SQL-backed RADIUS clients. Set RADIUS_NAS_SECRET in docker/.env to seed
+      # the NAS rows on start; hosts are the RB1100AHx4's LAN, WG and DNAT paths.
+      RADIUS_NAS_HOSTS: ${RADIUS_NAS_HOSTS:-10.5.50.1,10.77.0.2,172.18.0.3}
+      RADIUS_NAS_SECRET: ${RADIUS_NAS_SECRET:-}
     volumes:
       - ./radius/clients.conf:/etc/raddb/clients.conf:ro
       - ./radius/mods-enabled/sql:/etc/raddb/sql.template:ro
@@ -130,7 +134,20 @@ services:
             -e "s|__POSTGRES_PASSWORD__|$$POSTGRES_PASSWORD|g" \
             -e "s|__POSTGRES_DB__|$$POSTGRES_DB|g" \
             /etc/raddb/sql.template > /etc/raddb/mods-enabled/sql
-        apk add --no-cache postgresql-libs >/dev/null 2>&1 || apk add --no-cache libpq >/dev/null 2>&1 || true
+        apk add --no-cache postgresql-libs postgresql-client >/dev/null 2>&1 || apk add --no-cache libpq >/dev/null 2>&1 || true
+        if [ -n "$$RADIUS_NAS_SECRET" ] && command -v psql >/dev/null 2>&1; then
+          until PGPASSWORD="$$POSTGRES_PASSWORD" psql -h izandesk-postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc 'SELECT 1' >/dev/null 2>&1; do sleep 1; done
+          for nas in $$(printf '%s' "$$RADIUS_NAS_HOSTS" | tr ',' ' '); do
+            PGPASSWORD="$$POSTGRES_PASSWORD" psql -v ON_ERROR_STOP=1 -h izandesk-postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" \
+              -v nasname="$$nas" -v nas_secret="$$RADIUS_NAS_SECRET" >/dev/null <<'SQL'
+          INSERT INTO nas (nasname, shortname, type, secret, description)
+          VALUES (:'nasname', 'dev-' || replace(:'nasname', '.', '-'), 'other', :'nas_secret', 'IzanDesk dev NAS')
+          ON CONFLICT (nasname) DO UPDATE SET secret = EXCLUDED.secret, description = EXCLUDED.description;
+        SQL
+          done
+        elif [ -n "$$RADIUS_NAS_SECRET" ]; then
+          echo 'RADIUS NAS seeding skipped: psql unavailable' >&2
+        fi
         exec radiusd -f -l stdout
 
   genieacs:

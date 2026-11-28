@@ -48,6 +48,7 @@ recent database backup; mutation tests must never target a live customer stack.
    - `WEB_ORIGIN`, `DISABLE_DEMO_ACCOUNTS`, `SECURITY_STRICT_MODE` / `NODE_ENV`
    - `PLUGINS_DIR=/plugins` in API/all-in-one containers
    - FreeRADIUS SQL template values rendered from `.env`
+   - `RADIUS_NAS_HOSTS` / `RADIUS_NAS_SECRET` only when SQL-backed NAS clients should be seeded on FreeRADIUS start (leave the secret empty to skip)
    - payment gateways: intended `enabled` values; gateways seed as disabled
 
 5. Confirm probes: `/api/live` returns **200** while the process is alive (even
