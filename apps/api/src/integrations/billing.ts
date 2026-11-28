@@ -547,7 +547,7 @@ export async function reactivateSubscriber(subscriberId: string, reason = 'Payme
   return { ok: true, duration_ms: Date.now()-start, target_ms: 2000, applied };
 }
 
-export async function recordPaymentAndReactivate(input: { gateway: string; amount: number; invoice_id?: string; subscriber_id?: string; trx_id?: string; method?: string; payer_number?: string; raw?: any; payment_ref?: string; currency?: string; status?: string; dedupe_key?: string }) {
+export async function recordPaymentAndReactivate(input: { gateway: string; amount: number; invoice_id?: string; subscriber_id?: string; trx_id?: string; method?: string; payer_number?: string; raw?: any; payment_ref?: string; currency?: string; status?: string; dedupe_key?: string; renew?: boolean }) {
   const amount = Number(input.amount || 0);
   if (!(amount > 0)) throw new Error('Invalid payment amount');
   const status = String(input.status || 'COMPLETED').toUpperCase();
@@ -706,7 +706,13 @@ export async function recordPaymentAndReactivate(input: { gateway: string; amoun
       reactivateBlocked = required > 0 && amount + 0.001 < required;
     }
     if (!reactivateBlocked && status === 'COMPLETED' && due <= 0 && sub && (sub.status === 'SUSPENDED' || sub.status === 'EXPIRED' || String(sub.suspension_stage || 'NONE') !== 'NONE' || sub.walled_garden)) {
-      reactivation = await reactivateSubscriber(subscriberId, `Payment confirmed (${input.gateway}${trx ? ' '+trx : ''})`);
+      const renew = input.renew ?? String(payment.payment_ref || payment_ref).startsWith('PORTAL-');
+      if (renew) {
+        // ONE payment only: renew using the payment just completed above; do not insert RENEW-*, re-allocate it, or post ledger entries twice.
+        reactivation = await renewSubscriber(subscriberId, { amount, method: input.method || input.gateway || 'CASH', note: `Captive payment ${payment.payment_ref}`, recordPayment: false, existingPaymentRef: payment.payment_ref || payment_ref, skipLedger: true, skipAllocate: true });
+      } else {
+        reactivation = await reactivateSubscriber(subscriberId, `Payment confirmed (${input.gateway}${trx ? ' '+trx : ''})`);
+      }
     }
   }
 
@@ -861,7 +867,7 @@ async function allocatePaymentToOpenInvoicesTx(client: any, subscriberId: string
   return { due: Number(dueRes.rows[0]?.due || 0), remaining: +Math.max(0, remaining).toFixed(2) };
 }
 
-export async function renewSubscriber(subscriberId: string, opts: { amount?: number; method?: string; extendDays?: number; note?: string } = {}) {
+export async function renewSubscriber(subscriberId: string, opts: { amount?: number; method?: string; extendDays?: number; note?: string; recordPayment?: boolean; existingPaymentRef?: string; skipLedger?: boolean; skipAllocate?: boolean } = {}) {
   const sub = (await pool.query('SELECT * FROM subscribers WHERE id=$1', [subscriberId])).rows[0];
   if (!sub) throw new Error('Subscriber not found');
   if (String(sub.status).toUpperCase() === 'TERMINATED') throw new Error('Cannot renew a terminated subscriber');
@@ -890,7 +896,8 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
   if (!(amount > 0) && wasExpired) throw new Error('A recorded payment >= package price is required to reactivate an EXPIRED subscriber');
   const charged = amount > 0;
   const method = String(opts.method || 'CASH').slice(0, 40);
-  const payment_ref = `RENEW-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  const payment_ref = opts.existingPaymentRef || `RENEW-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  const recordPayment = opts.recordPayment !== false;
 
   // Single transaction: payment record + invoice allocation/due/excess + subscriber
   // state (expiry/status) commit together. Provisioning, wallet ledger, finance and
@@ -911,15 +918,20 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
       raceCreatedExpired = true;
     } else {
       if (charged) {
-        payment = (await client.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, verified_at, gateway_response)
-          VALUES($1,NULL,$2::uuid,$3,$4,$5::numeric,'BDT','COMPLETED',now(),$6::jsonb) RETURNING *`,
-          [payment_ref, subscriberId, method, method, amount, JSON.stringify({ type: 'MANUAL_RENEW', note: opts.note || null, extend: extendLabel, old_expiry_date: oldExpiry, new_expiry_date: newExpiry })]))
-          .rows[0];
-        const alloc = await allocatePaymentToOpenInvoicesTx(client, subscriberId, amount);
-        due = alloc.due;
-        // Money beyond invoiced dues is retained as advance credit.
-        if (alloc.remaining > 0) {
-          await client.query(`UPDATE subscribers SET excess_amount=COALESCE(excess_amount,0)+$2, updated_at=now() WHERE id=$1`, [subscriberId, alloc.remaining]);
+        if (recordPayment) {
+          payment = (await client.query(`INSERT INTO payments(payment_ref, invoice_id, subscriber_id, gateway, method, amount, currency, status, verified_at, gateway_response)
+            VALUES($1,NULL,$2::uuid,$3,$4,$5::numeric,'BDT','COMPLETED',now(),$6::jsonb) RETURNING *`,
+            [payment_ref, subscriberId, method, method, amount, JSON.stringify({ type: 'MANUAL_RENEW', note: opts.note || null, extend: extendLabel, old_expiry_date: oldExpiry, new_expiry_date: newExpiry })]))
+            .rows[0];
+        } else {
+          payment = (await client.query(`SELECT * FROM payments WHERE payment_ref=$1`, [payment_ref])).rows[0] || null;
+        }
+        if (opts.skipAllocate) {
+          const dueRes = await client.query(`SELECT COALESCE(SUM(GREATEST(due_amount,0)),0)::numeric(12,2) AS due FROM invoices WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE')`, [subscriberId]);
+          due = Number(dueRes.rows[0]?.due || 0);
+        } else {
+          const alloc = await allocatePaymentToOpenInvoicesTx(client, subscriberId, amount);
+          due = alloc.due;
         }
       } else {
         const dueRes = await client.query(`SELECT COALESCE(SUM(GREATEST(due_amount,0)),0)::numeric(12,2) AS due FROM invoices WHERE subscriber_id=$1 AND status IN ('UNPAID','PARTIAL','OVERDUE')`, [subscriberId]);
@@ -937,6 +949,7 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
            suspension_source=CASE WHEN $5::boolean THEN 'NONE' ELSE suspension_source END,
            suspension_reason=CASE WHEN $5::boolean THEN NULL ELSE suspension_reason END,
            grace_until=CASE WHEN $5::boolean THEN NULL ELSE grace_until END,
+           excess_amount=CASE WHEN $5::boolean THEN 0 ELSE excess_amount END,
            updated_at=now() WHERE id=$1`,
         [subscriberId, newExpiry, oldExpiry, due, activated],
       );
@@ -959,7 +972,7 @@ export async function renewSubscriber(subscriberId: string, opts: { amount?: num
       [subscriberId, `Admin renewal ${payment_ref}`, JSON.stringify({ expire: extendLabel, old_expiry_date: oldExpiry, new_expiry_date: newExpiry, amount })]); } catch {}
   }
 
-  if (charged && payment) {
+  if (charged && payment && !opts.skipLedger) {
     try { await pool.query(`INSERT INTO wallet_transactions(subscriber_id, type, amount, reference_id, reference_type, description, metadata) VALUES($1,'CREDIT',$2,$3,'PAYMENT',$4,$5::jsonb)`,
       [subscriberId, amount, payment_ref, `Renewal via ${method}`, JSON.stringify({ payment_ref, extend: extendLabel })]); } catch {}
     try {
