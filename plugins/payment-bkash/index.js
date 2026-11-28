@@ -71,7 +71,8 @@ module.exports = {
       if (!idToken) throw new Error(grant?.statusMessage || grant?.message || 'Failed to obtain bKash grant token');
 
       // 2) Create payment
-      const callbackURL = req.callbackUrl || req.returnUrl || pick(creds, 'callback_url','callbackUrl') || process.env.BKASH_CALLBACK_URL || process.env.PUBLIC_BASE_URL && (process.env.PUBLIC_BASE_URL.replace(/\/$/, '') + '/api/billing/payments/bkash/callback') || 'https://izandesk.duckdns.org/api/billing/payments/bkash/callback';
+      // Callback registration/override must win over captive `return_url=/expired`; never send /expired as bKash callbackURL.
+      const callbackURL = pick(creds, 'callback_url','callbackUrl') || process.env.BKASH_CALLBACK_URL || req.callbackUrl || req.returnUrl || (process.env.PUBLIC_BASE_URL ? (process.env.PUBLIC_BASE_URL.replace(/\/$/, '') + '/api/billing/payments/bkash/callback') : null) || 'https://izandesk.duckdns.org/api/billing/payments/bkash/callback';
       const payerRef = (req.subscriber?.phone || req.subscriber?.client_code || req.subscriber?.username || paymentRef || '01700000000').toString().slice(0,20);
       const createBody = {
         mode: '0011',
