@@ -164,7 +164,10 @@ export default function GisMap(props: GisMapProps) {
       (window as any).__gisMap = map; // read-only E2E/debug handle
       map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
 
-      map.on('load', () => {
+      // The local style is ready well before remote tiles finish loading.
+      // Gate topology layers and UI readiness on style.load so map controls
+      // stay actionable even when tile requests are slow or blocked.
+      map.on('style.load', () => {
         const m = map!;
         addTopologyLayers(m);
 

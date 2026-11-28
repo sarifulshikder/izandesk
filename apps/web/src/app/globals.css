@@ -239,7 +239,9 @@
 
 @layer base {
   * { border-color: var(--border); }
-  html { -webkit-text-size-adjust: 100%; overflow-x: hidden; max-width: 100%; scroll-behavior: smooth; }
+  /* Intentional smooth scrolling is requested explicitly via scrollIntoView.
+     A global smooth scroll-behavior stalls focus-driven scrolling and browser automation. */
+  html { -webkit-text-size-adjust: 100%; overflow-x: hidden; max-width: 100%; }
   body {
     max-width: 100%;
     color: var(--foreground);

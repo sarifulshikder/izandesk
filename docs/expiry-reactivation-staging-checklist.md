@@ -168,6 +168,18 @@ pnpm test:e2e
 
 Run mutations only in staging/test data.
 
-## 9. Rollback note
+## 9. Known staging E2E flakiness
+
+The full Playwright run on this slow staging host still reports intermittent UI-only failures on pages untouched by the expiry/reactivation work:
+
+- reseller portal tab sweep (slow/empty ONU List content)
+- reseller and admin “Add Subscriber” wizard button clicks
+- reseller dashboard KPI tab click
+- location-picker basemap visibility check
+- AI Copilot settings sidebar link click
+
+These are Playwright actionability/timeouts, not billing regressions. The self-care purchase checks, signed webhook/idempotency checks, and the GIS workbench test pass. Re-running with `--last-failed` often clears several of them.
+
+## 10. Rollback note
 
 Rolling back code does not remove the new schema columns or `enforcement_outbox`; they are additive and safe to leave. Disable `PORTAL_SANDBOX_CHECKOUT` first if it was enabled for staging.

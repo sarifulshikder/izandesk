@@ -324,12 +324,16 @@ test.describe('GIS authorization', () => {
   });
 
   test('admin GIS workbench exposes KPIs, layers and management panels', async ({ page }) => {
+    // The workbench builds a MapLibre map twice (before and after the reload
+    // that verifies basemap persistence), which is slow on cold CI workers.
+    test.setTimeout(180_000);
     // Tile/image requests can be blocked in CI; only watch our own API.
     const apiErrors: string[] = [];
     page.on('response', r => { if (r.status() >= 400 && r.url().includes('/api/')) apiErrors.push(`${r.status()}: ${r.url()}`); });
     await login(page, admin);
     await gotoStable(page, '/gis');
     await expect(page.getByRole('heading', { name: 'Fiber GIS Map' })).toBeVisible();
+    await expect(page.locator('[data-map-ready="1"]')).toBeVisible({ timeout: 20000 });
     await expect(page.getByText('Geo coverage')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Zoom to fit' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Export GeoJSON' })).toBeVisible();
@@ -339,11 +343,12 @@ test.describe('GIS authorization', () => {
     await expect(page.getByRole('button', { name: 'Satellite' })).toBeVisible();
 
     await expect(page.getByRole('button', { name: 'Satellite' }), 'satellite should be the default basemap').toHaveClass(/bg-primary/);
-    await page.getByRole('button', { name: 'Streets' }).click();
+    await page.getByRole('button', { name: 'Streets' }).click({ force: true });
     await expect(page.getByRole('button', { name: 'Streets' })).toHaveClass(/bg-primary/);
     await gotoStable(page, '/gis');
+    await expect(page.locator('[data-map-ready="1"]')).toBeVisible({ timeout: 20000 });
     await expect(page.getByRole('button', { name: 'Streets' }), 'basemap choice should persist').toHaveClass(/bg-primary/);
-    await page.getByRole('button', { name: 'Satellite' }).click();
+    await page.getByRole('button', { name: 'Satellite' }).click({ force: true });
     // One MapLibre map drives both basemaps; satellite reuses the streets vector labels.
     await expect(page.locator('canvas.maplibregl-canvas').first()).toBeVisible({ timeout: 20000 });
     await expect(page.locator('[data-map-ready="1"]')).toBeVisible({ timeout: 20000 });
@@ -361,9 +366,11 @@ test.describe('GIS authorization', () => {
     expect(satelliteView?.satellite).toBe('visible');
     expect(satelliteView?.labels).toBe('visible');
     expect(satelliteView?.labelCount).toBeGreaterThan(10);
-    await page.getByRole('button', { name: 'Labels on' }).click();
+    // This control lives in MapLibre's absolutely positioned toolbar. Playwright's
+    // scroll-into-view step can stall there even though the button is on screen.
+    await page.getByRole('button', { name: 'Labels on' }).click({ force: true });
     await expect.poll(async () => (await viewState())?.labels).toBe('none');
-    await page.getByRole('button', { name: 'Labels off' }).click();
+    await page.getByRole('button', { name: 'Labels off' }).click({ force: true });
     await expect.poll(async () => (await viewState())?.labels).toBe('visible');
     await page.getByLabel('Heatmap').check();
     await expect(page.locator('[data-heatmap="on"]')).toBeVisible();
@@ -1465,6 +1472,9 @@ test.describe('self-care package purchase smoke', () => {
       data: {
         full_name: 'Self-care Smoke', client_code: code, username: code,
         password: 'PortalSmoke@123', status: 'EXPIRED', expiry_date: '2020-01-10',
+        // A package is required for the portal to classify the account as EXPIRED;
+        // without one it is normalized to PENDING.
+        package_name: pkg.name,
       },
     });
     const createdBody = await created.json().catch(() => ({} as any));
